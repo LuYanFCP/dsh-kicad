@@ -27,6 +27,8 @@ export function readCheckMeta(meta: unknown): CheckMeta | undefined {
 
 function argPath(props: ToolViewProps): string {
   try {
+    const live = props.block.args?.text?.('path')
+    if (typeof live === 'string' && live) return live
     const raw = props.block.call?.argsRaw
     const args = raw ? JSON.parse(raw) as { path?: unknown } : undefined
     return typeof args?.path === 'string' ? args.path : ''

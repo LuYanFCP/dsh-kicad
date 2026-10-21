@@ -51,7 +51,8 @@ export const GUIDANCE = `# KiCad (EDA) work
 
 - Use the kicad_* tools for KiCad files; never hand-edit .kicad_sch / .kicad_pcb text with generic file tools.
 - Read before you change: kicad_read_schematic, kicad_get_symbol_pins, kicad_list_nets. Find parts with kicad_search_symbols.
-- Put related changes in one kicad_edit_schematic batch; it is atomic. Prefer connect_pin_to_net (labels, power symbols) over long wires.
+- Put related changes in one kicad_edit_schematic batch (atomic; at most ~20 operations). Prefer connect_pin_to_net (labels, power symbols) over long wires.
+- Fix mistakes with disconnect_pin / remove_item / move_symbol. Never rebuild or rewrite a schematic file to change its layout.
 - KiCad decides correctness: after edits read the ERC verdict appended to the result (or run kicad_erc / kicad_drc). Do not declare a design correct while KiCad reports errors.
 - Coordinates are millimetres, Y grows downward, on the 1.27 mm grid.`
 

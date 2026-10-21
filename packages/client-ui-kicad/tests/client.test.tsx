@@ -52,6 +52,8 @@ describe('conversation cards', () => {
     render(<CheckCard {...toolProps({ block: { content: [{ type: 'text', text: 'kicad-cli not found' }], isError: true } })} />)
     expect(screen.getByText('kicad-cli not found')).toBeTruthy()
     render(<CheckCard {...toolProps({ toolName: 'kicad_drc', phase: 'start' })} />)
+    render(<EditCard {...toolProps({ toolName: 'kicad_edit_schematic', phase: 'preparing', block: { args: { text: (k: string) => (k === 'path' ? 'hw/board.kicad_sch' : undefined) } } })} />)
+    expect(screen.getByText('Editing board.kicad_sch…')).toBeTruthy()
     expect(screen.getByText(/Running KiCad DRC/)).toBeTruthy()
   })
 

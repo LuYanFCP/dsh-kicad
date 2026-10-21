@@ -44,7 +44,10 @@ OPERATION_SCHEMA: dict[str, Any] = {
         "remove_symbol{reference} · move_symbol{reference,x,y,rotation?} · add_wire{points:[[x,y],...]} · "
         "add_label{text,x,y,kind?:label|global_label|hierarchical_label,rotation?,shape?} · add_junction{x,y} · "
         "add_no_connect{x,y} · no_connect_pin{pin:'REF:PIN'} · connect_pins{a:'REF:PIN',b:'REF:PIN'} · "
-        "connect_pin_to_net{pin:'REF:PIN',net,kind?:label|global_label|power}"
+        "connect_pin_to_net{pin:'REF:PIN',net,kind?:label|global_label|power} · "
+        "disconnect_pin{pin:'REF:PIN'} (removes the wires/labels/power symbols/no-connect attached to that pin) · "
+        "remove_item{uuid} · remove_label{text,x?,y?} · remove_wire{x,y} (segments ending at x,y). "
+        "Rotation is counter-clockwise: Device:R/C/L at 0 are vertical with pin 1 on top, at 90 horizontal with pin 1 on the left."
     ),
     "properties": {"op": {"type": "string", "enum": sorted(OPERATIONS)}},
     "required": ["op"],
@@ -55,6 +58,7 @@ TOOL_SPECS: list[ToolSpec] = [
     ToolSpec("environment", "Report kicad-cli, symbol libraries, rasterizers and KiCad IPC availability.", _obj({}, [])),
     ToolSpec("read_schematic", "Summarize a schematic: title block, counts, components (reference, value, lib_id, footprint, position), labels, power nets, sub-sheets.",
              _obj({"path": SCH, "include_components": {"type": "boolean", "default": True},
+                   "include_wiring": {"type": "boolean", "default": False, "description": "Also list wires, junctions and no-connects with uuids."},
                    "include_subsheets": {"type": "boolean", "default": False, "description": "Also summarize every sub-sheet file."}}, ["path"])),
     ToolSpec("list_components", "List placed components, optionally filtered by a case-insensitive substring of reference, value, lib_id or footprint.",
              _obj({"path": SCH, "filter": {"type": "string"}}, ["path"])),
@@ -165,7 +169,7 @@ class Toolbox:
 
     def tool_read_schematic(self, args):
         s = self.schematic(args["path"])
-        out = s.summary(include_components=args.get("include_components", True))
+        out = s.summary(include_components=args.get("include_components", True), include_wiring=bool(args.get("include_wiring")))
         if args.get("include_subsheets"):
             subs = []
             for sheet in out["sheets"]:
