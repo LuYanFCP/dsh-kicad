@@ -9,6 +9,9 @@
     },
     {
       "path": "packages/kicad-policy"
+    },
+    {
+      "path": "packages/kicad-skills"
     }
   ]
 }

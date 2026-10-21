@@ -1,0 +1,20 @@
+{
+  "name": "dsh-kicad-skills",
+  "version": "0.1.0",
+  "description": "KiCad skills and /erc /drc /bom commands for DeepSeek Harness",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": { "types": "./lib/index.d.ts", "default": "./lib/index.js" },
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": ["lib/**/*.js", "lib/**/*.d.ts", "locale/*.json", "skills/*/SKILL.md"],
+  "engines": { "dsh": ">=0.2.1-rc.2 <0.3.0-0" },
+  "dependencies": { "dsh-kicad-bridge": "workspace:^", "dsh-tool-kicad": "workspace:^" },
+  "peerDependencies": { "@deepseek-ai/cordis": "^4.0.5" },
+  "scripts": { "build": "tsc -b" },
+  "repository": { "type": "git", "url": "git+https://github.com/LuYanFCP/dsh-kicad.git", "directory": "packages/kicad-skills" }
+}
