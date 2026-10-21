@@ -11,7 +11,8 @@
     "typecheck": "tsc -b tsconfig.json",
     "test": "vitest run",
     "test:py": "cd packages/kicad-bridge/sidecar && uv run --extra dev pytest -q",
-    "test:all": "pnpm run build && pnpm test && pnpm run test:py"
+    "test:all": "pnpm run build && pnpm test && pnpm run test:py",
+    "dist": "pnpm run build && node scripts/pack-dist.mjs"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.5",
