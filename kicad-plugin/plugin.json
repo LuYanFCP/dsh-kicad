@@ -1,0 +1,19 @@
+{
+  "$schema": "https://go.kicad.org/api/schemas/v1",
+  "identifier": "io.github.luyanfcp.dsh-kicad",
+  "name": "DeepSeek Harness",
+  "description": "Open the current KiCad project in DeepSeek Harness (dsh) with the dsh-kicad bundle.",
+  "runtime": { "type": "python" },
+  "actions": [
+    {
+      "identifier": "open-in-dsh",
+      "name": "Open in DSH",
+      "description": "Start or open the DeepSeek Harness web UI for this project (the project path is copied to the clipboard for 'Add workspace').",
+      "show-button": true,
+      "scopes": ["schematic", "pcb", "project_manager"],
+      "entrypoint": "open_in_dsh.py",
+      "icons-light": ["icons/open-in-dsh-24.png", "icons/open-in-dsh-48.png"],
+      "icons-dark": ["icons/open-in-dsh-24.png", "icons/open-in-dsh-48.png"]
+    }
+  ]
+}

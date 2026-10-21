@@ -1,0 +1,44 @@
+{
+  "name": "dsh-kicad-bridge",
+  "version": "0.1.0",
+  "description": "ctx.kicad: a managed Python sidecar (kicad-cli + .kicad_sch editing) for DeepSeek Harness",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "lib/**/*.js",
+    "lib/**/*.d.ts",
+    "locale/*.json",
+    "sidecar/pyproject.toml",
+    "sidecar/README.md",
+    "sidecar/src/**/*.py",
+    "icon.svg"
+  ],
+  "engines": {
+    "dsh": ">=0.2.1-rc.2 <0.3.0-0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.5",
+    "@deepseek-ai/schemastery": "^3.18.5",
+    "@deepseek-ai/dsh-subprocess": "^0.2.1-rc.2"
+  },
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LuYanFCP/dsh-kicad.git",
+    "directory": "packages/kicad-bridge"
+  },
+  "icon": "./icon.svg"
+}

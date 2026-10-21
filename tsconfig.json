@@ -1,0 +1,20 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "packages/kicad-bridge"
+    },
+    {
+      "path": "packages/tool-kicad"
+    },
+    {
+      "path": "packages/kicad-policy"
+    },
+    {
+      "path": "packages/kicad-skills"
+    },
+    {
+      "path": "packages/client-ui-kicad"
+    }
+  ]
+}

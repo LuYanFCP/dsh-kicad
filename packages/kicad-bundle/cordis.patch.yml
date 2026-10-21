@@ -1,0 +1,21 @@
+# dsh-kicad-bundle: the KiCad plugin set. Every row is global (all agent
+# presets see the kicad_* tools); the `eda` preset in presets/eda.patch.yml
+# adds an EDA-focused persona on top.
+- insert:
+    - id: kicad-bridge
+      name: 'dsh-kicad-bridge'
+      config:
+        launcher: python
+    - id: kicad-tools
+      name: 'dsh-tool-kicad'
+    - id: kicad-policy
+      name: 'dsh-kicad-policy'
+      config:
+        approval: ask
+        restrictToWorkspace: true
+        autoErc: true
+        autoRender: true
+    - id: kicad-skills
+      name: 'dsh-kicad-skills'
+    - id: kicad-ui
+      name: 'dsh-client-ui-kicad'

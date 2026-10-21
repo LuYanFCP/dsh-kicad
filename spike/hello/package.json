@@ -1,0 +1,23 @@
+{
+  "name": "dsh-kicad-spike-hello",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Spike: verify a third-party dsh bundle loads both Host and Client halves",
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": ["index.js", "client.js", "cordis.patch.yml", "locale/*.json"],
+  "engines": { "dsh": ">=0.2.1-rc.2 <0.3.0-0" },
+  "peerDependencies": { "@deepseek-ai/dsh-tools": "*" },
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "inject": ["@deepseek-ai/dsh-client-ui-sidebar-right"]
+    }
+  }
+}
