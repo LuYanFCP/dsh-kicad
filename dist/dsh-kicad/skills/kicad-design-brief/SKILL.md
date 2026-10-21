@@ -29,7 +29,7 @@ Ask **at most 3–4 questions**, all at once, with `ask_user_question` (multiple
 
 ## 3. Write the brief
 
-Group the spec by functional block (one heading per block; these become the titled frames on the schematic). Write a numbered spec as precise as a datasheet-literate engineer would — every part with its `lib_id`-level identity, value, footprint size and every connection by net name. Use the proven blocks below. Then a short "assumptions I made" list in plain language, and the acceptance criteria (KiCad ERC 0 errors; every board part has a footprint; layout left-to-right, no overlaps; for more than ~8 parts, every part inside a titled functional block such as `USB INPUT`, `PWR SUPPLY`, `MCU`, with blocks joined only by labels).
+Group the spec by functional block (one heading per block; these become the titled frames on the schematic). Write a numbered spec as precise as a datasheet-literate engineer would — every part with its `lib_id`-level identity, value, footprint size and every connection by net name. Use the proven blocks below. Then a short "assumptions I made" list in plain language, and the acceptance criteria (KiCad ERC 0 errors; every board part has a footprint; layout left-to-right, no overlaps; for more than ~8 parts, every part inside a titled functional block such as `USB INPUT`, `PWR SUPPLY`, `MCU`, parts within a block wired together and blocks joined only by labels).
 
 Verify identities while writing, with tools rather than shell commands: `kicad_search_symbols` for lib_ids, `kicad_library_symbol` for pin names/numbers, `kicad_search_footprints` for footprint ids and pad names.
 

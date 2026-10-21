@@ -24,13 +24,14 @@ Apply these unless the project already follows different conventions (read it fi
 
 **Readability**
 - Signal flow left → right, supplies at the top, ground at the bottom.
-- Keep 2.54 mm multiples between pins and wires; avoid wires crossing symbols; prefer labels over long wires.
+- Draw wires between parts that work together (`connect_pins`): a sheet where every pin ends in its own label is hard to read. Labels are for long distances and for connections between blocks.
+- Keep 2.54 mm multiples between pins and wires; avoid wires crossing symbols; turn parts so wired pins face each other.
 - Mark every intentionally unused IC pin with a no-connect flag.
 
 **Organise by function (any design with more than ~8 parts)**
 - Split the design into functional blocks, each in its own titled dashed frame: e.g. `USB-TO-UART`, `PWR SUPPLY`, `MCU`, `BATTERY`, `BATTERY CHARGING`, `DISPLAY`, `GAS SENSOR`. A block holds one job: the IC plus its decoupling, pull-ups, LEDs, buttons and connector for that job.
 - Blocks talk to each other only through net labels (`global_label` for signals such as `TXD`, `RESET`, `SDA/IO4`) and power symbols. No wire crosses a frame.
-- Inside a block, short wires between neighbouring parts are fine; anything leaving the block ends in a label or power symbol.
+- Inside a block, wire the parts together (`connect_pins`); anything leaving the block ends in a label or power symbol.
 - Page: `set_page` with `A3` for 4+ blocks (A4 for small designs) and a title. Plan a grid of blocks inside the drawable area that `kicad_read_schematic` reports (`page.drawable`; the bottom-right corner is the title block): e.g. on A3 a top row of 2–3 large blocks (power entry, power supply, MCU) and a bottom row of 3–4 small ones (connectors, sensors, charging), 10 mm gaps between frames. Power flows left → right, the MCU sits in the largest block.
 - Build: place each block's parts in its area, wire and label them, then `add_block{title, references}` frames them (it encloses their wiring and labels). Or draw the frame first with `add_block{title,x,y,width,height}` and place parts inside.
 - `kicad_read_schematic` lists `blocks` (title, frame, parts inside) and `outside_blocks` (parts not in any frame). Before handing back, `outside_blocks` is empty, frames do not overlap (`add_block` reports `overlaps`), and `kicad_render` shows nothing sticking out of a frame.

@@ -47,8 +47,9 @@ OPERATION_SCHEMA: dict[str, Any] = {
         "set_property{reference,name,value,hide?} · set_value{reference,value} · set_footprint{reference,footprint} · "
         "remove_symbol{reference} · move_symbol{reference,x,y,rotation?} · add_wire{points:[[x,y],...]} · "
         "add_label{text,x,y,kind?:label|global_label|hierarchical_label,rotation?,shape?} · add_junction{x,y} · "
-        "add_no_connect{x,y} · no_connect_pin{pin:'REF:PIN'} · connect_pins{a:'REF:PIN',b:'REF:PIN'} · "
-        "connect_pin_to_net{pin:'REF:PIN',net,kind?:label|global_label|power} · "
+        "add_no_connect{x,y} · no_connect_pin{pin:'REF:PIN'} · "
+        "connect_pins{a:'REF:PIN',b:'REF:PIN'} (wire routed around parts, labels and other nets; may join wiring already on either pin) · "
+        "connect_pin_to_net{pin:'REF:PIN',net,kind?:label|global_label|power} (stub + label or power symbol) · "
         "disconnect_pin{pin:'REF:PIN'} (removes the wires/labels/power symbols/no-connect attached to that pin) · "
         "remove_item{uuid} · remove_label{text,x?,y?} · remove_wire{x,y} (segments ending at x,y). "
         "Layout: set_page{paper?,title?,date?,rev?,company?,comments?} · "
@@ -56,7 +57,8 @@ OPERATION_SCHEMA: dict[str, Any] = {
         "move_block{title, dx,dy | x,y} (frame, title, parts inside and their wiring) · "
         "move_symbols{references,dx,dy} (parts with their wires, labels and power symbols; refuses to tear a wire to a part left behind) · "
         "add_text{text,x,y,size?,bold?,rotation?} · add_rectangle{x,y,width,height,style?}. "
-        "Rotation is counter-clockwise: Device:R/C/L at 0 are vertical with pin 1 on top, at 90 horizontal with pin 1 on the left."
+        "Rotation is counter-clockwise: Device:R/C/L at 0 are vertical with pin 1 on top, at 90 horizontal with pin 1 on the left. "
+        "Wire parts that work together with connect_pins; use power symbols for rails and labels between blocks or across the page."
     ),
     "properties": {"op": {"type": "string", "enum": sorted(OPERATIONS)}},
     "required": ["op"],

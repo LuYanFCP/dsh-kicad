@@ -235,3 +235,102 @@ def test_text_rectangle_and_page_validation(project):
     tb = s.root.find("title_block")
     assert [c.head for c in tb.lists()] == ["date", "comment", "comment"]
     assert dumps(parse(s.text())) == s.text()
+
+
+def _segments(s):
+    return [(tuple(w["from"]), tuple(w["to"])) for w in s.wiring()["wires"]]
+
+
+def _crosses_box(seg, box):
+    (x0, y0), (x1, y1) = seg
+    return min(x0, x1) <= box[2] and box[0] <= max(x0, x1) and min(y0, y1) <= box[3] and box[1] <= max(y0, y1)
+
+
+@needs_symbols
+@needs_kicad_cli
+def test_connect_pins_routes_around_parts_and_other_nets(project):
+    """The straight line is blocked by a part and crossed by another net: the wire goes around the part,
+    crosses the other net's wire at a right angle, and KiCad sees exactly the two pins joined."""
+    from dsh_kicad_sidecar import geometry
+    from dsh_kicad_sidecar.kicad_cli import KiCadCli
+
+    path = project("blank")
+    s = Schematic(path)
+    for ref, x in (("R1", 40.64), ("R2", 60.96), ("R3", 81.28)):
+        s.add_symbol("Device:R", x, 50.8, reference=ref, rotation=90)  # pins on y=50.8, 3.81 mm either side
+    s.add_wire([[71.12, 38.1], [71.12, 63.5]])  # another net, across the gap between R2 and R3
+    s.add_label("OTHER", 71.12, 38.1)
+    s.add_label("OTHER", 71.12, 63.5)
+    result = s.apply({"op": "connect_pins", "a": "R1:2", "b": "R3:1"})
+    assert result["points"][0] == [44.45, 50.8] and result["points"][-1] == [77.47, 50.8]
+    assert "note" not in result and "junctions" not in result
+    lib = s.lib_symbol("Device:R")
+    r2 = s.find_symbol("R2")
+    body = geometry.body_bbox(lib, r2.at, r2.mirror, r2.unit)
+    new = list(zip(result["points"], result["points"][1:]))
+    assert not any(_crosses_box(seg, body) for seg in new)
+    s.save()
+    nets = _nets(KiCadCli(), path)
+    joined = next(n for n in nets.values() if ("R1", "2") in n)
+    assert joined == {("R1", "2"), ("R3", "1")}
+    assert all(("R2", p) not in n for n in nets.values() if len(n) > 1 for p in ("1", "2"))
+    assert not any(("R1", "2") in n for name, n in nets.items() if "OTHER" in name)
+
+
+@needs_symbols
+@needs_kicad_cli
+def test_connect_pins_joins_existing_wiring_with_a_junction(project):
+    from dsh_kicad_sidecar.kicad_cli import KiCadCli
+
+    path = project("blank")
+    s = Schematic(path)
+    s.add_symbol("Device:R", 50.8, 50.8, reference="R1", rotation=90)
+    s.add_symbol("Device:R", 76.2, 50.8, reference="R2", rotation=90)
+    s.add_symbol("Device:R", 63.5, 66.04, reference="R3")  # vertical, pin 1 on top under the R1-R2 wire
+    s.apply({"op": "connect_pins", "a": "R1:2", "b": "R2:1"})
+    tap = s.apply({"op": "connect_pins", "a": "R3:1", "b": "R1:2"})
+    assert tap["junctions"] and tap["points"][-1] in tap["junctions"]
+    assert "joining existing wiring" in s.changes[-1]
+    assert s.apply({"op": "connect_pins", "a": "R2:1", "b": "R3:1"}) == {"already_connected": True}
+    s.save()
+    nets = _nets(KiCadCli(), path)
+    assert next(n for n in nets.values() if ("R1", "2") in n) == {("R1", "2"), ("R2", "1"), ("R3", "1")}
+
+
+@needs_symbols
+def test_connect_pins_refuses_a_blocked_pin_and_flags_detours(project):
+    s = Schematic(project("blank"))
+    s.add_symbol("Device:R", 50.8, 50.8, reference="R1")  # vertical: pin 1 at (50.8, 46.99) points up
+    s.add_symbol("Device:R", 50.8, 44.45, reference="R2", rotation=90)  # lies across that exit
+    s.add_symbol("Device:R", 76.2, 50.8, reference="R3")
+    with pytest.raises(SchematicError, match="cannot wire R1:1 to R3:1.*connect_pin_to_net"):
+        s.apply({"op": "connect_pins", "a": "R1:1", "b": "R3:1"})
+    s.add_symbol("MCU_Microchip_ATtiny:ATtiny85-20S", 127, 63.5, reference="U1")
+    s.add_symbol("Device:R", 101.6, 63.5, reference="R4", rotation=90)
+    away = s.apply({"op": "connect_pins", "a": "U1:5", "b": "R4:2"})  # a right-side pin wired to a part on the left
+    assert "face each other" in away["note"]
+
+
+@needs_symbols
+@needs_kicad_cli
+def test_power_symbol_on_a_wired_pin_branches_off_the_wire(project):
+    from dsh_kicad_sidecar.kicad_cli import KiCadCli
+
+    path = project("blank")
+    s = Schematic(path)
+    s.add_symbol("Device:C", 50.8, 50.8, reference="C1")
+    s.add_symbol("Device:C", 63.5, 50.8, reference="C2")
+    s.apply({"op": "connect_pins", "a": "C1:2", "b": "C2:2"})  # both bottom pins: a U under the caps
+    before = _segments(s)
+    out = s.apply({"op": "connect_pin_to_net", "pin": "C1:2", "net": "GND", "kind": "power"})
+    assert out["from"] != out["pin"] and out["end"][1] > out["from"][1]  # hangs below the wire
+    stub = next(seg for seg in _segments(s) if seg not in before)
+    for a, b in before:  # the stub does not lie on top of an existing wire
+        assert not (a[0] == b[0] == stub[0][0] == stub[1][0] and min(a[1], b[1]) < max(stub[0][1], stub[1][1])
+                    and min(stub[0][1], stub[1][1]) < max(a[1], b[1]))
+    assert any(j["at"] == out["from"] for j in s.wiring()["junctions"])
+    free = s.apply({"op": "connect_pin_to_net", "pin": "C1:1", "net": "+3V3", "kind": "power"})
+    assert "from" not in free and free["end"] == [50.8, 44.45]  # an unwired pin keeps the plain stub
+    s.save()
+    nets = _nets(KiCadCli(), path)
+    assert {("C1", "2"), ("C2", "2")} <= nets["GND"] and ("C1", "1") in nets["+3V3"]

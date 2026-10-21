@@ -10,7 +10,7 @@
 
 | 能力 | 说明 |
 |---|---|
-| **工具**（`kicad_*`） | `doctor`（检查本机是否就绪：kicad-cli 与 KiCad 8+、库、Python，附修复方法和安装命令）、`read_schematic`、`list_components`、`get_symbol_pins`、`list_nets`（KiCad 网表）、`search_symbols`（已安装符号库）、`erc`、`drc`、`render`（SVG；模型支持图片时附带 PNG 图片）、`export`（网表/BOM）、`create_schematic`，以及原子批量编辑 `edit_schematic`（增删移动元件、设置值/封装/属性、导线、标签、电源符号、结点、不连接标记、引脚到引脚与引脚到网络的连接，以及按功能分区布局：带标题的功能块框、连同导线一起移动元件或整个功能块、图纸尺寸与标题栏）。未修改的文件文本逐字节保持不变。 |
+| **工具**（`kicad_*`） | `doctor`（检查本机是否就绪：kicad-cli 与 KiCad 8+、库、Python，附修复方法和安装命令）、`read_schematic`、`list_components`、`get_symbol_pins`、`list_nets`（KiCad 网表）、`search_symbols`（已安装符号库）、`erc`、`drc`、`render`（SVG；模型支持图片时附带 PNG 图片）、`export`（网表/BOM）、`create_schematic`，以及原子批量编辑 `edit_schematic`（增删移动元件、设置值/封装/属性、导线、标签、电源符号、结点、不连接标记、绕开元件和其他网络自动布线的引脚到引脚导线、引脚到网络的连接，以及按功能分区布局：带标题的功能块框、连同导线一起移动元件或整个功能块、图纸尺寸与标题栏）。未修改的文件文本逐字节保持不变。 |
 | **策略** | 设计修改走 dsh 审批（`ask`）；写操作被单调 guard 限制在会话工作目录内；每次成功修改后自动运行 KiCad ERC 并把结论附加到工具结果；系统提示中注入稳定的 KiCad 工作规范，以及动态的“当前目录中的 KiCad 工程 + 最近一次 ERC”上下文。 |
 | **技能** | `kicad-agent-workflow`、`kicad-erc-triage`、`kicad-schematic-design`。 |
 | **命令** | `/erc`、`/drc`、`/bom`（不经过模型，作用于工程根设计）、`/kicad-render`、`/kicad-doctor`（环境检查）、`/kicad-install`（安装 KiCad，见下文）。 |
