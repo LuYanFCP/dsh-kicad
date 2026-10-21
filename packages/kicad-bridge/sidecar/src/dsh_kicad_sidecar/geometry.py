@@ -113,3 +113,36 @@ def _direction(angle: float, rotation: float, mirror: str | None) -> tuple[int, 
     lx, ly = {0: (1, 0), 90: (0, 1), 180: (-1, 0), 270: (0, -1)}.get(a, (1, 0))
     dx, dy = transform(lx, ly, rotation, mirror)
     return int(round(dx)), int(round(dy))
+
+
+def body_bbox(lib_symbol: SList, at: tuple[float, float, float], mirror: str | None, unit: int,
+              body_style: int = 1) -> tuple[float, float, float, float] | None:
+    """Schematic-space bounding box (x0, y0, x1, y1) of one unit's body graphics."""
+    points: list[tuple[float, float]] = []
+
+    def xy(node: SList | None) -> None:
+        if node is not None:
+            points.append((float(node.value(0) or 0), float(node.value(1) or 0)))
+
+    for sub in lib_symbol.lists("symbol"):
+        u, style = _unit_of(sub.value(0) or "")
+        if u not in (0, unit) or style not in (0, body_style):
+            continue
+        for g in sub.lists():
+            if g.head == "rectangle":
+                xy(g.find("start")); xy(g.find("end"))
+            elif g.head in ("polyline", "bezier") and g.find("pts") is not None:
+                for p in g.find("pts").lists("xy"):
+                    xy(p)
+            elif g.head == "arc":
+                xy(g.find("start")); xy(g.find("mid")); xy(g.find("end"))
+            elif g.head == "circle" and g.find("center") is not None:
+                c = g.find("center")
+                cx, cy, r = float(c.value(0) or 0), float(c.value(1) or 0), float(g.child_value("radius") or 0)
+                points += [(cx - r, cy - r), (cx + r, cy + r)]
+    if not points:
+        return None
+    moved = [transform(px, py, at[2], mirror) for px, py in points]
+    xs = [at[0] + dx for dx, _ in moved]
+    ys = [at[1] + dy for _, dy in moved]
+    return min(xs), min(ys), max(xs), max(ys)
