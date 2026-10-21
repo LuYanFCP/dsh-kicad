@@ -12,7 +12,7 @@
  */
 import { basename } from 'node:path'
 import { DESIGN_WRITE_TOOLS, formatCheck, PATH_ARGUMENTS, TOOL_ACCESS, type CheckReport, type KiCadToolName } from 'dsh-tool-kicad'
-import { agentCwd, assemblyAgent, z, type Context, type PostToolDecision, type PreToolDecision, type ToolExecution } from './dsh.ts'
+import { agentCwd, assemblyAgent, z, type Context, type PostToolDecision, type PreToolDecision, type ToolExecution, type Volatile } from './dsh.ts'
 import { inside, resolveArg } from './paths.ts'
 import { ErcMemory, projectContext } from './project.ts'
 
@@ -23,14 +23,14 @@ export const inject = ['tools', 'kicad']
 
 export interface Config {
   /** `ask` routes design edits through dsh approval; `allow` runs them directly. */
-  approval: 'ask' | 'allow'
+  approval: Volatile<'ask' | 'allow'>
   /** Deny writes outside the session's working directory (plus `extraRoots`). */
   restrictToWorkspace: boolean
   extraRoots: string[]
   /** Run KiCad ERC after every successful schematic edit and append the verdict. */
-  autoErc: boolean
+  autoErc: Volatile<boolean>
   /** Refresh the SVG render used by the sidebar viewer after every edit. */
-  autoRender: boolean
+  autoRender: Volatile<boolean>
   /** Add the KiCad working rules section to the system prompt. */
   guidance: boolean
   /** Add the detected KiCad project to the dynamic prompt context. */
@@ -38,11 +38,11 @@ export interface Config {
 }
 
 export const Config: z<Config> = z.object({
-  approval: z.union(['ask', 'allow'] as const).default('ask').description('Ask before KiCad design edits, or allow them.'),
+  approval: z.union(['ask', 'allow'] as const).default('ask').volatile().description('Ask before KiCad design edits, or allow them.'),
   restrictToWorkspace: z.boolean().default(true).description('Only allow KiCad writes inside the working directory.'),
   extraRoots: z.array(z.string()).default([]).description('Additional directories KiCad tools may write to.'),
-  autoErc: z.boolean().default(true).description('Run ERC after every schematic edit.'),
-  autoRender: z.boolean().default(true).description('Re-render the sidebar SVG after every schematic edit.'),
+  autoErc: z.boolean().default(true).volatile().description('Run ERC after every schematic edit.'),
+  autoRender: z.boolean().default(true).volatile().description('Re-render the sidebar SVG after every schematic edit.'),
   guidance: z.boolean().default(true).description('Add KiCad working rules to the system prompt.'),
   projectContext: z.boolean().default(true).description('Tell the model which KiCad project is open.'),
 }) as unknown as z<Config>
@@ -86,31 +86,31 @@ export function apply(ctx: Context, config: Config): void {
   // the user is never asked to approve an edit the guard would refuse anyway.
   if (config.restrictToWorkspace) ctx.effect(() => ctx.tools.guard(outsideWorkspace), 'kicad workspace guard')
 
-  if (config.approval === 'ask') {
+  {
     ctx.on('tools/pre-execute', async (exec, next): Promise<PreToolDecision> => {
       if (!(DESIGN_WRITE_TOOLS as readonly string[]).includes(exec.name)) return next()
       const denied = outsideWorkspace(exec)
       if (denied) return { kind: 'deny', reason: denied }
       const args = (exec.arguments ?? {}) as { path?: string, operations?: Array<{ op?: string }>, dry_run?: boolean }
-      if (args.dry_run) return next()
+      if (args.dry_run || config.approval.get() !== 'ask') return next()
       const decision = await next()
       if (decision.kind !== 'allow') return decision
       return { kind: 'ask', ...describeEdit(exec.name, args) }
     })
   }
 
-  if (config.autoErc || config.autoRender) {
+  {
     ctx.on('tools/post-execute', async (exec, result, next): Promise<PostToolDecision> => {
       const decision = await next()
       if (exec.name !== 'kicad_edit_schematic' || result.isError || decision.kind !== 'accept') return decision
       const args = exec.arguments as { path?: string, dry_run?: boolean }
       if (args.dry_run || typeof args.path !== 'string') return decision
       const path = resolveArg(cwdOf(exec), args.path)
-      if (config.autoRender) {
+      if (config.autoRender.get()) {
         // Fire and forget: the sidebar viewer watches the SVG file.
         void ctx.kicad.call('render', { path, format: 'svg' }).catch(() => undefined)
       }
-      if (!config.autoErc) return decision
+      if (!config.autoErc.get()) return decision
       let note: string
       try {
         const erc = await ctx.kicad.call<CheckReport>('erc', { path }, exec.signal)

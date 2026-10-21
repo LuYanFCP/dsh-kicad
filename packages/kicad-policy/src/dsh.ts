@@ -5,6 +5,7 @@ import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from 'dsh-kicad-bridge'
 
 export { default as z } from '@deepseek-ai/schemastery'
+export type { Volatile } from '@deepseek-ai/cordis'
 export type { Context, PostToolDecision, PreToolDecision, ToolExecution, ToolExecutionResult }
 
 interface WorkingDirectoryLike { get(session: unknown): string }
