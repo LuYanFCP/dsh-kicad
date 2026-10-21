@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
-import argparse
-import json
 import sys
 
-from . import __version__
-from .server import Server
-from .tools import Toolbox
+if sys.version_info < (3, 10):  # before importing modules that need 3.10
+    sys.stderr.write(f"dsh-kicad-sidecar needs Python 3.10 or newer, but {sys.executable} is {sys.version.split()[0]}. "
+                     "Install Python 3.10+ and set the KiCad bridge 'python' setting to it.\n")
+    sys.exit(3)
+
+import argparse  # noqa: E402
+import json  # noqa: E402
+
+from . import __version__  # noqa: E402
+from .server import Server  # noqa: E402
+from .tools import Toolbox  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:

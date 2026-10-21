@@ -10764,12 +10764,15 @@ void main() {
 var index_exports = {};
 __export(index_exports, {
   BUNDLES: () => BUNDLES,
+  KICAD_MISSING: () => KICAD_MISSING,
   TAB_ID: () => TAB_ID,
   apply: () => apply,
   inject: () => inject,
   orderPages: () => orderPages,
   parseFileAddress: () => parseFileAddress,
+  pickSession: () => pickSession,
   readCheckMeta: () => readCheckMeta,
+  readReport: () => readReport,
   renderDir: () => renderDir,
   sessionFileAddress: () => sessionFileAddress,
   toOps: () => toOps
@@ -10818,6 +10821,9 @@ function isDesignFile(path) {
 }
 
 // src/client/Cards.tsx
+var import_react2 = require("react");
+
+// src/client/Doctor.tsx
 var import_react = require("react");
 
 // src/client/locales.ts
@@ -10865,6 +10871,39 @@ var en = {
   "settings.rejected": "The Host refused the change",
   "settings.summaryBridge": "kicad-cli: {cli}",
   "settings.summaryPolicy": "Approval: {approval} \xB7 auto ERC: {erc}",
+  "doctor.title": "KiCad environment",
+  "doctor.recheck": "Check again",
+  "doctor.checking": "Checking\u2026",
+  "doctor.fix": "Fix",
+  "doctor.open": "Details",
+  "doctor.noSession": "The check runs through a conversation: open or start one, then check again.",
+  "doctor.status.ok": "Ready",
+  "doctor.status.missing": "KiCad not installed",
+  "doctor.status.outdated": "KiCad too old",
+  "doctor.status.error": "Problems found",
+  "doctor.status.unavailable": "Sidecar not running",
+  "doctor.card": "KiCad check",
+  "install.title": "Install KiCad",
+  "install.intro": "Pick one. Nothing runs until you confirm; commands that need administrator rights are only shown for you to run.",
+  "install.install": "Install\u2026",
+  "install.openButton": "Install KiCad",
+  "install.recommended": "recommended",
+  "install.needsRoot": "needs sudo",
+  "install.rootHint": 'Needs administrator rights, so dsh will not run it. Run it in a terminal, then click "Check again".',
+  "install.copy": "Copy command",
+  "install.copied": "Copied",
+  "install.download": "Open download page",
+  "install.confirm": "dsh will run these commands on this computer as your user (no sudo):",
+  "install.run": "Run now",
+  "install.back": "Cancel",
+  "install.cancel": "Stop",
+  "install.job": "Installing: {label}",
+  "install.step": "step {step}/{steps}",
+  "install.state.running": "running",
+  "install.state.succeeded": "finished",
+  "install.state.failed": "failed",
+  "install.state.cancelled": "stopped",
+  "card.kicadMissing": "KiCad is missing or too old for this tool.",
   "common.default": "default",
   "common.on": "on",
   "common.off": "off"
@@ -10912,6 +10951,39 @@ var zh = {
   "settings.rejected": "Host \u62D2\u7EDD\u4E86\u8BE5\u4FEE\u6539",
   "settings.summaryBridge": "kicad-cli\uFF1A{cli}",
   "settings.summaryPolicy": "\u5BA1\u6279\uFF1A{approval} \xB7 \u81EA\u52A8 ERC\uFF1A{erc}",
+  "doctor.title": "KiCad \u73AF\u5883",
+  "doctor.recheck": "\u91CD\u65B0\u68C0\u67E5",
+  "doctor.checking": "\u68C0\u67E5\u4E2D\u2026",
+  "doctor.fix": "\u4FEE\u590D",
+  "doctor.open": "\u8BE6\u60C5",
+  "doctor.noSession": "\u68C0\u67E5\u9700\u8981\u901A\u8FC7\u4E00\u4E2A\u4F1A\u8BDD\u6267\u884C\uFF1A\u8BF7\u5148\u6253\u5F00\u6216\u65B0\u5EFA\u4E00\u4E2A\u4F1A\u8BDD\uFF0C\u518D\u70B9\u201C\u91CD\u65B0\u68C0\u67E5\u201D\u3002",
+  "doctor.status.ok": "\u6B63\u5E38",
+  "doctor.status.missing": "\u672A\u5B89\u88C5 KiCad",
+  "doctor.status.outdated": "KiCad \u7248\u672C\u8FC7\u4F4E",
+  "doctor.status.error": "\u6709\u95EE\u9898",
+  "doctor.status.unavailable": "sidecar \u65E0\u6CD5\u542F\u52A8",
+  "doctor.card": "KiCad \u73AF\u5883\u68C0\u67E5",
+  "install.title": "\u5B89\u88C5 KiCad",
+  "install.intro": "\u9009\u62E9\u4E00\u79CD\u65B9\u5F0F\u3002\u786E\u8BA4\u4E4B\u524D\u4E0D\u4F1A\u6267\u884C\u4EFB\u4F55\u547D\u4EE4\uFF1B\u9700\u8981\u7BA1\u7406\u5458\u6743\u9650\u7684\u547D\u4EE4\u53EA\u5C55\u793A\u7ED9\u4F60\u81EA\u5DF1\u6267\u884C\u3002",
+  "install.install": "\u5B89\u88C5\u2026",
+  "install.openButton": "\u5B89\u88C5 KiCad",
+  "install.recommended": "\u63A8\u8350",
+  "install.needsRoot": "\u9700\u8981 sudo",
+  "install.rootHint": "\u9700\u8981\u7BA1\u7406\u5458\u6743\u9650\uFF0Cdsh \u4E0D\u4F1A\u4EE3\u4E3A\u6267\u884C\u3002\u8BF7\u5728\u7EC8\u7AEF\u4E2D\u8FD0\u884C\uFF0C\u7136\u540E\u70B9\u201C\u91CD\u65B0\u68C0\u67E5\u201D\u3002",
+  "install.copy": "\u590D\u5236\u547D\u4EE4",
+  "install.copied": "\u5DF2\u590D\u5236",
+  "install.download": "\u6253\u5F00\u4E0B\u8F7D\u9875",
+  "install.confirm": "dsh \u5C06\u4EE5\u5F53\u524D\u7528\u6237\u8EAB\u4EFD\uFF08\u4E0D\u4F7F\u7528 sudo\uFF09\u5728\u672C\u673A\u6267\u884C\u4EE5\u4E0B\u547D\u4EE4\uFF1A",
+  "install.run": "\u7ACB\u5373\u6267\u884C",
+  "install.back": "\u53D6\u6D88",
+  "install.cancel": "\u505C\u6B62",
+  "install.job": "\u6B63\u5728\u5B89\u88C5\uFF1A{label}",
+  "install.step": "\u7B2C {step}/{steps} \u6B65",
+  "install.state.running": "\u8FDB\u884C\u4E2D",
+  "install.state.succeeded": "\u5DF2\u5B8C\u6210",
+  "install.state.failed": "\u5931\u8D25",
+  "install.state.cancelled": "\u5DF2\u505C\u6B62",
+  "card.kicadMissing": "KiCad \u672A\u5B89\u88C5\u6216\u7248\u672C\u8FC7\u4F4E\uFF0C\u65E0\u6CD5\u8FD0\u884C\u6B64\u5DE5\u5177\u3002",
   "common.default": "\u9ED8\u8BA4",
   "common.on": "\u5F00",
   "common.off": "\u5173"
@@ -10961,10 +11033,274 @@ var CSS = `
 .dshk-field input[type=text]{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);border-radius:6px;padding:4px 8px;font:inherit}
 .dshk-check{display:flex;align-items:center;gap:8px}
 .dshk-hint{color:var(--dsw-alias-label-tertiary);font-size:12px}
+.dshk-sev-ok{color:var(--dsw-alias-state-success-primary)}
+.dshk-doctor{display:flex;flex-direction:column;gap:6px;padding:6px 0;color:var(--dsw-alias-label-primary)}
+.dshk-notice-open{padding:4px 10px;border-bottom:1px solid var(--dsw-alias-border-l2);max-height:60%;overflow:auto}
+.dshk-doctor .dshk-list{border-top:0;padding:0 2px}
+.dshk-install{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--dsw-alias-border-l1);padding-top:6px}
+.dshk-option{display:flex;flex-direction:column;gap:4px;border:1px solid var(--dsw-alias-border-l1);border-radius:6px;padding:6px 8px}
+.dshk-cmd{margin:0;padding:4px 6px;border-radius:4px;background:var(--dsw-alias-bg-base);white-space:pre-wrap;word-break:break-all;user-select:all}
+.dshk-confirm{display:flex;flex-direction:column;gap:6px;padding:6px 8px;border-radius:6px;border:1px solid var(--dsw-alias-state-warn-primary);background:var(--dsw-alias-state-warn-tertiary)}
+.dshk-primary{font-weight:600;border-color:var(--dsw-alias-state-warn-primary)}
+.dshk-log{margin:0;max-height:220px;overflow:auto;padding:4px 6px;border-radius:4px;background:var(--dsw-alias-bg-base);white-space:pre-wrap}
+a.dshk-btn{text-decoration:none}
 `;
 
-// src/client/Cards.tsx
+// src/client/Doctor.tsx
 var import_jsx_runtime = require("react/jsx-runtime");
+function readReport(value) {
+  if (typeof value !== "object" || value === null) return void 0;
+  const r40 = value;
+  if (typeof r40.status !== "string" || typeof r40.summary !== "string" || !Array.isArray(r40.checks)) return void 0;
+  return { ...r40, install: Array.isArray(r40.install) ? r40.install : [] };
+}
+var KICAD_MISSING = /KiCad is not installed|kicad-cli was not found|kicad-cli could not be started|need KiCad \d+ or newer|executable "[^"]*" was not found|needs Python 3\.10/;
+async function pickSession(remote, preferred) {
+  if (preferred) return preferred;
+  const listed = await remote.session?.list({});
+  if (!listed?.ok) return void 0;
+  const rows = listed.value.items.filter((s) => s.origin !== "subagent");
+  rows.sort((a, b) => Number(b.agentAvailable) - Number(a.agentAvailable) || b.updatedAt - a.updatedAt);
+  return rows[0]?.sessionId;
+}
+function createRunner(remote, sessionId) {
+  let session;
+  return async (line) => {
+    session ??= pickSession(remote, sessionId);
+    const id = await session;
+    if (!id) {
+      session = void 0;
+      throw new NoSessionError();
+    }
+    const result = await remote.commands.execute(id, line, []);
+    if (!result.ok) throw new Error(result.error.message);
+    const outcome = result.value?.result;
+    if (!outcome) throw new Error(`${line.split(" ")[0]} is not available (is the KiCad plugin enabled?)`);
+    if (outcome.kind === "error") throw new Error(outcome.text);
+    return outcome.text ?? "";
+  };
+}
+var NoSessionError = class extends Error {
+  constructor() {
+    super("no session");
+    this.name = "NoSessionError";
+  }
+};
+var cache = /* @__PURE__ */ new Map();
+var TTL = 5 * 6e4;
+function cachedDoctor(key, run, force = false) {
+  const hit = cache.get(key);
+  if (!force && hit && Date.now() - hit.at < TTL) return hit.report;
+  const report = run("/kicad-doctor --json").then((text) => {
+    const parsed = readReport(JSON.parse(text));
+    if (!parsed) throw new Error("unexpected /kicad-doctor output");
+    return parsed;
+  });
+  cache.set(key, { at: Date.now(), report });
+  report.catch(() => cache.delete(key));
+  return report;
+}
+function forgetDoctor() {
+  cache.clear();
+}
+var STATUS_KEY = {
+  ok: "doctor.status.ok",
+  missing: "doctor.status.missing",
+  outdated: "doctor.status.outdated",
+  error: "doctor.status.error",
+  unavailable: "doctor.status.unavailable"
+};
+var MARK = { ok: "\u2713", warn: "!", error: "\u2717" };
+function StatusBadge(props) {
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: `dshk-badge ${props.report.status === "ok" ? "dshk-pass" : "dshk-fail"}`, "data-kicad-doctor-status": props.report.status, children: props.tr(STATUS_KEY[props.report.status]) });
+}
+function CheckList(props) {
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", { className: "dshk-list", "data-kicad-checks": true, children: props.report.checks.map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { "data-kicad-check": c.id, "data-status": c.status, children: [
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: `dshk-code dshk-sev-${c.status === "ok" ? "ok" : c.status === "warn" ? "warning" : "error"}`, children: MARK[c.status] }),
+    " ",
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: c.label }),
+    ": ",
+    c.summary,
+    c.fix && c.status !== "ok" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dshk-muted", children: [
+      props.tr("doctor.fix"),
+      ": ",
+      c.fix
+    ] })
+  ] }, c.id)) });
+}
+function DoctorPanel(props) {
+  const tr2 = (key2, vars) => translate(props.t, key2, vars);
+  const runner = (0, import_react.useRef)(void 0);
+  runner.current ??= createRunner(props.remote, props.sessionId);
+  const key = props.sessionId ?? "*";
+  const [report, setReport] = (0, import_react.useState)(props.initial);
+  const [busy, setBusy] = (0, import_react.useState)(false);
+  const [error, setError] = (0, import_react.useState)(void 0);
+  const [noSession, setNoSession] = (0, import_react.useState)(false);
+  const [job, setJob] = (0, import_react.useState)(void 0);
+  const [confirming, setConfirming] = (0, import_react.useState)(void 0);
+  const [copied, setCopied] = (0, import_react.useState)(void 0);
+  const live = (0, import_react.useRef)(true);
+  (0, import_react.useEffect)(() => () => {
+    live.current = false;
+  }, []);
+  const accept = (next) => {
+    setReport(next);
+    props.onReport?.(next);
+  };
+  const fail = (cause) => {
+    if (cause instanceof NoSessionError) setNoSession(true);
+    else setError(String(cause?.message ?? cause));
+  };
+  const check = async (force) => {
+    setBusy(true);
+    setError(void 0);
+    try {
+      const next = await cachedDoctor(key, runner.current, force);
+      if (!live.current) return;
+      setNoSession(false);
+      accept(next);
+      const status = JSON.parse(await runner.current("/kicad-install status --json"));
+      if (live.current && status.job && status.job.phase !== "done") setJob(status.job);
+    } catch (cause) {
+      if (live.current) fail(cause);
+    } finally {
+      if (live.current) setBusy(false);
+    }
+  };
+  (0, import_react.useEffect)(() => {
+    if (!props.initial) void check(props.fresh === true);
+  }, []);
+  const running = job !== void 0 && job.phase !== "done";
+  (0, import_react.useEffect)(() => {
+    if (!running) return;
+    const timer = setInterval(() => {
+      void runner.current("/kicad-install status --json").then((text) => {
+        if (!live.current) return;
+        const next = JSON.parse(text).job;
+        if (!next) return;
+        setJob(next);
+        if (next.phase === "done") {
+          forgetDoctor();
+          const fresh = readReport(next.doctor);
+          if (fresh) {
+            cache.set(key, { at: Date.now(), report: Promise.resolve(fresh) });
+            accept(fresh);
+          }
+        }
+      }, (cause) => live.current && fail(cause));
+    }, props.pollMs ?? 1e3);
+    return () => clearInterval(timer);
+  }, [running]);
+  const start = async (option) => {
+    setConfirming(void 0);
+    setError(void 0);
+    try {
+      const text = await runner.current(`/kicad-install ${option.id} --yes --json`);
+      if (live.current) setJob(JSON.parse(text).job);
+    } catch (cause) {
+      if (live.current) fail(cause);
+    }
+  };
+  const cancel = async () => {
+    try {
+      await runner.current("/kicad-install cancel --json");
+    } catch (cause) {
+      fail(cause);
+    }
+  };
+  const copy = (option) => {
+    void navigator.clipboard?.writeText(option.command).then(() => setCopied(option.id), () => setCopied(void 0));
+  };
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dshk-doctor", "data-kicad-doctor": true, children: [
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("style", { children: CSS }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dshk-check", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: tr2("doctor.title") }),
+      report && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StatusBadge, { report, tr: tr2 }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dshk-spacer" }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dshk-btn", disabled: busy || running, onClick: () => void check(true), "data-kicad-action": "recheck", children: busy ? tr2("doctor.checking") : tr2("doctor.recheck") })
+    ] }),
+    noSession && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dshk-note", "data-kicad-state": "no-session", children: tr2("doctor.noSession") }),
+    error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dshk-error", "data-kicad-state": "error", children: error }),
+    !report && busy && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dshk-note", children: tr2("doctor.checking") }),
+    report && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dshk-hint", "data-kicad-summary": true, children: report.summary }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CheckList, { report, tr: tr2 })
+    ] }),
+    job && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dshk-install-job", "data-kicad-job": job.state, "data-kicad-job-phase": job.phase, children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dshk-check", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: tr2("install.job", { label: job.label }) }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dshk-muted", children: [
+          tr2(`install.state.${job.state}`),
+          job.phase === "checking" ? ` \xB7 ${tr2("doctor.checking")}` : "",
+          " \xB7 ",
+          tr2("install.step", { step: job.step, steps: job.steps })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dshk-spacer" }),
+        job.state === "running" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dshk-btn", onClick: () => void cancel(), "data-kicad-action": "cancel-install", children: tr2("install.cancel") })
+      ] }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", { className: "dshk-log dshk-code", "data-kicad-log": true, children: job.log.slice(-40).join("\n") }),
+      job.error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dshk-error", children: job.error })
+    ] }),
+    report && report.install.length > 0 && !running && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dshk-install", "data-kicad-install": true, children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: tr2("install.title") }),
+        " ",
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dshk-hint", children: tr2("install.intro") })
+      ] }),
+      report.install.map((option) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dshk-option", "data-kicad-option": option.id, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dshk-check", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: option.label }),
+          option.recommended && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dshk-badge dshk-pass", children: tr2("install.recommended") }),
+          option.needs_root && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dshk-badge dshk-muted", children: tr2("install.needsRoot") }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dshk-spacer" }),
+          option.runnable && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dshk-btn", onClick: () => setConfirming(option), "data-kicad-action": "install", children: tr2("install.install") }),
+          !option.runnable && option.command && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dshk-btn", onClick: () => copy(option), "data-kicad-action": "copy", children: copied === option.id ? tr2("install.copied") : tr2("install.copy") }),
+          option.url && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", { className: "dshk-btn", href: option.url, target: "_blank", rel: "noreferrer", "data-kicad-action": "download", children: tr2("install.download") })
+        ] }),
+        option.command && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", { className: "dshk-cmd dshk-code", children: option.command }),
+        option.needs_root && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dshk-hint", children: tr2("install.rootHint") }),
+        option.note && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dshk-hint", children: option.note }),
+        confirming?.id === option.id && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dshk-confirm", role: "alertdialog", "data-kicad-confirm": option.id, children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: tr2("install.confirm") }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", { className: "dshk-cmd dshk-code", children: option.command }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dshk-check", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dshk-btn dshk-primary", onClick: () => void start(option), "data-kicad-action": "confirm-install", children: tr2("install.run") }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dshk-btn", onClick: () => setConfirming(void 0), "data-kicad-action": "cancel-confirm", children: tr2("install.back") })
+          ] })
+        ] })
+      ] }, option.id))
+    ] })
+  ] });
+}
+function KiCadNotice(props) {
+  const tr2 = (key, vars) => translate(props.t, key, vars);
+  const [report, setReport] = (0, import_react.useState)(void 0);
+  const [open, setOpen] = (0, import_react.useState)(false);
+  (0, import_react.useEffect)(() => {
+    let live = true;
+    void cachedDoctor(props.sessionId, createRunner(props.remote, props.sessionId), props.force).then((r40) => live && setReport(r40), () => void 0);
+    return () => {
+      live = false;
+    };
+  }, [props.sessionId, props.force]);
+  const update = (next) => {
+    if (next.status === "ok" && report?.status !== "ok") props.onReady?.();
+    setReport(next);
+  };
+  if (!report || report.status === "ok" && !open) return null;
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: open ? "dshk-notice-open" : "dshk-warn", "data-kicad-notice": report.status, children: [
+    !open && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dshk-check", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: report.summary }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dshk-spacer" }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dshk-btn", onClick: () => setOpen(true), "data-kicad-action": "open-doctor", children: report.install.length ? tr2("install.openButton") : tr2("doctor.open") })
+    ] }),
+    open && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DoctorPanel, { remote: props.remote, sessionId: props.sessionId, t: props.t, initial: report, onReport: update })
+  ] });
+}
+
+// src/client/Cards.tsx
+var import_jsx_runtime2 = require("react/jsx-runtime");
 function readCheckMeta(meta) {
   if (typeof meta !== "object" || meta === null) return void 0;
   const m = meta;
@@ -10987,14 +11323,14 @@ function resultText(props) {
 }
 function CheckCard(props) {
   const tr2 = (key, vars) => translate(props.t, key, vars);
-  const [open, setOpen] = (0, import_react.useState)(false);
+  const [open, setOpen] = (0, import_react2.useState)(false);
   const kind = props.toolName === "kicad_drc" ? "drc" : "erc";
   const label = tr2(kind === "drc" ? "card.drc" : "card.erc");
   const file = basename(argPath(props));
   if (props.phase !== "result") {
-    return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dshk-card", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("style", { children: CSS }),
-      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dshk-card-head dshk-muted", children: [
+    return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dshk-card", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("style", { children: CSS }),
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dshk-card-head dshk-muted", children: [
         tr2("card.running", { kind: label }),
         " ",
         file
@@ -11003,50 +11339,50 @@ function CheckCard(props) {
   }
   const meta = readCheckMeta(props.block.meta);
   if (props.block.isError || !meta) {
-    return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dshk-card", "data-kicad-card": "check-text", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("style", { children: CSS }),
-      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dshk-card-head", children: [
+    return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dshk-card", "data-kicad-card": "check-text", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("style", { children: CSS }),
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dshk-card-head", children: [
         label,
         " ",
         file
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", { className: "dshk-list dshk-code", style: { whiteSpace: "pre-wrap" }, children: resultText(props) })
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("pre", { className: "dshk-list dshk-code", style: { whiteSpace: "pre-wrap" }, children: resultText(props) })
     ] });
   }
   const hidden = meta.counts.total - meta.violations.length;
-  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dshk-card", "data-kicad-card": kind, "data-kicad-passed": meta.passed, children: [
-    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("style", { children: CSS }),
-    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", { type: "button", className: "dshk-card-head", "aria-expanded": open, onClick: () => setOpen((o4) => !o4), children: [
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: label }),
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: `dshk-badge ${meta.passed ? "dshk-pass" : "dshk-fail"}`, children: tr2(meta.passed ? "card.passed" : "card.failed") }),
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dshk-muted", children: tr2("card.counts", { errors: meta.counts.error, warnings: meta.counts.warning }) }),
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dshk-spacer" }),
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dshk-muted dshk-code", children: file })
+  return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dshk-card", "data-kicad-card": kind, "data-kicad-passed": meta.passed, children: [
+    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("style", { children: CSS }),
+    /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("button", { type: "button", className: "dshk-card-head", "aria-expanded": open, onClick: () => setOpen((o4) => !o4), children: [
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("strong", { children: label }),
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: `dshk-badge ${meta.passed ? "dshk-pass" : "dshk-fail"}`, children: tr2(meta.passed ? "card.passed" : "card.failed") }),
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dshk-muted", children: tr2("card.counts", { errors: meta.counts.error, warnings: meta.counts.warning }) }),
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dshk-spacer" }),
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dshk-muted dshk-code", children: file })
     ] }),
-    open && meta.violations.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", { className: "dshk-list", children: [
-      meta.violations.map((v4, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: `dshk-code dshk-sev-${v4.severity}`, children: v4.severity }),
+    open && meta.violations.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("ul", { className: "dshk-list", children: [
+      meta.violations.map((v4, i) => /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("li", { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: `dshk-code dshk-sev-${v4.severity}`, children: v4.severity }),
         " ",
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dshk-code", children: v4.type }),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dshk-code", children: v4.type }),
         " \u2014 ",
         v4.description,
-        v4.items.map((item, j) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dshk-muted", children: [
+        v4.items.map((item, j) => /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dshk-muted", children: [
           item.description,
           item.pos ? ` @ (${round(item.pos.x)}, ${round(item.pos.y)}) mm` : ""
         ] }, j))
       ] }, i)),
-      hidden > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { className: "dshk-muted", children: tr2("card.more", { count: hidden }) })
+      hidden > 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("li", { className: "dshk-muted", children: tr2("card.more", { count: hidden }) })
     ] })
   ] });
 }
 function EditCard(props) {
   const tr2 = (key, vars) => translate(props.t, key, vars);
-  const [open, setOpen] = (0, import_react.useState)(false);
+  const [open, setOpen] = (0, import_react2.useState)(false);
   const path = argPath(props);
   if (props.phase !== "result") {
-    return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dshk-card", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("style", { children: CSS }),
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dshk-card-head dshk-muted", children: tr2("card.editing", { file: basename(path) }) })
+    return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dshk-card", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("style", { children: CSS }),
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dshk-card-head dshk-muted", children: tr2("card.editing", { file: basename(path) }) })
     ] });
   }
   const text = resultText(props);
@@ -11054,35 +11390,86 @@ function EditCard(props) {
   const changes = Array.isArray(meta?.changes) ? meta.changes.filter((c) => typeof c === "string") : [];
   const erc = /^Automatic (ERC by KiCad[^\n]*)$/m.exec(text)?.[1];
   const passed = erc ? /: PASSED/.test(erc) : void 0;
-  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dshk-card", "data-kicad-card": "edit", children: [
-    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("style", { children: CSS }),
-    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", { type: "button", className: "dshk-card-head", "aria-expanded": open, onClick: () => setOpen((o4) => !o4), children: [
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: tr2("card.edit") }),
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dshk-muted", children: props.block.isError ? text.split("\n")[0] : tr2("card.changes", { count: changes.length }) }),
-      passed !== void 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: `dshk-badge ${passed ? "dshk-pass" : "dshk-fail"}`, title: erc, children: [
+  return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dshk-card", "data-kicad-card": "edit", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("style", { children: CSS }),
+    /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("button", { type: "button", className: "dshk-card-head", "aria-expanded": open, onClick: () => setOpen((o4) => !o4), children: [
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("strong", { children: tr2("card.edit") }),
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dshk-muted", children: props.block.isError ? text.split("\n")[0] : tr2("card.changes", { count: changes.length }) }),
+      passed !== void 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { className: `dshk-badge ${passed ? "dshk-pass" : "dshk-fail"}`, title: erc, children: [
         tr2("card.autoErc"),
         " \xB7 ",
         tr2(passed ? "card.passed" : "card.failed")
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dshk-spacer" }),
-      path && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dshk-muted dshk-code", role: "link", onClick: (e) => {
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dshk-spacer" }),
+      path && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dshk-muted dshk-code", role: "link", onClick: (e) => {
         e.stopPropagation();
         props.openFile?.(path);
       }, children: basename(path) })
     ] }),
-    open && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", { className: "dshk-list", children: [
-      changes.map((c, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { className: "dshk-code", children: c }, i)),
-      erc && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { className: "dshk-code", style: { whiteSpace: "pre-wrap" }, children: text.slice(text.indexOf("Automatic ERC")) })
+    open && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("ul", { className: "dshk-list", children: [
+      changes.map((c, i) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("li", { className: "dshk-code", children: c }, i)),
+      erc && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("li", { className: "dshk-code", style: { whiteSpace: "pre-wrap" }, children: text.slice(text.indexOf("Automatic ERC")) })
     ] })
   ] });
+}
+function createDoctorCard(remote) {
+  return function DoctorCard(props) {
+    const tr2 = (key, vars) => translate(props.t, key, vars);
+    const meta = readReport(props.block.meta);
+    const [open, setOpen] = (0, import_react2.useState)(false);
+    const [installing, setInstalling] = (0, import_react2.useState)(false);
+    if (props.phase !== "result") {
+      return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dshk-card", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("style", { children: CSS }),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dshk-card-head dshk-muted", children: tr2("doctor.checking") })
+      ] });
+    }
+    if (!meta) {
+      return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dshk-card", "data-kicad-card": "doctor-text", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("style", { children: CSS }),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dshk-card-head", children: tr2("doctor.card") }),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("pre", { className: "dshk-list dshk-code", style: { whiteSpace: "pre-wrap" }, children: resultText(props) })
+      ] });
+    }
+    return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dshk-card", "data-kicad-card": "doctor", "data-kicad-doctor-status": meta.status, children: [
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("style", { children: CSS }),
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("button", { type: "button", className: "dshk-card-head", "aria-expanded": open, onClick: () => setOpen((o4) => !o4), children: [
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("strong", { children: tr2("doctor.card") }),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(StatusBadge, { report: meta, tr: tr2 }),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dshk-muted", children: meta.summary })
+      ] }),
+      open && !installing && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(CheckList, { report: meta, tr: tr2 }),
+      meta.install.length > 0 && !installing && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dshk-list", children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "dshk-btn", onClick: () => setInstalling(true), "data-kicad-action": "open-doctor", children: tr2("install.openButton") }) }),
+      installing && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dshk-list", children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(DoctorPanel, { remote, sessionId: props.sessionId, t: props.t, initial: meta }) })
+    ] });
+  };
+}
+function withKiCadHint(remote, Card) {
+  return function KiCadCard(props) {
+    const tr2 = (key, vars) => translate(props.t, key, vars);
+    const [open, setOpen] = (0, import_react2.useState)(false);
+    const missing = props.phase === "result" && props.block.isError === true && KICAD_MISSING.test(resultText(props));
+    if (!missing) return /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Card, { ...props });
+    return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { "data-kicad-missing": true, children: [
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Card, { ...props }),
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dshk-warn", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dshk-check", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { children: tr2("card.kicadMissing") }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dshk-spacer" }),
+          !open && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "dshk-btn", onClick: () => setOpen(true), "data-kicad-action": "open-doctor", children: tr2("install.openButton") })
+        ] }),
+        open && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(DoctorPanel, { remote, sessionId: props.sessionId, t: props.t })
+      ] })
+    ] });
+  };
 }
 function round(n) {
   return Math.round(n * 100) / 100;
 }
 
 // src/client/Settings.tsx
-var import_react2 = require("react");
-var import_jsx_runtime2 = require("react/jsx-runtime");
+var import_react3 = require("react");
+var import_jsx_runtime3 = require("react/jsx-runtime");
 var BRIDGE_FIELDS = [
   { key: "kicadCli", label: "settings.kicadCli", hint: "settings.kicadCliHint", kind: "text" },
   { key: "python", label: "settings.python", hint: "settings.pythonHint", kind: "text" }
@@ -11102,14 +11489,14 @@ function toOps(fields, draft, current) {
   }
   return ops;
 }
-function createSettingsCard(fields, summary) {
+function createSettingsCard(fields, summary, extra) {
   return function KiCadSettings(props) {
     const tr2 = (key, vars) => translate(props.t, key, vars);
     const value = props.form?.state.value ?? {};
-    const [draft, setDraft] = (0, import_react2.useState)(value);
-    const [status, setStatus] = (0, import_react2.useState)("idle");
-    (0, import_react2.useEffect)(() => setDraft(props.form?.state.value ?? {}), [props.form?.state.revision]);
-    if (props.view === "summary") return /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { children: summary(value, tr2) });
+    const [draft, setDraft] = (0, import_react3.useState)(value);
+    const [status, setStatus] = (0, import_react3.useState)("idle");
+    (0, import_react3.useEffect)(() => setDraft(props.form?.state.value ?? {}), [props.form?.state.revision]);
+    if (props.view === "summary") return /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { children: summary(value, tr2) });
     if (!props.form || props.form.state.status !== "ready") return null;
     const form = props.form;
     const ops = toOps(fields, draft, value);
@@ -11118,11 +11505,11 @@ function createSettingsCard(fields, summary) {
       const ok = await form.mutate(ops, form.state.revision).catch(() => false);
       setStatus(ok ? "saved" : "rejected");
     };
-    return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dshk-form", "data-kicad-settings": true, children: [
-      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("style", { children: CSS }),
-      fields.map((f) => f.kind === "text" ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("label", { className: "dshk-field", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { children: tr2(f.label) }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+    return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "dshk-form", "data-kicad-settings": true, children: [
+      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("style", { children: CSS }),
+      fields.map((f) => f.kind === "text" ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("label", { className: "dshk-field", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { children: tr2(f.label) }),
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
           "input",
           {
             type: "text",
@@ -11134,9 +11521,9 @@ function createSettingsCard(fields, summary) {
             }
           }
         ),
-        f.hint && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dshk-hint", children: tr2(f.hint) })
-      ] }, f.key) : /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("label", { className: "dshk-check", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+        f.hint && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "dshk-hint", children: tr2(f.hint) })
+      ] }, f.key) : /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("label", { className: "dshk-check", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
           "input",
           {
             type: "checkbox",
@@ -11150,27 +11537,32 @@ function createSettingsCard(fields, summary) {
             }
           }
         ),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { children: tr2(f.label) })
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { children: tr2(f.label) })
       ] }, f.key)),
-      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dshk-check", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "dshk-btn", disabled: ops.length === 0 || status === "saving" || !form.state.writable, onClick: () => void save(), children: tr2("settings.save") }),
-        status === "saved" && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dshk-hint", children: tr2("settings.saved") }),
-        status === "rejected" && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dshk-error", children: tr2("settings.rejected") })
-      ] })
+      /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "dshk-check", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { type: "button", className: "dshk-btn", disabled: ops.length === 0 || status === "saving" || !form.state.writable, onClick: () => void save(), children: tr2("settings.save") }),
+        status === "saved" && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "dshk-hint", children: tr2("settings.saved") }),
+        status === "rejected" && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "dshk-error", children: tr2("settings.rejected") })
+      ] }),
+      extra?.(props)
     ] });
   };
 }
-var BridgeSettings = createSettingsCard(BRIDGE_FIELDS, (v4, tr2) => tr2("settings.summaryBridge", { cli: String(v4.kicadCli || tr2("common.default")) }));
+var bridgeSummary = (v4, tr2) => tr2("settings.summaryBridge", { cli: String(v4.kicadCli || tr2("common.default")) });
+function createBridgeSettings(remote) {
+  return createSettingsCard(BRIDGE_FIELDS, bridgeSummary, (props) => /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(DoctorPanel, { remote, t: props.t, fresh: true }, props.form?.state.revision ?? 0));
+}
+var BridgeSettings = createSettingsCard(BRIDGE_FIELDS, bridgeSummary);
 var PolicySettings = createSettingsCard(POLICY_FIELDS, (v4, tr2) => tr2("settings.summaryPolicy", {
   approval: v4.approval === "allow" ? tr2("common.off") : tr2("common.on"),
   erc: v4.autoErc === false ? tr2("common.off") : tr2("common.on")
 }));
 
 // src/client/Viewer.tsx
-var import_react4 = require("react");
+var import_react5 = require("react");
 
 // src/client/InteractiveView.tsx
-var import_react3 = require("react");
+var import_react4 = require("react");
 
 // src/client/kicanvas.ts
 var loading;
@@ -11204,12 +11596,12 @@ function pickFiles(designName, entries) {
 }
 
 // src/client/InteractiveView.tsx
-var import_jsx_runtime3 = require("react/jsx-runtime");
+var import_jsx_runtime4 = require("react/jsx-runtime");
 function InteractiveView(props) {
-  const host = (0, import_react3.useRef)(null);
-  const [status, setStatus] = (0, import_react3.useState)("loading");
+  const host = (0, import_react4.useRef)(null);
+  const [status, setStatus] = (0, import_react4.useState)("loading");
   const { remote, sessionId, designPath, version, theme, tr: tr2, onFailed } = props;
-  (0, import_react3.useEffect)(() => {
+  (0, import_react4.useEffect)(() => {
     const controller = new AbortController();
     const { signal } = controller;
     let timer;
@@ -11257,14 +11649,14 @@ function InteractiveView(props) {
       host.current?.replaceChildren();
     };
   }, [sessionId, designPath, version, theme]);
-  return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "dshk-stage dshk-kicanvas", "data-kicad-state": `kicanvas-${status}`, children: [
-    status === "loading" && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { className: "dshk-note dshk-overlay", children: tr2("viewer.loading") }),
-    /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { ref: host, style: { position: "absolute", inset: 0 } })
+  return /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "dshk-stage dshk-kicanvas", "data-kicad-state": `kicanvas-${status}`, children: [
+    status === "loading" && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("div", { className: "dshk-note dshk-overlay", children: tr2("viewer.loading") }),
+    /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("div", { ref: host, style: { position: "absolute", inset: 0 } })
   ] });
 }
 
 // src/client/Viewer.tsx
-var import_jsx_runtime4 = require("react/jsx-runtime");
+var import_jsx_runtime5 = require("react/jsx-runtime");
 var MODE_KEY = "dsh-kicad:viewer-mode";
 var THEME_KEY = "dsh-kicad:viewer-theme";
 function stored(key, allowed, fallback) {
@@ -11285,11 +11677,11 @@ function createViewer(remote) {
   const SvgView = createSvgView(remote);
   return function KiCadViewer(props) {
     const tr2 = (key, vars) => translate(props.t, key, vars);
-    const [mode, setMode] = (0, import_react4.useState)(() => stored(MODE_KEY, ["interactive", "svg"], "interactive"));
-    const [theme, setTheme] = (0, import_react4.useState)(() => stored(THEME_KEY, ["kicad", "witchhazel"], "kicad"));
-    const [fallback, setFallback] = (0, import_react4.useState)(void 0);
+    const [mode, setMode] = (0, import_react5.useState)(() => stored(MODE_KEY, ["interactive", "svg"], "interactive"));
+    const [theme, setTheme] = (0, import_react5.useState)(() => stored(THEME_KEY, ["kicad", "witchhazel"], "kicad"));
+    const [fallback, setFallback] = (0, import_react5.useState)(void 0);
     const { tab } = props.useTabInfo();
-    const file = (0, import_react4.useMemo)(() => parseFileAddress(tab.contentId ?? ""), [tab.contentId]);
+    const file = (0, import_react5.useMemo)(() => parseFileAddress(tab.contentId ?? ""), [tab.contentId]);
     const sourceVersion = props.useResource?.(tab.contentId ?? "none:")?.value?.version;
     const choose = (next) => {
       setFallback(void 0);
@@ -11297,31 +11689,32 @@ function createViewer(remote) {
       remember(MODE_KEY, next);
     };
     const effective = mode === "interactive" && fallback === void 0 ? "interactive" : "svg";
-    const modeSwitch = /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("span", { className: "dshk-segmented", role: "group", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { type: "button", className: "dshk-btn", "aria-pressed": effective === "interactive", "data-kicad-mode": "interactive", onClick: () => choose("interactive"), children: tr2("viewer.interactive") }),
-      /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { type: "button", className: "dshk-btn", "aria-pressed": effective === "svg", "data-kicad-mode": "svg", onClick: () => choose("svg"), children: tr2("viewer.svg") })
+    const modeSwitch = /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("span", { className: "dshk-segmented", role: "group", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("button", { type: "button", className: "dshk-btn", "aria-pressed": effective === "interactive", "data-kicad-mode": "interactive", onClick: () => choose("interactive"), children: tr2("viewer.interactive") }),
+      /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("button", { type: "button", className: "dshk-btn", "aria-pressed": effective === "svg", "data-kicad-mode": "svg", onClick: () => choose("svg"), children: tr2("viewer.svg") })
     ] });
     if (effective === "svg" || file?.scope !== "session" || !file.sessionId) {
-      return /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(SvgView, { ...props, modeSwitch, notice: fallback ? tr2("viewer.fellBack", { message: fallback }) : void 0 });
+      return /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(SvgView, { ...props, modeSwitch, notice: fallback ? tr2("viewer.fellBack", { message: fallback }) : void 0 });
     }
-    return /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "dshk-root", "data-kicad-viewer": file.path, "data-kicad-mode-active": "interactive", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("style", { children: CSS }),
-      /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "dshk-bar", children: [
+    return /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("div", { className: "dshk-root", "data-kicad-viewer": file.path, "data-kicad-mode-active": "interactive", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("style", { children: CSS }),
+      /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("div", { className: "dshk-bar", children: [
         modeSwitch,
-        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "dshk-spacer" }),
-        /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("label", { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("span", { className: "dshk-spacer" }),
+        /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("label", { children: [
           tr2("viewer.theme"),
           " ",
-          /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("select", { className: "dshk-select", value: theme, onChange: (e) => {
+          /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("select", { className: "dshk-select", value: theme, onChange: (e) => {
             setTheme(e.target.value);
             remember(THEME_KEY, e.target.value);
           }, children: [
-            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: "kicad", children: "KiCad" }),
-            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: "witchhazel", children: "Witch Hazel" })
+            /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("option", { value: "kicad", children: "KiCad" }),
+            /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("option", { value: "witchhazel", children: "Witch Hazel" })
           ] })
         ] })
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(InteractiveView, { remote, sessionId: file.sessionId, designPath: file.path, version: sourceVersion, theme, tr: tr2, onFailed: setFallback })
+      /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(KiCadNotice, { remote, sessionId: file.sessionId, t: props.t }),
+      /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(InteractiveView, { remote, sessionId: file.sessionId, designPath: file.path, version: sourceVersion, theme, tr: tr2, onFailed: setFallback })
     ] });
   };
 }
@@ -11329,28 +11722,29 @@ function createSvgView(remote) {
   return function KiCadSvgView(props) {
     const tr2 = (key, vars) => translate(props.t, key, vars);
     const { tab } = props.useTabInfo();
-    const file = (0, import_react4.useMemo)(() => parseFileAddress(tab.contentId ?? ""), [tab.contentId]);
+    const file = (0, import_react5.useMemo)(() => parseFileAddress(tab.contentId ?? ""), [tab.contentId]);
     const sessionId = file?.scope === "session" ? file.sessionId : void 0;
     const designPath = file?.path ?? "";
     const dir = renderDir(designPath);
-    const [pages, setPages] = (0, import_react4.useState)(void 0);
-    const [pageIndex, setPageIndex] = (0, import_react4.useState)(0);
-    const [listing, setListing] = (0, import_react4.useState)(0);
-    const [svgUrl, setSvgUrl] = (0, import_react4.useState)(void 0);
-    const [error, setError] = (0, import_react4.useState)(void 0);
-    const [rendering, setRendering] = (0, import_react4.useState)(false);
-    const [view, setView] = (0, import_react4.useState)({ scale: 1, x: 0, y: 0 });
-    const stageRef = (0, import_react4.useRef)(null);
-    const imgRef = (0, import_react4.useRef)(null);
-    const drag = (0, import_react4.useRef)(void 0);
+    const [pages, setPages] = (0, import_react5.useState)(void 0);
+    const [pageIndex, setPageIndex] = (0, import_react5.useState)(0);
+    const [listing, setListing] = (0, import_react5.useState)(0);
+    const [svgUrl, setSvgUrl] = (0, import_react5.useState)(void 0);
+    const [error, setError] = (0, import_react5.useState)(void 0);
+    const [rendering, setRendering] = (0, import_react5.useState)(false);
+    const [kicadFailed, setKicadFailed] = (0, import_react5.useState)(false);
+    const [view, setView] = (0, import_react5.useState)({ scale: 1, x: 0, y: 0 });
+    const stageRef = (0, import_react5.useRef)(null);
+    const imgRef = (0, import_react5.useRef)(null);
+    const drag = (0, import_react5.useRef)(void 0);
     const page = pages?.[Math.min(pageIndex, pages.length - 1)];
     const pagePath = page ? `${dir}/${page}` : void 0;
     const svgState = props.useResource?.(sessionId && pagePath ? sessionFileAddress(sessionId, pagePath) : "none:");
     const sourceState = props.useResource?.(tab.contentId ?? "none:");
     const svgVersion = svgState?.value?.version;
     const sourceVersion = sourceState?.value?.version;
-    const sourceAtLoad = (0, import_react4.useRef)(void 0);
-    (0, import_react4.useEffect)(() => {
+    const sourceAtLoad = (0, import_react5.useRef)(void 0);
+    (0, import_react5.useEffect)(() => {
       if (!sessionId) return;
       let live = true;
       void remote.workspaceFiles.list(sessionId, dir).then((result) => {
@@ -11361,7 +11755,7 @@ function createSvgView(remote) {
         live = false;
       };
     }, [sessionId, dir, designPath, listing, svgVersion === void 0]);
-    (0, import_react4.useEffect)(() => {
+    (0, import_react5.useEffect)(() => {
       if (!sessionId || !pagePath) {
         setSvgUrl(void 0);
         return;
@@ -11384,7 +11778,7 @@ function createSvgView(remote) {
         if (url) URL.revokeObjectURL(url);
       };
     }, [sessionId, pagePath, svgVersion]);
-    const fit = (0, import_react4.useCallback)(() => {
+    const fit = (0, import_react5.useCallback)(() => {
       const stage = stageRef.current;
       const img = imgRef.current;
       if (!stage || !img || !img.naturalWidth) return;
@@ -11423,8 +11817,10 @@ function createSvgView(remote) {
       try {
         const result = await remote.commands.execute(sessionId, `/kicad-render ${designPath}`, []);
         if (!result.ok) setError(tr2("viewer.renderFailed", { message: result.error.message }));
-        else if (result.value?.result.kind === "error") setError(tr2("viewer.renderFailed", { message: result.value.result.text }));
-        else setListing((n) => n + 1);
+        else if (result.value?.result.kind === "error") {
+          setError(tr2("viewer.renderFailed", { message: result.value.result.text }));
+          if (KICAD_MISSING.test(result.value.result.text)) setKicadFailed(true);
+        } else setListing((n) => n + 1);
       } catch (cause) {
         setError(tr2("viewer.renderFailed", { message: String(cause) }));
       } finally {
@@ -11432,32 +11828,37 @@ function createSvgView(remote) {
       }
     };
     if (!sessionId) {
-      return /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "dshk-root", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("style", { children: CSS }),
-        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("div", { className: "dshk-note", children: tr2("viewer.noSession") })
+      return /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("div", { className: "dshk-root", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("style", { children: CSS }),
+        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("div", { className: "dshk-note", children: tr2("viewer.noSession") })
       ] });
     }
     const stale = svgUrl !== void 0 && sourceAtLoad.current !== void 0 && sourceVersion !== void 0 && sourceVersion !== sourceAtLoad.current;
-    return /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "dshk-root", "data-kicad-viewer": designPath, children: [
-      /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("style", { children: CSS }),
-      /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "dshk-bar", children: [
+    return /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("div", { className: "dshk-root", "data-kicad-viewer": designPath, children: [
+      /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("style", { children: CSS }),
+      /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("div", { className: "dshk-bar", children: [
         props.modeSwitch,
-        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { type: "button", className: "dshk-btn", onClick: () => void render(), disabled: rendering, "data-kicad-action": "render", children: rendering ? tr2("viewer.rendering") : tr2("viewer.render") }),
-        pages && pages.length > 1 && /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("label", { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("button", { type: "button", className: "dshk-btn", onClick: () => void render(), disabled: rendering, "data-kicad-action": "render", children: rendering ? tr2("viewer.rendering") : tr2("viewer.render") }),
+        pages && pages.length > 1 && /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("label", { children: [
           tr2("viewer.page"),
           " ",
-          /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("select", { className: "dshk-select", value: Math.min(pageIndex, pages.length - 1), onChange: (e) => setPageIndex(Number(e.target.value)), children: pages.map((p4, i) => /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: i, children: p4.replace(/\.svg$/, "") }, p4)) })
+          /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("select", { className: "dshk-select", value: Math.min(pageIndex, pages.length - 1), onChange: (e) => setPageIndex(Number(e.target.value)), children: pages.map((p4, i) => /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("option", { value: i, children: p4.replace(/\.svg$/, "") }, p4)) })
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "dshk-spacer" }),
-        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { type: "button", className: "dshk-btn", "aria-label": tr2("viewer.zoomOut"), onClick: () => zoom(1 / 1.25), children: "\u2212" }),
-        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { type: "button", className: "dshk-btn", "aria-label": tr2("viewer.zoomIn"), onClick: () => zoom(1.25), children: "+" }),
-        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { type: "button", className: "dshk-btn", onClick: fit, children: tr2("viewer.fit") })
+        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("span", { className: "dshk-spacer" }),
+        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("button", { type: "button", className: "dshk-btn", "aria-label": tr2("viewer.zoomOut"), onClick: () => zoom(1 / 1.25), children: "\u2212" }),
+        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("button", { type: "button", className: "dshk-btn", "aria-label": tr2("viewer.zoomIn"), onClick: () => zoom(1.25), children: "+" }),
+        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("button", { type: "button", className: "dshk-btn", onClick: fit, children: tr2("viewer.fit") })
       ] }),
-      props.notice && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("div", { className: "dshk-warn", "data-kicad-state": "fallback", children: props.notice }),
-      stale && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("div", { className: "dshk-warn", "data-kicad-state": "stale", children: tr2("viewer.stale") }),
-      error && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("div", { className: "dshk-error", "data-kicad-state": "error", children: error }),
-      pages !== void 0 && pages.length === 0 && !rendering && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("div", { className: "dshk-note", "data-kicad-state": "empty", children: tr2("viewer.empty") }),
-      /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
+      /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(KiCadNotice, { remote, sessionId, t: props.t, force: kicadFailed, onReady: () => {
+        if (!kicadFailed) return;
+        setKicadFailed(false);
+        void render();
+      } }),
+      props.notice && /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("div", { className: "dshk-warn", "data-kicad-state": "fallback", children: props.notice }),
+      stale && /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("div", { className: "dshk-warn", "data-kicad-state": "stale", children: tr2("viewer.stale") }),
+      error && /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("div", { className: "dshk-error", "data-kicad-state": "error", children: error }),
+      pages !== void 0 && pages.length === 0 && !rendering && /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("div", { className: "dshk-note", "data-kicad-state": "empty", children: tr2("viewer.empty") }),
+      /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(
         "div",
         {
           ref: stageRef,
@@ -11467,7 +11868,7 @@ function createSvgView(remote) {
           onPointerMove,
           onPointerUp,
           onDoubleClick: fit,
-          children: svgUrl && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
+          children: svgUrl && /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(
             "img",
             {
               ref: imgRef,
@@ -11488,7 +11889,7 @@ function createSvgView(remote) {
 // src/client/index.tsx
 var TAB_ID = "dsh-client-ui-kicad";
 var BUNDLES = ["dsh-kicad-bundle", "dsh-kicad"];
-var inject = ["slots", "locale", "sidebarRightTabs", "remote", "remote.workspaceFiles", "remote.commands"];
+var inject = ["slots", "locale", "sidebarRightTabs", "remote", "remote.workspaceFiles", "remote.commands", "remote.session"];
 function apply(ctx) {
   ctx.effect(() => ctx.locale.register(NS, { en, zh }), "kicad: dictionaries");
   ctx.effect(() => ctx.sidebarRightTabs.register({
@@ -11504,14 +11905,21 @@ function apply(ctx) {
     { name: "sidebar.right.pane.tab", key: TAB_ID, locale: NS },
     Viewer
   )), "kicad: viewer body");
-  for (const [tool, view] of [["kicad_erc", CheckCard], ["kicad_drc", CheckCard], ["kicad_edit_schematic", EditCard]]) {
+  const cards = [
+    ["kicad_doctor", createDoctorCard(ctx.remote)],
+    ["kicad_erc", withKiCadHint(ctx.remote, CheckCard)],
+    ["kicad_drc", withKiCadHint(ctx.remote, CheckCard)],
+    ["kicad_edit_schematic", withKiCadHint(ctx.remote, EditCard)]
+  ];
+  for (const [tool, view] of cards) {
     ctx.effect(() => ctx.slots.inject("tool.call.toolview", () => ctx.slots.register(
       { name: "tool.call.toolview", key: tool, locale: NS },
       view
     )), `kicad: ${tool} row`);
   }
+  const BridgeSettings2 = createBridgeSettings(ctx.remote);
   for (const bundle of BUNDLES) {
-    for (const [row, view] of [["kicad-bridge", BridgeSettings], ["kicad-policy", PolicySettings]]) {
+    for (const [row, view] of [["kicad-bridge", BridgeSettings2], ["kicad-policy", PolicySettings]]) {
       ctx.effect(() => ctx.slots.inject("plugins.row.config", () => ctx.slots.register(
         { name: "plugins.row.config", key: `${bundle}#${row}`, locale: NS },
         view

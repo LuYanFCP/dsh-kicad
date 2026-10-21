@@ -4,9 +4,10 @@
  * (`result.meta` from the tool's presentationMeta and the result text) and fall
  * back to plain text for anything they do not recognize.
  */
-import { useState, type ReactNode } from 'react'
+import { useState, type ComponentType, type ReactNode } from 'react'
 import { basename } from './address.ts'
-import type { ToolViewProps } from './dsh.ts'
+import { CheckList, DoctorPanel, KICAD_MISSING, readReport, StatusBadge } from './Doctor.tsx'
+import type { ClientRemote, ToolViewProps } from './dsh.ts'
 import { translate, type KiCadLocaleKey } from './locales.ts'
 import { CSS } from './styles.ts'
 
@@ -127,6 +128,68 @@ export function EditCard(props: ToolViewProps): ReactNode {
       )}
     </div>
   )
+}
+
+/** Row for kicad_doctor: status badge, the checks, and the installer when KiCad is missing. */
+export function createDoctorCard(remote: ClientRemote) {
+  return function DoctorCard(props: ToolViewProps): ReactNode {
+    const tr = (key: KiCadLocaleKey, vars?: Record<string, string | number>): string => translate(props.t, key, vars)
+    const meta = readReport(props.block.meta)
+    const [open, setOpen] = useState(false)
+    const [installing, setInstalling] = useState(false)
+    if (props.phase !== 'result') {
+      return <div className="dshk-card"><style>{CSS}</style><div className="dshk-card-head dshk-muted">{tr('doctor.checking')}</div></div>
+    }
+    if (!meta) {
+      return (
+        <div className="dshk-card" data-kicad-card="doctor-text">
+          <style>{CSS}</style>
+          <div className="dshk-card-head">{tr('doctor.card')}</div>
+          <pre className="dshk-list dshk-code" style={{ whiteSpace: 'pre-wrap' }}>{resultText(props)}</pre>
+        </div>
+      )
+    }
+    return (
+      <div className="dshk-card" data-kicad-card="doctor" data-kicad-doctor-status={meta.status}>
+        <style>{CSS}</style>
+        <button type="button" className="dshk-card-head" aria-expanded={open} onClick={() => setOpen(o => !o)}>
+          <strong>{tr('doctor.card')}</strong>
+          <StatusBadge report={meta} tr={tr} />
+          <span className="dshk-muted">{meta.summary}</span>
+        </button>
+        {open && !installing && <CheckList report={meta} tr={tr} />}
+        {meta.install.length > 0 && !installing && (
+          <div className="dshk-list">
+            <button type="button" className="dshk-btn" onClick={() => setInstalling(true)} data-kicad-action="open-doctor">{tr('install.openButton')}</button>
+          </div>
+        )}
+        {installing && <div className="dshk-list"><DoctorPanel remote={remote} sessionId={props.sessionId} t={props.t} initial={meta} /></div>}
+      </div>
+    )
+  }
+}
+
+/** Wrap a row so a failure caused by a missing/old KiCad offers the check and installer. */
+export function withKiCadHint(remote: ClientRemote, Card: ComponentType<ToolViewProps>) {
+  return function KiCadCard(props: ToolViewProps): ReactNode {
+    const tr = (key: KiCadLocaleKey, vars?: Record<string, string | number>): string => translate(props.t, key, vars)
+    const [open, setOpen] = useState(false)
+    const missing = props.phase === 'result' && props.block.isError === true && KICAD_MISSING.test(resultText(props))
+    if (!missing) return <Card {...props} />
+    return (
+      <div data-kicad-missing>
+        <Card {...props} />
+        <div className="dshk-warn">
+          <div className="dshk-check">
+            <span>{tr('card.kicadMissing')}</span>
+            <span className="dshk-spacer" />
+            {!open && <button type="button" className="dshk-btn" onClick={() => setOpen(true)} data-kicad-action="open-doctor">{tr('install.openButton')}</button>}
+          </div>
+          {open && <DoctorPanel remote={remote} sessionId={props.sessionId} t={props.t} />}
+        </div>
+      </div>
+    )
+  }
 }
 
 function round(n: number): number {

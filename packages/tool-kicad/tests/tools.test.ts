@@ -12,6 +12,19 @@ describe('dsh-tool-kicad', () => {
     expect(names).toEqual(Object.keys(toolKiCad.TOOL_ACCESS).sort())
   })
 
+  it('kicad_doctor reports the environment with a replayable card payload', async () => {
+    const ctx = await bootKiCad([toolKiCad])
+    const result = await runTool(ctx, 'kicad_doctor', {})
+    expect(result.isError).toBeFalsy()
+    const meta = (result as unknown as { meta?: Record<string, unknown> }).meta ?? (result as unknown as { presentationMeta?: Record<string, unknown> }).presentationMeta
+    expect(text(result)).toMatch(/kicad-cli/)
+    if (meta) expect(meta).toMatchObject({ kind: 'doctor', status: expect.any(String) })
+    const report = await ctx.kicad.doctor()
+    const card = toolKiCad.doctorMeta(report)
+    expect(card).toMatchObject({ kind: 'doctor', ok: report.ok, status: report.status })
+    expect((card.checks as unknown[]).length).toBe(report.checks.length)
+  })
+
   it('reads a schematic through the real tool pipeline', async () => {
     const ctx = await bootKiCad([toolKiCad])
     const result = await runTool(ctx, 'kicad_read_schematic', { path: fixtureProject('rc_filter') })
