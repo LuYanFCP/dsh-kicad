@@ -7,7 +7,7 @@ import { bootKiCad, disposeAll, fixtureProject, hasKiCadCli, runTool, text } fro
 
 afterEach(disposeAll)
 
-const config = (over: Partial<policy.Config> = {}): policy.Config => ({
+const config = (over: Record<string, unknown> = {}) => ({
   approval: 'allow', restrictToWorkspace: true, extraRoots: [], autoErc: true, autoRender: false, guidance: true, projectContext: true, ...over,
 })
 
