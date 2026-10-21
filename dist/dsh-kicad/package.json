@@ -1,6 +1,6 @@
 {
   "name": "dsh-kicad",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "KiCad for DeepSeek Harness: schematic tools, ERC/DRC, approval policy, skills, commands, sidebar viewer and an EDA agent preset",
   "license": "MIT",
   "type": "module",
