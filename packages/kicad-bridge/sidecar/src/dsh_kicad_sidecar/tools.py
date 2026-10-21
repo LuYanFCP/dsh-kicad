@@ -10,7 +10,8 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from . import __version__
-from .kicad_cli import KiCadCli, KiCadCliError, svg_to_png
+from .doctor import format_report, platform_info, run_doctor
+from .kicad_cli import KiCadCli, KiCadCliError, parse_version, MIN_KICAD, svg_to_png
 from .schematic import OPERATIONS, Schematic, SchematicError, new_schematic_text
 from .footprints import FootprintLibraries, default_footprint_dirs
 from . import geometry
@@ -59,6 +60,9 @@ OPERATION_SCHEMA: dict[str, Any] = {
 
 TOOL_SPECS: list[ToolSpec] = [
     ToolSpec("environment", "Report kicad-cli, symbol libraries, rasterizers and KiCad IPC availability.", _obj({}, [])),
+    ToolSpec("doctor", "Check whether this machine can run the KiCad tools (kicad-cli present and KiCad 8+, symbol/footprint libraries, "
+             "Python 3.10+, optional PNG rasterizer and kicad-python). Every check has a status and a fix; when KiCad is missing "
+             "or too old, 'install' lists the ways to install it on this platform.", _obj({}, [])),
     ToolSpec("read_schematic", "Summarize a schematic: title block, counts, components (reference, value, lib_id, footprint, position), labels, power nets, sub-sheets.",
              _obj({"path": SCH, "include_components": {"type": "boolean", "default": True},
                    "include_wiring": {"type": "boolean", "default": False, "description": "Also list wires, junctions and no-connects with uuids."},
@@ -167,16 +171,26 @@ class Toolbox:
             ipc = True
         except ImportError:
             ipc = False
+        self.cli.locate()
+        version = self.cli.version_or_none()
+        parsed = parse_version(version)
         return {
             "sidecar_version": __version__,
+            "platform": platform_info(),
             "kicad_cli": " ".join(self.cli.argv) if self.cli.argv else None,
-            "kicad_version": self.cli.version(),
+            "kicad_cli_source": self.cli.source,
+            "kicad_version": version,
+            "kicad_version_ok": parsed is not None and parsed >= MIN_KICAD,
             "symbol_dirs": default_symbol_dirs(),
             "footprint_dirs": default_footprint_dirs(),
             "rasterizers": rasterizers,
             "ipc_client_installed": ipc,
             "roots": self.roots,
         }
+
+    def tool_doctor(self, _args):
+        report = run_doctor(self.cli)
+        return {**report, "text": format_report(report)}
 
     def tool_read_schematic(self, args):
         s = self.schematic(args["path"])

@@ -5,6 +5,152 @@ import { fileURLToPath } from "node:url";
 import { Service } from "@deepseek-ai/cordis";
 import { default as default2 } from "@deepseek-ai/schemastery";
 
+// packages/kicad-bridge/src/doctor.ts
+import { homedir } from "node:os";
+var ELEVATION = /* @__PURE__ */ new Set(["sudo", "su", "doas", "pkexec", "runas", "gsudo"]);
+var MAX_LOG_LINES = 400;
+var MAX_LINE = 400;
+function needsElevation(option) {
+  return option.needs_root || option.steps.some((step) => ELEVATION.has(baseName(step[0] ?? "")));
+}
+function baseName(path) {
+  return path.split(/[\\/]/).pop().replace(/\.exe$/i, "").toLowerCase();
+}
+function unavailableReport(reason, python) {
+  const pythonMissing = /not found|ENOENT|needs Python 3\.10|no such file|cannot find/i.test(reason);
+  const fix = `Install Python 3.10 or newer (https://www.python.org/downloads/ or your package manager, e.g. \`sudo dnf install python3\`, \`sudo apt-get install python3\`, \`brew install python\`, \`winget install Python.Python.3.12\`) and, if it is not on PATH, set the KiCad bridge 'python' setting to it.`;
+  const checks = [
+    {
+      id: "python",
+      label: "Python",
+      status: "error",
+      required: true,
+      summary: pythonMissing ? `The KiCad sidecar could not start with "${python}": ${reason}` : `The KiCad sidecar failed to start: ${reason}`,
+      fix
+    },
+    { id: "kicad_cli", label: "kicad-cli", status: "error", required: true, summary: "Not checked: the sidecar is not running.", fix: "Fix Python first, then check again." }
+  ];
+  const summary = "The KiCad sidecar (Python) could not start, so nothing else was checked.";
+  return {
+    ok: false,
+    status: "unavailable",
+    summary,
+    kicad: { cli: null, source: null, version: null, minimum: "8.0" },
+    checks,
+    install: [],
+    text: `${summary}
+
+\u2717 Python: ${checks[0].summary}
+    fix: ${fix}`
+  };
+}
+var Installer = class {
+  constructor(deps) {
+    this.deps = deps;
+  }
+  current;
+  controller;
+  running;
+  nextId = 1;
+  get job() {
+    return this.current && { ...this.current, log: [...this.current.log] };
+  }
+  /** Start a plan. Throws when another install runs or the plan is not allowed to run here. */
+  start(option) {
+    if (this.current?.state === "running") throw new Error(`an installation is already running (${this.current.label})`);
+    if (needsElevation(option)) {
+      throw new Error(`"${option.label}" needs administrator rights, so it is not run from dsh. Run it yourself in a terminal:
+${option.command}
+then check again with /kicad-doctor.`);
+    }
+    if (!option.runnable || option.steps.length === 0) {
+      throw new Error(`"${option.label}" cannot run here${option.note ? `: ${option.note}` : ""}${option.url ? ` ${option.url}` : ""}`);
+    }
+    this.controller = new AbortController();
+    const job = {
+      id: this.nextId++,
+      option: option.id,
+      label: option.label,
+      command: option.command,
+      state: "running",
+      phase: "installing",
+      step: 0,
+      steps: option.steps.length,
+      startedAt: Date.now(),
+      log: []
+    };
+    this.current = job;
+    this.running = this.run(job, option, this.controller.signal);
+    return this.job;
+  }
+  cancel() {
+    if (this.current?.state !== "running") return false;
+    this.controller?.abort();
+    return true;
+  }
+  /** Resolves when the current job (and its re-check) has finished. */
+  async settled() {
+    await this.running;
+    return this.job;
+  }
+  append(job, text) {
+    for (const line of text.split(/\r?\n|\r/)) {
+      if (!line.trim()) continue;
+      job.log.push(line.length > MAX_LINE ? `${line.slice(0, MAX_LINE)}\u2026` : line);
+    }
+    if (job.log.length > MAX_LOG_LINES) job.log.splice(0, job.log.length - MAX_LOG_LINES);
+  }
+  async run(job, option, signal) {
+    const subprocess = this.deps.subprocess();
+    try {
+      for (const [index, step] of option.steps.entries()) {
+        job.step = index + 1;
+        this.append(job, `$ ${step.join(" ")}`);
+        this.deps.logger?.(`install ${option.id} step ${index + 1}: ${step.join(" ")}`);
+        const executable = await subprocess.resolveExecutable(step[0], void 0, signal);
+        const handle = subprocess.spawn({
+          argv: [executable, ...step.slice(1)],
+          cwd: homedir(),
+          // No stdin: nothing can stop and wait for a password or a prompt.
+          stdio: { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+          graceMs: 5e3,
+          signal
+        });
+        for (const stream of [handle.stdout, handle.stderr]) {
+          stream?.setEncoding("utf8");
+          stream?.on("data", (chunk) => this.append(job, chunk));
+        }
+        const outcome = await handle.done;
+        job.exitCode = outcome.exitCode;
+        if (signal.aborted) {
+          job.state = "cancelled";
+          break;
+        }
+        if (outcome.exitCode !== 0) {
+          job.state = "failed";
+          job.error = `step ${index + 1} exited with ${outcome.exitCode ?? outcome.signal}`;
+          break;
+        }
+      }
+      if (job.state === "running") job.state = "succeeded";
+    } catch (error) {
+      job.state = signal.aborted ? "cancelled" : "failed";
+      job.error = error.message;
+      this.append(job, job.error);
+    }
+    job.finishedAt = Date.now();
+    job.phase = "checking";
+    this.append(job, `installer ${job.state}; checking KiCad again\u2026`);
+    try {
+      job.doctor = await this.deps.recheck();
+      this.append(job, job.doctor.summary);
+    } catch (error) {
+      this.append(job, `re-check failed: ${error.message}`);
+    }
+    job.phase = "done";
+  }
+};
+
 // packages/kicad-bridge/src/launcher.ts
 import { join } from "node:path";
 function defaultPython(platform = process.platform) {
@@ -149,13 +295,60 @@ var KiCadBridge = class extends Service {
     super(ctx, "kicad");
     this.config = config;
     this.sidecarDir = config.sidecarDir ?? fileURLToPath(new URL("../sidecar/", import.meta.url));
-    ctx.effect(() => () => this.stop(), "kicad sidecar");
+    this.installer = new Installer({
+      subprocess: () => this.ctx.subprocess,
+      // A fresh sidecar re-reads PATH and searches for kicad-cli again: no dsh restart needed.
+      recheck: async () => {
+        await this.stop();
+        return await this.doctor();
+      },
+      logger: (message) => this.ctx.logger("kicad").info(message)
+    });
+    ctx.effect(() => () => {
+      this.installer.cancel();
+      return this.stop();
+    }, "kicad sidecar");
   }
   static inject = ["subprocess"];
   static Config = Config;
   running;
   toolCache;
   sidecarDir;
+  /** Runs a KiCad install plan the user confirmed (see {@link install}). */
+  installer;
+  /**
+   * Check the local KiCad environment. Never throws: when the sidecar itself cannot
+   * start (no Python, Python < 3.10) the report says so and how to fix it.
+   */
+  async doctor(signal) {
+    try {
+      const result = await this.call("doctor", {}, signal);
+      if (result.ok && result.value) return result.value;
+      return unavailableReport(result.text, this.pythonCommand());
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      return unavailableReport(error.message, this.pythonCommand());
+    }
+  }
+  /**
+   * Start installing KiCad with one of the plans the doctor offered. Callers must have
+   * shown the command to the user and received an explicit confirmation. Plans that need
+   * root are refused (the user runs those themselves); so is installing when KiCad is fine.
+   */
+  async install(optionId, signal) {
+    if (this.installer.job?.state === "running") throw new Error(`an installation is already running (${this.installer.job.label})`);
+    const report = await this.doctor(signal);
+    if (report.status === "ok") throw new Error(`KiCad ${report.kicad.version} is already installed and usable; nothing to install.`);
+    const option = report.install.find((o) => o.id === optionId);
+    if (!option) {
+      const known = report.install.map((o) => o.id).join(", ");
+      throw new Error(known ? `unknown install option "${optionId}"; choose one of: ${known}` : `no install options: ${report.summary}`);
+    }
+    return this.installer.start(option);
+  }
+  pythonCommand() {
+    return this.config.launcher === "uv" ? this.config.uv : this.config.python.get() || defaultPython();
+  }
   /** Call one sidecar tool (see the sidecar catalog for names and arguments). */
   async call(tool, args, signal) {
     const { client } = await this.ensure(signal);
@@ -207,11 +400,11 @@ var KiCadBridge = class extends Service {
   async start(signal) {
     const subprocess = this.ctx.subprocess;
     const key = this.launchKey();
-    const executable = await subprocess.resolveExecutable(
-      this.config.launcher === "uv" ? this.config.uv : this.config.python.get() || defaultPython(),
-      void 0,
-      signal
-    );
+    const command = this.pythonCommand();
+    const executable = await subprocess.resolveExecutable(command, void 0, signal).catch((error) => {
+      const what = this.config.launcher === "uv" ? "uv" : "Python 3.10+";
+      throw new RpcError(`${what} executable "${command}" was not found (${error.message}). Install ${what} or set the KiCad bridge '${this.config.launcher === "uv" ? "uv" : "python"}' setting; /kicad-doctor shows what else is missing.`);
+    });
     const spec = launchSpec({
       launcher: this.config.launcher,
       executable,
@@ -249,10 +442,13 @@ function delay(ms) {
 var index_default = KiCadBridge;
 export {
   Config,
+  Installer,
   KiCadBridge,
   McpClient,
   RpcError,
   index_default as default,
   defaultPython,
-  launchSpec
+  launchSpec,
+  needsElevation,
+  unavailableReport
 };

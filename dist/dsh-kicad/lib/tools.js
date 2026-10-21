@@ -68,6 +68,7 @@ function round(n) {
 var name = "dsh-tool-kicad";
 var inject = ["tools", "kicad"];
 var TOOL_ACCESS = {
+  kicad_doctor: "read",
   kicad_read_schematic: "read",
   kicad_list_components: "read",
   kicad_get_symbol_pins: "read",
@@ -84,6 +85,7 @@ var TOOL_ACCESS = {
 };
 var DESIGN_WRITE_TOOLS = ["kicad_create_schematic", "kicad_edit_schematic"];
 var PATH_ARGUMENTS = {
+  kicad_doctor: [],
   kicad_read_schematic: ["path"],
   kicad_list_components: ["path"],
   kicad_get_symbol_pins: ["path"],
@@ -104,6 +106,20 @@ function apply(ctx, config = {}) {
   const attachRenders = config.attachRenders ?? true;
   const at = (exec, path) => resolveIn(sessionCwd(ctx, exec), path);
   const tools = [
+    defineTool({
+      name: "kicad_doctor",
+      description: "Check whether this machine can run the KiCad tools: kicad-cli present and KiCad 8+, symbol and footprint libraries, Python 3.10+, optional PNG rasterizer and kicad-python. Each check has a status and a fix; when KiCad is missing or too old the result lists install commands for this platform. Use it when a kicad_* tool fails with a KiCad/Python problem, then tell the user the fix. Do not install software yourself: the user installs KiCad (the KiCad doctor panel has an Install button, or /kicad-install).",
+      parameters: {},
+      output: {
+        schema: { type: "json" },
+        render: (_args, value) => [{ type: "text", text: value.text }],
+        presentationMeta: (_args, value) => doctorMeta(value)
+      },
+      isConcurrencySafe: () => true,
+      async execute(_args, exec) {
+        return await ctx.kicad.doctor(exec.signal);
+      }
+    }),
     defineTool({
       name: "kicad_read_schematic",
       description: "Summarize a KiCad schematic: title block, counts, components (reference, value, lib_id, footprint, position in mm), net labels, power nets and sub-sheets. Start here before editing.",
@@ -348,6 +364,27 @@ ${formatJson(value.results)}` : "";
   return `${head}
 ${value.changes.map((c) => `- ${c}`).join("\n")}${results}`;
 }
+function doctorMeta(report) {
+  return {
+    kind: "doctor",
+    ok: report.ok,
+    status: report.status,
+    summary: report.summary,
+    kicad: report.kicad,
+    checks: report.checks.map((c) => ({ id: c.id, label: c.label, status: c.status, required: c.required, summary: c.summary, ...c.fix ? { fix: c.fix } : {} })),
+    install: report.install.map((o) => ({
+      id: o.id,
+      label: o.label,
+      command: o.command,
+      needs_root: o.needs_root,
+      runnable: o.runnable,
+      available: o.available,
+      recommended: o.recommended,
+      note: o.note,
+      ...o.url ? { url: o.url } : {}
+    }))
+  };
+}
 function checkMeta(report) {
   return {
     kind: report.kind,
@@ -369,6 +406,7 @@ export {
   TOOL_ACCESS,
   apply,
   checkMeta,
+  doctorMeta,
   formatCheck,
   formatJson,
   inject,
