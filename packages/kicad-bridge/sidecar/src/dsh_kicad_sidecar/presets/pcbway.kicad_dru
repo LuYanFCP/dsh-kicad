@@ -1,0 +1,8 @@
+(version 1)
+# PCBWay standard PCB, 1 oz: rules the board setup page cannot express.
+# Source: https://www.pcbway.com/capabilities.html (read 2026-10-21)
+
+# Component holes at least 16 mil (0.4 mm) apart; vias may sit 11 mil apart (board setup).
+(rule "PCBWay: pad hole to pad hole"
+	(constraint hole_to_hole (min 0.4mm))
+	(condition "A.Type == 'Pad' && B.Type == 'Pad'"))

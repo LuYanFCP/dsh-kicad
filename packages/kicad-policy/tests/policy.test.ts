@@ -91,9 +91,27 @@ describe('dsh-kicad-policy', () => {
     expect(text(quiet)).not.toMatch(/Automatic DRC/)
   })
 
+  it.runIf(hasKiCadCli())('appends KiCad DRC after a fab preset changes the rules (autoDrc)', async () => {
+    const path = fixtureBoard('rc_board')
+    const ctx = await bootKiCad([toolKiCad], [policy, config({ extraRoots: [dirname(path)] })])
+    const dry = await runTool(ctx, 'kicad_fab_preset', { path, preset: 'jlcpcb', dry_run: true })
+    expect(text(dry)).toMatch(/^Dry run: applying JLCPCB/)
+    expect(text(dry)).not.toMatch(/Automatic DRC/)
+    const pro = path.replace(/\.kicad_pcb$/, '.kicad_pro')
+    const applied = await runTool(ctx, 'kicad_fab_preset', { path: pro, preset: 'jlcpcb' })
+    expect(applied.isError).toBeFalsy()
+    expect(text(applied)).toMatch(/^Applied JLCPCB[\s\S]*Automatic DRC by KiCad .* on .*rc_board\.kicad_pcb: (PASSED|FAILED) — \d+ error\(s\), \d+ warning\(s\), \d+ unrouted/)
+    expect(policy.projectContext(dirname(path), undefined)).toContain('- boards: rc_board.kicad_pcb')
+    const again = await runTool(ctx, 'kicad_fab_preset', { path, preset: 'jlcpcb' })
+    expect(text(again)).toMatch(/already uses the JLCPCB/)
+    expect(text(again)).not.toMatch(/Automatic DRC/)
+  })
+
   it('describes edits for the approval card', () => {
     const d = policy.describeEdit('kicad_edit_schematic', { path: '/p/a.kicad_sch', operations: [{ op: 'add_symbol' }, { op: 'add_symbol' }, { op: 'connect_pins' }] })
     expect(d.displayReason).toEqual({ en: 'Edit a.kicad_sch: 3 operation(s) — add_symbol×2, connect_pins', zh: '修改 a.kicad_sch：3 项操作 — add_symbol×2, connect_pins' })
+    const preset = policy.describeEdit('kicad_fab_preset', { path: '/p/board.kicad_pcb', preset: 'jlcpcb' })
+    expect(preset).toEqual({ reason: 'apply jlcpcb design rules to /p/board.kicad_pcb', displayReason: { en: 'Apply jlcpcb design rules to board.kicad_pcb', zh: '将 jlcpcb 设计规则应用到 board.kicad_pcb' } })
   })
 
   it('project context lists KiCad files and the last ERC', () => {

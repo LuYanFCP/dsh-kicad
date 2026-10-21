@@ -1,0 +1,18 @@
+(version 1)
+# JLCPCB standard 1-2 layer, 1 oz: rules the board setup page cannot express.
+# Source: https://jlcpcb.com/capabilities/PCB-capabilities (read 2026-10-21)
+
+# JLCPCB recommends 0.25 mm and calls 0.18 mm the minimum ring on plated pads (1 oz).
+# A warning, not an error: KiCad's TO-92 footprints have 0.15 mm rings and are built routinely.
+(rule "JLCPCB: plated pad annular ring"
+	(constraint annular_width (min 0.18mm))
+	(condition "A.Type == 'Pad' && A.Pad_Type == 'Through-hole'")
+	(severity warning))
+
+(rule "JLCPCB: pad hole to pad hole"
+	(constraint hole_to_hole (min 0.45mm))
+	(condition "A.Type == 'Pad' && B.Type == 'Pad'"))
+
+(rule "JLCPCB: non-plated hole"
+	(constraint hole_size (min 0.5mm))
+	(condition "A.Type == 'Pad' && A.Pad_Type == 'NPTH, mechanical'"))

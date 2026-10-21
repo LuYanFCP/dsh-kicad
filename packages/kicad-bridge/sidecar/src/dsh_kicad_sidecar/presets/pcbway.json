@@ -1,0 +1,24 @@
+{
+  "name": "pcbway",
+  "label": "PCBWay standard PCB, 1 oz",
+  "source": "https://www.pcbway.com/capabilities.html (read 2026-10-21)",
+  "notes": [
+    "Limits of PCBWay's standard PCB service; PCBWay reviews the files before production.",
+    "0.3 mm is the order form's default minimum hole; smaller holes (from 0.15 mm) cost extra.",
+    "PCBWay does not publish a copper-to-edge value for standard boards; 0.3 mm is a conservative choice (its advanced service lists 0.25 mm)."
+  ],
+  "rules": {
+    "min_clearance": 0.1,
+    "min_track_width": 0.1,
+    "min_through_hole_diameter": 0.3,
+    "min_via_diameter": 0.6,
+    "min_via_annular_width": 0.15,
+    "min_hole_to_hole": 0.28,
+    "min_copper_edge_clearance": 0.3,
+    "min_text_height": 0.8,
+    "min_text_thickness": 0.15
+  },
+  "outputs": {
+    "drill": { "separate_th": false, "map_format": "gerberx2" }
+  }
+}

@@ -1,1 +1,1 @@
-{ "meta": { "title": "KiCad tools", "description": "kicad_* tools: read and atomically edit schematics and boards, run ERC/DRC, render and export." } }
+{ "meta": { "title": "KiCad tools", "description": "kicad_* tools: read and atomically edit schematics and boards, run ERC/DRC, render, export, and produce fab files (Gerber zip) behind a KiCad gate." } }

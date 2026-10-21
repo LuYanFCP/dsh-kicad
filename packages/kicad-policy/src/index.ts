@@ -11,6 +11,7 @@
  * - `systemPrompt.section`   stable KiCad working rules (cache-friendly)
  * - `systemPrompt.context`   the KiCad project found in the working directory
  */
+import { existsSync } from 'node:fs'
 import { basename } from 'node:path'
 import { DESIGN_WRITE_TOOLS, formatCheck, PATH_ARGUMENTS, TOOL_ACCESS, type CheckReport, type KiCadToolName } from 'dsh-tool-kicad'
 import { agentCwd, assemblyAgent, sessionPermissions, z, type Context, type PostToolDecision, type PreToolDecision, type ToolExecution, type Volatile } from './dsh.ts'
@@ -66,14 +67,15 @@ export const GUIDANCE = `# KiCad (EDA) work
 - Fix mistakes with disconnect_pin / remove_item / move_symbol. Never rebuild or rewrite a schematic file to change its layout.
 - Organise a schematic by function: one titled frame per block (add_block / move_block), parts inside a block wired together, blocks connected only through net labels and power symbols, never through wires that cross a frame.
 - Boards: read with kicad_read_pcb (outline, footprints with courtyards and pad nets, rules, unrouted count), then change them with one kicad_edit_pcb batch: outline and mounting holes, placement, rules and net classes, tracks (route pad to pad with "REF:PAD" endpoints), vias, zones, keepouts, silkscreen.
+- To order a board: kicad_export_fab writes Gerber, drill, position and BOM files in one zip, and refuses while KiCad reports DRC errors, unrouted connections or schematic parity issues; pass force only when the user explicitly asks. kicad_fab_preset makes a fab house's limits (JLCPCB, PCBWay) the project's design rules.
 - KiCad decides correctness: after edits read the ERC/DRC verdict appended to the result (or run kicad_erc / kicad_drc). Do not declare a design correct while KiCad reports errors or unrouted connections.
 - Coordinates are millimetres, Y grows downward, on the 1.27 mm grid.
 - If a kicad_* tool fails because KiCad or Python is missing or too old, run kicad_doctor and give the user its fix. Do not install software yourself; the user installs KiCad (the doctor panel's Install button or /kicad-install).`
 
 const isKiCadTool = (name: string): name is KiCadToolName => Object.hasOwn(TOOL_ACCESS, name)
 
-/** The KiCad check that follows a successful edit of each kind of design file. */
-const AUTO_CHECK: Readonly<Record<string, 'erc' | 'drc'>> = { kicad_edit_schematic: 'erc', kicad_edit_pcb: 'drc' }
+/** The KiCad check that follows a successful edit of each kind of design file (new fab rules change what DRC reports). */
+const AUTO_CHECK: Readonly<Record<string, 'erc' | 'drc'>> = { kicad_edit_schematic: 'erc', kicad_edit_pcb: 'drc', kicad_fab_preset: 'drc' }
 
 /** Tools whose path arguments must stay inside the workspace. */
 const GUARDED: ReadonlySet<string> = new Set(
@@ -109,7 +111,7 @@ export function apply(ctx: Context, config: Config): void {
       if (!(DESIGN_WRITE_TOOLS as readonly string[]).includes(exec.name)) return next()
       const denied = outsideWorkspace(exec)
       if (denied) return { kind: 'deny', reason: denied }
-      const args = (exec.arguments ?? {}) as { path?: string, operations?: Array<{ op?: string }>, dry_run?: boolean }
+      const args = (exec.arguments ?? {}) as { path?: string, operations?: Array<{ op?: string }>, preset?: string, dry_run?: boolean }
       if (args.dry_run) return next()
       const permissions = sessionPermissions(ctx, exec.agent)
       if (permissions.sandbox === 'read-only') {
@@ -131,7 +133,12 @@ export function apply(ctx: Context, config: Config): void {
       if (!check || result.isError || decision.kind !== 'accept') return decision
       const args = exec.arguments as { path?: string, dry_run?: boolean }
       if (args.dry_run || typeof args.path !== 'string') return decision
-      const path = resolveArg(cwdOf(exec), args.path)
+      let path = resolveArg(cwdOf(exec), args.path)
+      if (exec.name === 'kicad_fab_preset') {
+        // The preset may be applied through the .kicad_pro: check the project's board, when there is one and rules changed.
+        path = path.replace(/\.kicad_pro$/, '.kicad_pcb')
+        if ((result as { value?: { written?: boolean } }).value?.written === false || !existsSync(path)) return decision
+      }
       if (check === 'erc' && config.autoRender.get()) {
         // Fire and forget: the sidebar viewer watches the SVG file.
         void ctx.kicad.call('render', { path, format: 'svg' }).catch(() => undefined)
@@ -181,10 +188,13 @@ export function apply(ctx: Context, config: Config): void {
 }
 
 /** The audited approval reason plus localized prompt text for one design write. */
-export function describeEdit(tool: string, args: { path?: string, operations?: Array<{ op?: string }> }): Pick<Extract<PreToolDecision, { kind: 'ask' }>, 'reason' | 'displayReason'> {
+export function describeEdit(tool: string, args: { path?: string, operations?: Array<{ op?: string }>, preset?: string }): Pick<Extract<PreToolDecision, { kind: 'ask' }>, 'reason' | 'displayReason'> {
   const file = args.path ? basename(args.path) : 'a design file'
   if (tool === 'kicad_create_schematic') {
     return { reason: `create ${args.path}`, displayReason: { en: `Create KiCad schematic ${file}`, zh: `创建 KiCad 原理图 ${file}` } }
+  }
+  if (tool === 'kicad_fab_preset') {
+    return { reason: `apply ${args.preset} design rules to ${args.path}`, displayReason: { en: `Apply ${args.preset} design rules to ${file}`, zh: `将 ${args.preset} 设计规则应用到 ${file}` } }
   }
   const ops = args.operations ?? []
   const counts = new Map<string, number>()

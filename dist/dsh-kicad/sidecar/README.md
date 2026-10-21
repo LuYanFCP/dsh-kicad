@@ -8,7 +8,8 @@ KiCad tools over MCP-style JSON-RPC on stdio. It backs the `ctx.kicad` service o
   batches, symbol-library lookup/search, pin geometry, and a `kicad-cli` wrapper
   (ERC, DRC, netlist, BOM, SVG/PDF). For schematic → PCB sync: the board-side netlist
   (`netlist.py`) and KiCad's library-table chain (`lib_tables.py`); see
-  [docs/pcb-architecture.md](../../../docs/pcb-architecture.md).
+  [docs/pcb-architecture.md](../../../docs/pcb-architecture.md). Fab output (`fab.py`): a KiCad-judged
+  gate, the Gerber/drill/position zip, and fab-house rule presets in `presets/`.
 - **Extras:** `png` (cairosvg rasterizer; otherwise rsvg-convert/ImageMagick/Inkscape),
   `ipc` (kicad-python, for `ipc_status`), `dev` (pytest).
 
@@ -20,7 +21,7 @@ uvx --from . dsh-kicad-sidecar --root /path/to/project                   # same,
 
 Tools: `environment`, `doctor` (environment check with fixes and install commands), `read_schematic`, `list_components`, `get_symbol_pins`,
 `list_nets`, `search_symbols`, `erc`, `drc`, `render`, `export_netlist`, `export_bom`,
-`create_schematic`, `edit_schematic`, `ipc_status`. Each returns its value as
+`create_schematic`, `edit_schematic`, `read_pcb`, `edit_pcb`, `export_fab`, `fab_preset`, `ipc_status`. Each returns its value as
 `structuredContent` plus a JSON text block; domain failures are `isError` results.
 
 Tests: `uv run --extra dev pytest -q` (KiCad-dependent tests skip when `kicad-cli`

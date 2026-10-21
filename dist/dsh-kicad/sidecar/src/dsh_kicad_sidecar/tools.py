@@ -11,7 +11,8 @@ from typing import Any, Callable
 
 from . import __version__
 from .doctor import format_report, platform_info, run_doctor
-from .kicad_cli import KiCadCli, KiCadCliError, parse_version, MIN_KICAD, svg_to_png
+from .fab import EXTRAS, apply_preset, export_fab, list_presets, preset_names
+from .kicad_cli import KiCadCli, KiCadCliError, has_zones, parse_version, MIN_KICAD, svg_to_png
 from .schematic import OPERATIONS, Schematic, SchematicError, new_schematic_text
 from .pcb import OPERATIONS as PCB_OPERATIONS, Board, PcbError
 from .footprints import FootprintLibraries, default_footprint_dirs
@@ -155,6 +156,22 @@ TOOL_SPECS: list[ToolSpec] = [
              _obj({"path": PCB, "operations": {"type": "array", "items": PCB_OPERATION_SCHEMA, "minItems": 1},
                    "dry_run": {"type": "boolean", "default": False, "description": "Validate and report without writing."}},
                   ["path", "operations"]), writes=True),
+    ToolSpec("export_fab", "Fabrication files for a .kicad_pcb in one zip: Gerbers (copper, mask, paste, silkscreen, Edge.Cuts), Excellon drill + map, "
+             "position CSV, BOM (when the schematic is next to the board), JLC BOM/CPL with the jlcpcb preset, optional IPC-2581/ODB++/STEP, "
+             "and front/back 3D PNG previews. Gated by KiCad: refused while DRC has errors, connections are unrouted, schematic parity "
+             "disagrees or (with a preset) the board breaks the fab's limits; force exports anyway and the result says so.",
+             _obj({"pcb": PCB,
+                   "preset": {"type": "string", "enum": preset_names(), "description": "Fab house: checks its limits and uses its output options."},
+                   "output_dir": {"type": "string", "description": "Defaults to <project>/fab/<preset or kicad>/."},
+                   "force": {"type": "boolean", "default": False, "description": "Export even when the gate fails (recorded in the result)."},
+                   "extras": {"type": "array", "items": {"type": "string", "enum": list(EXTRAS)}, "description": "Additional formats."},
+                   "preview": {"type": "boolean", "default": True, "description": "Render front and back 3D PNGs."}}, ["pcb"]), writes=True),
+    ToolSpec("fab_preset", "Fab house design-rule presets. Without preset: list them with their limits. With preset: make its limits the project's "
+             "rules (board setup minimums in the .kicad_pro, custom rules in a managed block of the .kicad_dru, netclass sizes raised to "
+             "the minimums); dry_run lists the changes without writing.",
+             _obj({"path": {"type": "string", "description": "The .kicad_pcb or .kicad_pro of the project."},
+                   "preset": {"type": "string", "enum": preset_names()},
+                   "dry_run": {"type": "boolean", "default": False}}, []), writes=True),
     ToolSpec("ipc_status", "Probe a running KiCad GUI through the IPC API (requires the 'ipc' extra and KiCad's API server enabled).", _obj({}, [])),
 ]
 
@@ -323,7 +340,7 @@ class Toolbox:
         path = self.resolve(args["path"], ".kicad_pcb")
         refill = args.get("refill_zones")
         if refill is None:
-            refill = _has_zones(path)
+            refill = has_zones(path)
         return {"path": path, **self.cli.drc(path, args.get("severity", "all"), bool(args.get("schematic_parity")), bool(refill))}
 
     def board(self, path: str) -> Board:
@@ -336,7 +353,7 @@ class Toolbox:
                         include_items=bool(args.get("include_items")))
         if args.get("drc", True):
             try:
-                report = self.cli.drc(b.path, "all", refill_zones=_has_zones(b.path))
+                report = self.cli.drc(b.path, "all", refill_zones=has_zones(b.path))
                 out["drc"] = {"passed": report["passed"], "kicad_version": report.get("kicad_version"),
                               "errors": report["counts"]["error"], "warnings": report["counts"]["warning"],
                               "unrouted": report.get("unrouted", 0), "by_type": report["by_type"]}
@@ -429,6 +446,22 @@ class Toolbox:
         return {"path": full, "written": not args.get("dry_run"), "applied": len(ops), "changes": s.changes,
                 "results": [r for r in results if r["result"] is not None]}
 
+    def tool_export_fab(self, args):
+        pcb = self.resolve(args["pcb"], ".kicad_pcb")
+        out = self.resolve(args["output_dir"], must_exist=False) if args.get("output_dir") else None
+        with self.lock(pcb):
+            return export_fab(self.cli, pcb, output_dir=out, preset=args.get("preset") or None, force=bool(args.get("force")),
+                              extras=list(args.get("extras") or []), preview=args.get("preview", True) is not False)
+
+    def tool_fab_preset(self, args):
+        if not args.get("preset"):
+            return {"presets": list_presets()}
+        if not args.get("path"):
+            raise ToolError("path (the project's .kicad_pcb or .kicad_pro) is required to apply a preset")
+        path = self.resolve(args["path"], (".kicad_pcb", ".kicad_pro"))
+        with self.lock(path):
+            return apply_preset(path, args["preset"], dry_run=bool(args.get("dry_run")))
+
     def tool_ipc_status(self, _args):
         try:
             from kipy import KiCad  # type: ignore
@@ -449,11 +482,6 @@ class Toolbox:
             return {"available": True, "kicad_version": version, "open_documents": docs}
         except Exception as exc:
             return {"available": False, "reason": f"no KiCad IPC server reachable: {exc}"}
-
-
-def _has_zones(board: str) -> bool:
-    with open(board, encoding="utf-8") as fh:
-        return re.search(r"^\s*\(zone\b", fh.read(), re.M) is not None
 
 
 def _num_key(number: str):

@@ -16,7 +16,7 @@ import xml.etree.ElementTree as ET
 from collections import Counter
 from typing import Any
 
-__all__ = ["KiCadCli", "KiCadCliError", "find_kicad_cli", "locate_kicad_cli", "parse_version", "svg_to_png", "MIN_KICAD"]
+__all__ = ["KiCadCli", "KiCadCliError", "find_kicad_cli", "has_zones", "locate_kicad_cli", "parse_version", "svg_to_png", "MIN_KICAD"]
 
 
 class KiCadCliError(RuntimeError):
@@ -200,10 +200,14 @@ class KiCadCli:
                 args.append("--schematic-parity")
             if refill_zones:  # fills in memory only; the board file is not saved
                 args.append("--refill-zones")
-            self.run(*args, board, cwd=os.path.dirname(board))
+            proc = self.run(*args, board, cwd=os.path.dirname(board))
             with open(out, encoding="utf-8") as fh:
                 report = json.load(fh)
-        return normalize_report(report, "drc")
+        result = normalize_report(report, "drc")
+        failure = parity_failure(proc.stdout + proc.stderr) if schematic_parity else None
+        if failure:
+            result["schematic_parity_error"] = failure
+        return result
 
     # ---- exports -------------------------------------------------------------------
     def netlist(self, schematic: str) -> dict[str, Any]:
@@ -219,12 +223,14 @@ class KiCadCli:
 
     def bom(self, schematic: str, fields: str = "Reference,Value,Footprint,${QUANTITY},${DNP}",
             labels: str = "Refs,Value,Footprint,Qty,DNP", group_by: str = "Value,Footprint",
-            exclude_dnp: bool = False, output: str | None = None) -> dict[str, Any]:
+            exclude_dnp: bool = False, output: str | None = None, ref_range_delimiter: str | None = None) -> dict[str, Any]:
         with tempfile.TemporaryDirectory(prefix="dsh-kicad-bom-") as tmp:
             out = output or os.path.join(tmp, "bom.csv")
             args = ["sch", "export", "bom", "-o", out, "--fields", fields, "--labels", labels, "--group-by", group_by]
             if exclude_dnp:
                 args.append("--exclude-dnp")
+            if ref_range_delimiter is not None:  # "" lists every reference (R1,R2,R3 instead of R1-R3)
+                args += ["--ref-range-delimiter", ref_range_delimiter]
             self.run(*args, schematic, cwd=os.path.dirname(schematic))
             with open(out, encoding="utf-8") as fh:
                 text = fh.read()
@@ -269,6 +275,21 @@ class KiCadCli:
     def upgrade(self, path: str) -> None:
         kind = "pcb" if path.endswith(".kicad_pcb") else "sch"
         self.run(kind, "upgrade", "--force", path, cwd=os.path.dirname(path))
+
+
+def has_zones(board: str) -> bool:
+    """Whether a .kicad_pcb has copper zones (DRC then refills them first, so it judges what would be plotted)."""
+    with open(board, encoding="utf-8") as fh:
+        return re.search(r"^\s*\(zone\b", fh.read(), re.M) is not None
+
+
+def parity_failure(log: str) -> str | None:
+    """Why ``--schematic-parity`` could not run, from kicad-cli's output. KiCad then reports no parity issues at all,
+    which must not read as a clean comparison (typically: the schematic is not fully annotated)."""
+    if not re.search(r"schematic netlist|parity tests require", log, re.I):
+        return None
+    reason = " ".join(line.strip() for line in log.splitlines() if re.search(r"parity|netlist|annotat", line, re.I))
+    return reason or "kicad-cli could not compare the board with the schematic"
 
 
 def missing_message(problems: list[str], hint: str) -> str:
