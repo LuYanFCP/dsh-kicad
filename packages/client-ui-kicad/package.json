@@ -1,7 +1,7 @@
 {
   "name": "dsh-client-ui-kicad",
   "version": "0.1.0",
-  "description": "KiCad Web UI for DeepSeek Harness: schematic/board sidebar viewer, ERC/DRC conversation cards, settings cards",
+  "description": "KiCad Web UI for DeepSeek Harness: interactive KiCanvas viewer and kicad-cli SVG view for schematics/boards, ERC/DRC cards, settings pages",
   "license": "MIT",
   "type": "module",
   "main": "lib/index.js",
@@ -21,7 +21,10 @@
     "lib/index.d.ts",
     "lib/client.js",
     "locale/*.json",
-    "icon.svg"
+    "icon.svg",
+    "vendor/kicanvas/LICENSE.md",
+    "vendor/kicanvas/README.md",
+    "vendor/kicanvas/VERSION"
   ],
   "engines": {
     "dsh": ">=0.2.1-rc.2 <0.3.0-0"

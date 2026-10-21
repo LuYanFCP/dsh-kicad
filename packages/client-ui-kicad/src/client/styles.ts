@@ -7,6 +7,13 @@ export const CSS = `
 .dshk-btn:disabled{color:var(--dsw-alias-label-tertiary);cursor:default}
 .dshk-select{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);border-radius:6px;padding:2px 4px;font:inherit}
 .dshk-spacer{flex:1}
+.dshk-segmented{display:inline-flex;gap:0}
+.dshk-segmented .dshk-btn{border-radius:0}
+.dshk-segmented .dshk-btn:first-child{border-radius:6px 0 0 6px}
+.dshk-segmented .dshk-btn:last-child{border-radius:0 6px 6px 0;border-left:0}
+.dshk-segmented .dshk-btn[aria-pressed=true]{background:var(--dsw-alias-interactive-bg-hover);font-weight:600}
+.dshk-kicanvas{cursor:default}
+.dshk-overlay{position:absolute;left:0;top:0;z-index:1}
 .dshk-note{padding:6px 10px;color:var(--dsw-alias-label-secondary)}
 .dshk-warn{padding:4px 10px;color:var(--dsw-alias-state-warn-label);background:var(--dsw-alias-state-warn-tertiary)}
 .dshk-error{padding:6px 10px;color:var(--dsw-alias-state-error-primary)}

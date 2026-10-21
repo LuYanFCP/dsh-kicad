@@ -3,6 +3,12 @@ export const NS = 'kicad'
 
 export const en = {
   'viewer.render': 'Render',
+  'viewer.interactive': 'Interactive',
+  'viewer.svg': 'SVG',
+  'viewer.theme': 'Theme',
+  'viewer.loading': 'Loading the design…',
+  'viewer.kicanvasFailed': 'the interactive viewer could not open this file',
+  'viewer.fellBack': 'Showing the kicad-cli render because {message}.',
   'viewer.rendering': 'Rendering…',
   'viewer.fit': 'Fit',
   'viewer.zoomIn': 'Zoom in',
@@ -47,6 +53,12 @@ export type KiCadLocaleKey = keyof typeof en
 
 export const zh: Record<KiCadLocaleKey, string> = {
   'viewer.render': '渲染',
+  'viewer.interactive': '交互',
+  'viewer.svg': 'SVG',
+  'viewer.theme': '主题',
+  'viewer.loading': '正在加载设计…',
+  'viewer.kicanvasFailed': '交互查看器无法打开此文件',
+  'viewer.fellBack': '已改为显示 kicad-cli 渲染结果，原因：{message}。',
   'viewer.rendering': '渲染中…',
   'viewer.fit': '适应',
   'viewer.zoomIn': '放大',

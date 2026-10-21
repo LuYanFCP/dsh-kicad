@@ -15,7 +15,7 @@ KiCad for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (d
 | **Skills** | `kicad-agent-workflow`, `kicad-erc-triage`, `kicad-schematic-design`. |
 | **Commands** | `/erc`, `/drc`, `/bom` (model-free, run on the project's root design), `/kicad-render`. |
 | **Agent preset** | `eda` — a standard-like tool set with an electronics-design persona. The KiCad tools are global, so every preset can use them. |
-| **Web UI** | Right-sidebar viewer for `*.kicad_sch` / `*.kicad_pcb` (kicad-cli SVG, pan/zoom, multi-sheet, live reload, Render button); conversation cards for ERC/DRC and schematic edits; settings pages for the sidecar (kicad-cli path, Python) and the policy (approval, auto-ERC, auto-render). |
+| **Web UI** | Right-sidebar viewer for `*.kicad_sch` / `*.kicad_pcb` with two modes: **Interactive** — the embedded [KiCanvas](https://github.com/theacodes/kicanvas) viewer (hierarchical sheets, symbol/footprint/net inspection, layer toggles, KiCad or Witch Hazel theme, reloads when the file changes) — and **SVG** (kicad-cli render, pan/zoom, multi-sheet, Render button; also the automatic fallback); conversation cards for ERC/DRC and schematic edits; settings pages for the sidecar (kicad-cli path, Python) and the policy (approval, auto-ERC, auto-render). |
 | **Standalone MCP server** | The Python sidecar speaks MCP over stdio, so Claude Code or an RL environment can use the same tools without dsh. |
 | **KiCad side (optional)** | An IPC plugin with an "Open in DSH" toolbar action. |
 
@@ -126,7 +126,7 @@ The Client is compiled by [`scripts/build-client.mjs`](scripts/build-client.mjs)
 - New sub-sheet symbols get their instance path from the root sheet one level up; deeper hierarchies may need KiCad's annotation.
 - Images reach the model only when the model route declares image input and an attachment store is mounted; otherwise the render tool returns SVG paths.
 - Approval needs an interactive approval channel; headless runs without one deny design edits unless `approval: allow`.
-- The sidebar viewer shows kicad-cli SVGs; it does not render `.kicad_sch` natively in the browser (KiCanvas was considered; it lags behind new KiCad file versions).
+- The interactive viewer is KiCanvas, vendored at a pinned commit by `scripts/vendor-kicanvas.mjs` (see `packages/client-ui-kicad/vendor/kicanvas/README.md` for the offline/icon/theme patches). It parses KiCad 10 files but ignores tokens it does not know yet; the SVG mode is the kicad-cli ground truth. It needs WebGL2.
 - The IPC channel is a status probe plus the KiCad-side launcher; live editing through IPC is not implemented (KiCad's IPC API is PCB-centric).
 
 ## License

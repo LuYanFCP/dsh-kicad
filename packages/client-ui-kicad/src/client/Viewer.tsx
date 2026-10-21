@@ -5,14 +5,81 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode, type WheelEvent } from 'react'
 import { orderPages, parseFileAddress, renderDir, sessionFileAddress } from './address.ts'
+import { InteractiveView } from './InteractiveView.tsx'
 import type { ClientRemote, TabBodyProps } from './dsh.ts'
 import { translate, type KiCadLocaleKey } from './locales.ts'
 import { CSS } from './styles.ts'
 
 interface View { scale: number, x: number, y: number }
 
+type Mode = 'interactive' | 'svg'
+const MODE_KEY = 'dsh-kicad:viewer-mode'
+const THEME_KEY = 'dsh-kicad:viewer-theme'
+
+function stored<T extends string>(key: string, allowed: readonly T[], fallback: T): T {
+  try {
+    const value = globalThis.localStorage?.getItem(key) as T | null
+    return value && allowed.includes(value) ? value : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function remember(key: string, value: string): void {
+  try {
+    globalThis.localStorage?.setItem(key, value)
+  } catch {
+    // storage unavailable: the choice lasts for this tab only
+  }
+}
+
 export function createViewer(remote: ClientRemote) {
+  const SvgView = createSvgView(remote)
   return function KiCadViewer(props: TabBodyProps): ReactNode {
+    const tr = (key: KiCadLocaleKey, vars?: Record<string, string | number>): string => translate(props.t, key, vars)
+    const [mode, setMode] = useState<Mode>(() => stored<Mode>(MODE_KEY, ['interactive', 'svg'], 'interactive'))
+    const [theme, setTheme] = useState(() => stored(THEME_KEY, ['kicad', 'witchhazel'], 'kicad'))
+    const [fallback, setFallback] = useState<string | undefined>(undefined)
+    const { tab } = props.useTabInfo()
+    const file = useMemo(() => parseFileAddress(tab.contentId ?? ''), [tab.contentId])
+    const sourceVersion = props.useResource?.(tab.contentId ?? 'none:')?.value?.version
+    const choose = (next: Mode): void => {
+      setFallback(undefined)
+      setMode(next)
+      remember(MODE_KEY, next)
+    }
+    const effective: Mode = mode === 'interactive' && fallback === undefined ? 'interactive' : 'svg'
+    const modeSwitch = (
+      <span className="dshk-segmented" role="group">
+        <button type="button" className="dshk-btn" aria-pressed={effective === 'interactive'} data-kicad-mode="interactive" onClick={() => choose('interactive')}>{tr('viewer.interactive')}</button>
+        <button type="button" className="dshk-btn" aria-pressed={effective === 'svg'} data-kicad-mode="svg" onClick={() => choose('svg')}>{tr('viewer.svg')}</button>
+      </span>
+    )
+    if (effective === 'svg' || file?.scope !== 'session' || !file.sessionId) {
+      return <SvgView {...props} modeSwitch={modeSwitch} notice={fallback ? tr('viewer.fellBack', { message: fallback }) : undefined} />
+    }
+    return (
+      <div className="dshk-root" data-kicad-viewer={file.path} data-kicad-mode-active="interactive">
+        <style>{CSS}</style>
+        <div className="dshk-bar">
+          {modeSwitch}
+          <span className="dshk-spacer" />
+          <label>
+            {tr('viewer.theme')}{' '}
+            <select className="dshk-select" value={theme} onChange={(e) => { setTheme(e.target.value); remember(THEME_KEY, e.target.value) }}>
+              <option value="kicad">KiCad</option>
+              <option value="witchhazel">Witch Hazel</option>
+            </select>
+          </label>
+        </div>
+        <InteractiveView remote={remote} sessionId={file.sessionId} designPath={file.path} version={sourceVersion} theme={theme} tr={tr} onFailed={setFallback} />
+      </div>
+    )
+  }
+}
+
+function createSvgView(remote: ClientRemote) {
+  return function KiCadSvgView(props: TabBodyProps & { modeSwitch?: ReactNode, notice?: string }): ReactNode {
     const tr = (key: KiCadLocaleKey, vars?: Record<string, string | number>): string => translate(props.t, key, vars)
     const { tab } = props.useTabInfo()
     const file = useMemo(() => parseFileAddress(tab.contentId ?? ''), [tab.contentId])
@@ -132,6 +199,7 @@ export function createViewer(remote: ClientRemote) {
       <div className="dshk-root" data-kicad-viewer={designPath}>
         <style>{CSS}</style>
         <div className="dshk-bar">
+          {props.modeSwitch}
           <button type="button" className="dshk-btn" onClick={() => void render()} disabled={rendering} data-kicad-action="render">
             {rendering ? tr('viewer.rendering') : tr('viewer.render')}
           </button>
@@ -148,6 +216,7 @@ export function createViewer(remote: ClientRemote) {
           <button type="button" className="dshk-btn" aria-label={tr('viewer.zoomIn')} onClick={() => zoom(1.25)}>+</button>
           <button type="button" className="dshk-btn" onClick={fit}>{tr('viewer.fit')}</button>
         </div>
+        {props.notice && <div className="dshk-warn" data-kicad-state="fallback">{props.notice}</div>}
         {stale && <div className="dshk-warn" data-kicad-state="stale">{tr('viewer.stale')}</div>}
         {error && <div className="dshk-error" data-kicad-state="error">{error}</div>}
         {pages !== undefined && pages.length === 0 && !rendering && <div className="dshk-note" data-kicad-state="empty">{tr('viewer.empty')}</div>}
