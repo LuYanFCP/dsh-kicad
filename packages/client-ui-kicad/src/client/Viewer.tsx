@@ -223,7 +223,12 @@ function createSvgView(remote: ClientRemote) {
           <button type="button" className="dshk-btn" aria-label={tr('viewer.zoomIn')} onClick={() => zoom(1.25)}>+</button>
           <button type="button" className="dshk-btn" onClick={fit}>{tr('viewer.fit')}</button>
         </div>
-        <KiCadNotice remote={remote} sessionId={sessionId} t={props.t} force={kicadFailed} />
+        <KiCadNotice remote={remote} sessionId={sessionId} t={props.t} force={kicadFailed} onReady={() => {
+          // KiCad was installed (or fixed) after a render failed for that reason: render now.
+          if (!kicadFailed) return
+          setKicadFailed(false)
+          void render()
+        }} />
         {props.notice && <div className="dshk-warn" data-kicad-state="fallback">{props.notice}</div>}
         {stale && <div className="dshk-warn" data-kicad-state="stale">{tr('viewer.stale')}</div>}
         {error && <div className="dshk-error" data-kicad-state="error">{error}</div>}

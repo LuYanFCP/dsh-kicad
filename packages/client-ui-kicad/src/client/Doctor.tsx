@@ -334,7 +334,14 @@ export function DoctorPanel(props: DoctorPanelProps): ReactNode {
  * A one-line notice for surfaces that need KiCad (the sidebar viewer): silent when
  * KiCad is ready, otherwise the problem plus a button that opens the full panel.
  */
-export function KiCadNotice(props: { remote: ClientRemote, sessionId: string, t?: DoctorPanelProps['t'], force?: boolean }): ReactNode {
+export function KiCadNotice(props: {
+  remote: ClientRemote
+  sessionId: string
+  t?: DoctorPanelProps['t']
+  force?: boolean
+  /** KiCad became usable (after an install or a fixed setting). */
+  onReady?: () => void
+}): ReactNode {
   const tr: Tr = (key, vars) => translate(props.t, key, vars)
   const [report, setReport] = useState<DoctorReport | undefined>(undefined)
   const [open, setOpen] = useState(false)
@@ -343,9 +350,13 @@ export function KiCadNotice(props: { remote: ClientRemote, sessionId: string, t?
     void cachedDoctor(props.sessionId, createRunner(props.remote, props.sessionId), props.force).then(r => live && setReport(r), () => undefined)
     return () => { live = false }
   }, [props.sessionId, props.force])
+  const update = (next: DoctorReport): void => {
+    if (next.status === 'ok' && report?.status !== 'ok') props.onReady?.()
+    setReport(next)
+  }
   if (!report || (report.status === 'ok' && !open)) return null
   return (
-    <div className="dshk-warn" data-kicad-notice={report.status}>
+    <div className={open ? 'dshk-notice-open' : 'dshk-warn'} data-kicad-notice={report.status}>
       {!open && (
         <div className="dshk-check">
           <span>{report.summary}</span>
@@ -355,7 +366,7 @@ export function KiCadNotice(props: { remote: ClientRemote, sessionId: string, t?
           </button>
         </div>
       )}
-      {open && <DoctorPanel remote={props.remote} sessionId={props.sessionId} t={props.t} initial={report} onReport={setReport} />}
+      {open && <DoctorPanel remote={props.remote} sessionId={props.sessionId} t={props.t} initial={report} onReport={update} />}
     </div>
   )
 }
