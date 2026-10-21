@@ -20,7 +20,8 @@ export { toOps } from './Settings.tsx'
 export const TAB_ID = 'dsh-client-ui-kicad'
 export const BUNDLE = 'dsh-kicad-bundle'
 
-export const inject = ['slots', 'locale', 'sidebarRightTabs', 'remote']
+// Remote namespaces are services of their own and must be injected explicitly.
+export const inject = ['slots', 'locale', 'sidebarRightTabs', 'remote', 'remote.workspaceFiles', 'remote.commands']
 
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { en, zh }), 'kicad: dictionaries')
