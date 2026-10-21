@@ -61,11 +61,21 @@ dsh web
 
 `dsh plugin … add <dir>` links the directory; leaf packages resolve through this checkout's `node_modules`, and dsh maps `@deepseek-ai/*` imports to the running installation. Rebuild and restart dsh after code changes. In the Web UI you can also use **Plugins → Install** with the same absolute path.
 
-### From npm / a plugin market
+### From the plugin market (search inside dsh)
 
-After the packages are published (`pnpm -r publish`), `dsh plugin --profile web add dsh-kicad-bundle`, or add an index such as [`market/index.json`](market/index.json) under **Plugins → Discover → Add index source** (enable the experimental "Custom plugin markets" bundle first). `node market/validate.mjs <dsh>/node_modules/@deepseek-ai/dsh-plugin-market-index` checks an index with dsh's own validator.
+dsh finds plugins through **plugin markets**: JSON indexes you add once. This repository publishes one.
 
-A Git source pointing at `packages/kicad-bundle` alone does not work yet: pnpm cannot resolve the bundle's `workspace:` siblings from a Git subdirectory. Use npm, or a local checkout.
+1. **Plugins → Experimental plugins → More → Custom plugin markets**: switch it on. A **Discover** tab appears.
+2. **Discover → Add index source**: `https://raw.githubusercontent.com/LuYanFCP/dsh-kicad/main/market/index.json`
+3. Search, e.g. `kicad`, `原理图`, `电路板`, `circuit board`, then **Install → Enable now**. No restart needed.
+
+The market entry installs `dist/dsh-kicad`, a single self-contained package built by `pnpm run dist` (`scripts/pack-dist.mjs`), from a pinned Git commit. The same package installs directly:
+
+```sh
+dsh plugin --profile web add "git+https://github.com/LuYanFCP/dsh-kicad.git#<commit>&path:/dist/dsh-kicad"
+```
+
+To publish a new version: `pnpm run dist`, commit, then add a version to `market/index.json` with that commit and check it with `node market/validate.mjs <dsh>/node_modules/@deepseek-ai/dsh-plugin-market-index`.
 
 ## Use
 
