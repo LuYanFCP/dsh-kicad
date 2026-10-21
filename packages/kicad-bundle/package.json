@@ -14,20 +14,42 @@
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg"
   },
-  "files": ["index.js", "icon.svg", "cordis.patch.yml", "presets/*.yml", "locale/*.json"],
-  "keywords": ["dsh", "dsh-bundle", "kicad", "eda", "schematic"],
-  "engines": { "dsh": ">=0.2.1-rc.2 <0.3.0-0" },
+  "files": [
+    "index.js",
+    "icon.svg",
+    "cordis.patch.yml",
+    "presets/*.yml",
+    "locale/*.json"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-bundle",
+    "kicad",
+    "eda",
+    "schematic"
+  ],
+  "engines": {
+    "dsh": ">=0.2.1-rc.2 <0.3.0-0"
+  },
   "dependencies": {
     "dsh-kicad-bridge": "workspace:^",
     "dsh-tool-kicad": "workspace:^",
     "dsh-kicad-policy": "workspace:^",
-    "dsh-kicad-skills": "workspace:^"
+    "dsh-kicad-skills": "workspace:^",
+    "dsh-client-ui-kicad": "workspace:^"
   },
   "dsh": {
     "bundle": {
-      "patch": ["./cordis.patch.yml", "./presets/eda.patch.yml"]
+      "patch": [
+        "./cordis.patch.yml",
+        "./presets/eda.patch.yml"
+      ]
     }
   },
-  "repository": { "type": "git", "url": "git+https://github.com/LuYanFCP/dsh-kicad.git", "directory": "packages/kicad-bundle" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LuYanFCP/dsh-kicad.git",
+    "directory": "packages/kicad-bundle"
+  },
   "homepage": "https://github.com/LuYanFCP/dsh-kicad#readme"
 }

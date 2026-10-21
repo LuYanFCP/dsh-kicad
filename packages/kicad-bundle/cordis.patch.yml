@@ -17,3 +17,5 @@
         autoRender: true
     - id: kicad-skills
       name: 'dsh-kicad-skills'
+    - id: kicad-ui
+      name: 'dsh-client-ui-kicad'

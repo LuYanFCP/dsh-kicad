@@ -75,6 +75,8 @@ importers:
         specifier: ^3.2.7
         version: 3.2.7(@types/node@24.19.2)(jsdom@26.1.0)
 
+  packages/client-ui-kicad: {}
+
   packages/kicad-bridge:
     dependencies:
       '@deepseek-ai/cordis':
@@ -89,6 +91,9 @@ importers:
 
   packages/kicad-bundle:
     dependencies:
+      dsh-client-ui-kicad:
+        specifier: workspace:^
+        version: link:../client-ui-kicad
       dsh-kicad-bridge:
         specifier: workspace:^
         version: link:../kicad-bridge

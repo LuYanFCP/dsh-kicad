@@ -12,6 +12,9 @@
     },
     {
       "path": "packages/kicad-skills"
+    },
+    {
+      "path": "packages/client-ui-kicad"
     }
   ]
 }
