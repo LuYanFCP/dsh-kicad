@@ -16,7 +16,7 @@
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.5",
     "@deepseek-ai/schemastery": "^3.18.5",
-    "@deepseek-ai/dsh-subprocess": "*"
+    "@deepseek-ai/dsh-subprocess": "^0.2.1-rc.2"
   },
   "scripts": {
     "build": "tsc -b"
