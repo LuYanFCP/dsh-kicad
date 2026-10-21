@@ -122,7 +122,7 @@ function apply(ctx, config = {}) {
     }),
     defineTool({
       name: "kicad_read_schematic",
-      description: "Summarize a KiCad schematic: title block, counts, components (reference, value, lib_id, footprint, position in mm), net labels, power nets and sub-sheets. Start here before editing.",
+      description: "Summarize a KiCad schematic: title block, counts, components (reference, value, lib_id, footprint, position in mm), net labels, power nets, sub-sheets, the page size and drawable area, and functional blocks (titled frames with the parts inside, plus parts outside every block). Start here before editing.",
       parameters: {
         path: SCH,
         include_components: { type: "boolean", description: "Include the component list (default true)." },
@@ -322,6 +322,9 @@ function apply(ctx, config = {}) {
         "connect_pins{a,b} (orthogonal wire between two pins); connect_pin_to_net{pin,net,kind?:label|global_label|power} (stub + label, or a power symbol such as GND/+3V3);",
         "no_connect_pin{pin}; add_wire{points:[[x,y],...]}; add_label{text,x,y,kind?,rotation?}; add_junction{x,y}; add_no_connect{x,y}.",
         "Undo/fix: disconnect_pin{pin} removes the wires, labels, power symbols and no-connect flag attached to that pin; remove_item{uuid} removes any item (uuids from kicad_read_schematic include_wiring); remove_label{text,x?,y?}; remove_wire{x,y}.",
+        "Layout by function: set_page{paper?,title?,date?,rev?,company?,comments?}; add_block{title, references:[...] (frame encloses those parts with their wiring) | x,y,width,height} draws a dashed frame with a bold title;",
+        "move_block{title, dx,dy | x,y} moves the frame with the parts inside and their wiring; move_symbols{references,dx,dy} moves parts with their wires, labels and power symbols (refuses if that would tear a wire to a part left behind);",
+        "add_text{text,x,y,size?,bold?}; add_rectangle{x,y,width,height,style?}.",
         "Rotation is counter-clockwise: Device:R/C/L at 0\xB0 are vertical with pin 1 on top; at 90\xB0 horizontal with pin 1 on the left; add_symbol results list the placed pin positions.",
         "Prefer connect_pin_to_net with labels over long wires. Keep one call to at most ~20 operations; split bigger changes. Never rewrite or recreate a .kicad_sch to fix layout \u2014 remove and re-add the affected items.",
         "ERC runs automatically afterwards when the KiCad policy is enabled."

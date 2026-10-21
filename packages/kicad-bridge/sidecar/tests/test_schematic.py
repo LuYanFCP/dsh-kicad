@@ -174,3 +174,64 @@ def test_derived_symbols_report_and_place_their_pins(project):
     assert placed["reference"] == "U1" and len(placed["pins"]) == 8
     names = {p["name"] for p in placed["pins"]}
     assert {"VCC", "GND"} <= names and any("PB0" in n for n in names)
+
+
+def _nets(cli, path):
+    return {n["name"]: {(x["ref"], x["pin"]) for x in n["nodes"]} for n in cli.netlist(path)["nets"]}
+
+
+@needs_symbols
+@needs_kicad_cli
+def test_blocks_frame_parts_and_move_with_their_wiring(project):
+    from dsh_kicad_sidecar.kicad_cli import KiCadCli
+
+    path = project("rc_filter")
+    cli = KiCadCli()
+    before = _nets(cli, path)
+    s = Schematic(path)
+    s.apply({"op": "set_page", "paper": "A3", "title": "RC filter", "rev": "v0.2"})
+    made = s.apply({"op": "add_block", "title": "FILTER", "references": ["R1", "C1"]})
+    s.apply({"op": "add_block", "title": "INPUT", "references": ["J1"]})
+    blocks = {b["title"]: b for b in s.blocks()}
+    assert blocks["FILTER"]["references"] == ["C1", "R1"] and blocks["INPUT"]["references"] == ["J1"]
+    assert blocks["FILTER"]["at"] == made["at"] and "overlaps" not in made
+    summary = s.summary()
+    assert summary["page"]["paper"] == "A3" and summary["title_block"]["title"] == "RC filter"
+    assert "outside_blocks" not in summary and {t["text"] for t in summary["texts"]} == {"FILTER", "INPUT"}
+    old = {p["number"]: (p["x"], p["y"]) for p in s.pins("C1")}
+    s.apply({"op": "move_block", "title": "FILTER", "dx": 101.6, "dy": 50.8})
+    new = {p["number"]: (p["x"], p["y"]) for p in s.pins("C1")}
+    assert all(new[n] == (round(old[n][0] + 101.6, 4), round(old[n][1] + 50.8, 4)) for n in old)
+    assert {b["title"]: b for b in s.blocks()}["FILTER"]["references"] == ["C1", "R1"]
+    s.save()
+    # Same connectivity, still a clean ERC: the wires, labels and power symbols travelled along.
+    assert _nets(cli, path) == before
+    assert cli.erc(path)["passed"]
+
+
+@needs_symbols
+def test_move_symbols_refuses_to_tear_a_wire(project):
+    s = Schematic(project("rc_filter"))
+    with pytest.raises(SchematicError, match="R1:2 → C1:1"):
+        s.apply({"op": "move_symbols", "references": ["R1"], "dx": 10, "dy": 0})
+    result = s.apply({"op": "move_symbols", "references": ["R1", "C1"], "dx": 12.7, "dy": 0})
+    assert result["attached"]["labels"] >= 1 and result["attached"]["power"] >= 1
+
+
+def test_text_rectangle_and_page_validation(project):
+    s = Schematic(project("blank"))
+    s.apply({"op": "add_text", "text": "Note", "x": 20, "y": 20, "size": 2.54, "bold": True})
+    s.apply({"op": "add_rectangle", "x": 10, "y": 10, "width": 50, "height": 30})
+    assert [b["title"] for b in s.blocks()] == ["Note"]  # a titled frame reads as a block
+    with pytest.raises(SchematicError):
+        s.apply({"op": "add_block", "title": "Note", "x": 100, "y": 10, "width": 20, "height": 20})
+    over = s.apply({"op": "add_block", "title": "B", "x": 40, "y": 20, "width": 40, "height": 40})
+    assert over["overlaps"] == ["Note"]
+    with pytest.raises(SchematicError):
+        s.apply({"op": "add_block", "title": "C"})
+    with pytest.raises(SchematicError):
+        s.apply({"op": "set_page", "paper": "A9"})
+    s.apply({"op": "set_page", "comments": ["first", "second"], "date": "2026-10-21"})
+    tb = s.root.find("title_block")
+    assert [c.head for c in tb.lists()] == ["date", "comment", "comment"]
+    assert dumps(parse(s.text())) == s.text()

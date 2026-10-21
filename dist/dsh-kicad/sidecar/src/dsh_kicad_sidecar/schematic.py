@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import glob
+import math
 import os
 import re
 import tempfile
@@ -11,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from . import geometry
-from .sexpr import Atom, Document, SList, L, S, dumps, parse
+from .sexpr import Atom, Document, SList, L, S, dumps, fmt_num, parse
 from .symbols import SymbolLibraries, clone
 
 __all__ = ["Schematic", "SchematicError", "new_uuid"]
@@ -33,6 +34,16 @@ ITEM_ORDER = [
     "directive_label", "rule_area", "symbol", "sheet", "sheet_instances", "symbol_instances", "embedded_fonts",
 ]
 LABEL_KINDS = ("label", "global_label", "hierarchical_label")
+# Landscape paper sizes in mm (KiCad's page sizes).
+PAPER_SIZES = {
+    "A5": (210.0, 148.0), "A4": (297.0, 210.0), "A3": (420.0, 297.0), "A2": (594.0, 420.0), "A1": (841.0, 594.0),
+    "A0": (1189.0, 841.0), "A": (279.4, 215.9), "B": (431.8, 279.4), "C": (558.8, 431.8), "D": (863.6, 558.8),
+    "E": (1117.6, 863.6), "USLetter": (279.4, 215.9), "USLegal": (355.6, 215.9), "USLedger": (431.8, 279.4),
+}
+PAGE_MARGIN = 10.16  # inside KiCad's border
+TITLE_BLOCK_HEIGHT = 45.72  # keep the bottom strip free for the title block
+BLOCK_TITLE_SIZE = 2.54
+BLOCK_HEADER = 5.08  # room for a block's title above its contents
 GLOBAL_LABEL_SHAPES = ("input", "output", "bidirectional", "tri_state", "passive")
 
 
@@ -281,6 +292,17 @@ class Schematic:
             "labels": labels,
             "sheets": sheets,
         }
+        out["page"] = self.page()
+        blocks = self.blocks()
+        if blocks:
+            out["blocks"] = blocks
+            placed = {r for b in blocks for r in b["references"]}
+            loose = sorted({c["reference"] for c in comps if not c.get("power") and c["reference"] not in placed}, key=_ref_key)
+            if loose:
+                out["outside_blocks"] = loose
+        texts = [{"text": t.value(0), "at": list(_xy(t)), "uuid": t.child_value("uuid")} for t in root.lists("text")]
+        if texts:
+            out["texts"] = texts
         if include_wiring:
             out["wiring"] = self.wiring()
         if include_components:
@@ -691,6 +713,271 @@ class Schematic:
         self.changes.append(f"disconnected {reference}:{pin} ({', '.join(f'{v} {k}' for k, v in removed.items() if v) or 'nothing attached'})")
         return removed
 
+    # ---- page, text and functional blocks ------------------------------------------
+    def set_page(self, paper: str | None = None, title: str | None = None, date: str | None = None,
+                 rev: str | None = None, company: str | None = None, comments: list[str] | None = None) -> dict:
+        """Paper size and title block (fields left out keep their current value)."""
+        if paper is not None:
+            if paper not in PAPER_SIZES:
+                raise SchematicError(f"paper must be one of {', '.join(PAPER_SIZES)}")
+            node = self.root.find("paper")
+            if node is None:
+                self._insert_item(L("paper", S(paper)))
+            else:
+                node.set_atoms(S(paper))
+        fields = {"title": title, "date": date, "rev": rev, "company": company}
+        if any(v is not None for v in fields.values()) or comments is not None:
+            block = self.root.find("title_block")
+            if block is None:
+                block = self._insert_item(L("title_block"))
+            for name in ("title", "date", "rev", "company"):
+                value = fields[name]
+                if value is None:
+                    continue
+                child = block.find(name)
+                if child is None:
+                    _insert_in_order(block, L(name, S(value)), ("title", "date", "rev", "company", "comment"))
+                else:
+                    child.set_atoms(S(value))
+            for i, value in enumerate(comments or [], start=1):
+                child = next((c for c in block.lists("comment") if c.value(0) == str(i)), None)
+                if child is None:
+                    block.append(L("comment", i, S(value)))
+                else:
+                    child.set_atoms(i, S(value))
+        self.changes.append("set page " + ", ".join(f"{k}={v!r}" for k, v in
+                                                     {"paper": paper, **fields, "comments": comments}.items() if v is not None))
+        return self.page()
+
+    def page(self) -> dict:
+        paper = self.root.child_value("paper") or "A4"
+        w, h = PAPER_SIZES.get(paper, PAPER_SIZES["A4"])
+        if self.root.find("paper") is not None and "portrait" in [a.value for a in self.root.find("paper").atoms()]:
+            w, h = h, w
+        return {"paper": paper, "size": [w, h], "drawable": [PAGE_MARGIN, PAGE_MARGIN, w - PAGE_MARGIN, h - TITLE_BLOCK_HEIGHT]}
+
+    def add_text(self, text: str, x: float, y: float, size: float = 1.27, bold: bool = False, rotation: float = 0) -> str:
+        """Free text (a note or a block title); (x, y) is its bottom-left corner."""
+        font = L("font", L("size", size, size))
+        if bold:
+            font.append(L("thickness", round(size / 5, 4)))
+            font.append(L("bold", "yes"))
+        uid = new_uuid()
+        self._insert_item(L("text", S(text), L("exclude_from_sim", "no"), L("at", round(x, 4), round(y, 4), int(rotation) % 360),
+                            L("effects", font, L("justify", "left", "bottom")), L("uuid", S(uid))))
+        self.changes.append(f"added text {text!r} at ({x}, {y})")
+        return uid
+
+    def add_rectangle(self, x: float, y: float, width: float, height: float, style: str = "dash") -> str:
+        if width <= 0 or height <= 0:
+            raise SchematicError("a rectangle needs a positive width and height")
+        if style not in ("solid", "dash", "dot", "dash_dot", "dash_dot_dot", "default"):
+            raise SchematicError("style must be solid, dash, dot, dash_dot, dash_dot_dot or default")
+        uid = new_uuid()
+        self._insert_item(L("rectangle", L("start", round(x, 4), round(y, 4)), L("end", round(x + width, 4), round(y + height, 4)),
+                            L("stroke", L("width", 0), L("type", style)), L("fill", L("type", "none")), L("uuid", S(uid))))
+        self.changes.append(f"added rectangle ({x}, {y}) {width}×{height}")
+        return uid
+
+    def add_block(self, title: str, x: float | None = None, y: float | None = None, width: float | None = None,
+                  height: float | None = None, references: list[str] | None = None, margin: float = 5.08) -> dict:
+        """A functional block: a dashed frame with a bold title in its top-left corner. Give the frame
+        explicitly (x, y, width, height) or let it enclose ``references`` with their wiring and labels."""
+        if any(b["title"] == title for b in self.blocks()):
+            raise SchematicError(f"a block titled {title!r} already exists")
+        if references:
+            if None not in (x, y, width, height):
+                raise SchematicError("give either references or x, y, width and height, not both")
+            x0, y0, x1, y1 = self._extent(references)
+            x0, y0 = _snap_down(x0 - margin), _snap_down(y0 - margin - BLOCK_HEADER)
+            x1, y1 = _snap_up(x1 + margin), _snap_up(y1 + margin)
+            x, y, width, height = x0, y0, x1 - x0, y1 - y0
+        elif None in (x, y, width, height):
+            raise SchematicError("add_block needs x, y, width and height (or references to enclose)")
+        assert x is not None and y is not None and width is not None and height is not None
+        x, y = geometry.snap(x), geometry.snap(y)
+        width, height = geometry.snap(width), geometry.snap(height)
+        rect = self.add_rectangle(x, y, width, height)
+        text = self.add_text(title, x + 2.54, y + 5.08, size=BLOCK_TITLE_SIZE, bold=True)
+        self.changes[-2:] = [f"added block {title!r} at ({x}, {y}) {width}×{height}"]
+        frame = (x, y, x + width, y + height)
+        overlaps = [b["title"] for b in self.blocks() if b["title"] != title and _overlap(frame, _frame(b))]
+        out: dict[str, Any] = {"title": title, "at": [x, y], "size": [width, height], "rectangle": rect, "text": text}
+        if overlaps:
+            out["overlaps"] = overlaps
+        return out
+
+    def blocks(self) -> list[dict]:
+        """Titled frames: every rectangle with a text near its top-left corner, plus the parts inside it."""
+        texts = [(t, *_xy(t)) for t in self.root.lists("text")]
+        frames = []
+        for rect in self.root.lists("rectangle"):
+            (x0, y0), (x1, y1) = _pt(rect.find("start")), _pt(rect.find("end"))
+            x0, x1, y0, y1 = min(x0, x1), max(x0, x1), min(y0, y1), max(y0, y1)
+            inside = [(t, tx, ty) for t, tx, ty in texts if x0 <= tx <= x1 and y0 <= ty <= min(y1, y0 + 12)]
+            if not inside:
+                continue
+            t = min(inside, key=lambda it: (it[2] - y0) + (it[1] - x0))[0]
+            frames.append({"title": t.value(0) or "", "at": [x0, y0], "size": [round(x1 - x0, 4), round(y1 - y0, 4)],
+                           "uuid": rect.child_value("uuid"), "title_uuid": t.child_value("uuid"), "references": []})
+        for sym in self.symbols():
+            lib = self.lib_symbol(sym.lib_id)
+            if lib is None or lib.find("power") is not None:
+                continue
+            cx, cy = _center(geometry.body_bbox(lib, sym.at, sym.mirror, sym.unit, sym.body_style), sym.at)
+            # The innermost frame wins when frames nest.
+            hits = [f for f in frames if f["at"][0] <= cx <= f["at"][0] + f["size"][0] and f["at"][1] <= cy <= f["at"][1] + f["size"][1]]
+            if hits:
+                best = min(hits, key=lambda f: f["size"][0] * f["size"][1])
+                if sym.reference not in best["references"]:
+                    best["references"].append(sym.reference)
+        for f in frames:
+            f["references"].sort(key=_ref_key)
+        return frames
+
+    def _find_block(self, title: str) -> dict:
+        blocks = self.blocks()
+        for b in blocks:
+            if b["title"] == title:
+                return b
+        raise SchematicError(f"no block titled {title!r}; blocks: {', '.join(repr(b['title']) for b in blocks) or 'none'}")
+
+    def _attached(self, references: list[str]) -> dict[str, Any]:
+        """Everything wired to the pins of ``references``: wires, labels, junctions, no-connect flags and power
+        symbols, following wires until they reach another part's pin (reported in ``outside``)."""
+        refs = set(references)
+        moved = [s for s in self.symbols() if s.reference in refs]
+        missing = refs - {s.reference for s in moved}
+        if missing:
+            raise SchematicError(f"no symbol with reference {', '.join(sorted(missing))}")
+        start: dict[tuple[float, float], str] = {}
+        other_pins: dict[tuple[float, float], str] = {}
+        power_at: dict[tuple[float, float], list[SList]] = {}
+        for sym in self.symbols():
+            lib = self.lib_symbol(sym.lib_id)
+            if lib is None:
+                continue
+            for p in geometry.placed_pins(lib, sym.at, sym.mirror, sym.unit, sym.body_style):
+                k = _key(p["x"], p["y"])
+                if sym.reference in refs:
+                    start[k] = f"{sym.reference}:{p['number']}"
+                elif lib.find("power") is not None:
+                    power_at.setdefault(k, []).append(sym.node)
+                else:
+                    other_pins.setdefault(k, f"{sym.reference}:{p['number']}")
+        wires = [(w, [_pt(p) for p in w.find("pts").lists("xy")]) for w in self.root.lists("wire")]
+        taken_wires: list[SList] = []
+        taken_power: list[SList] = []
+        visited: set[tuple[float, float]] = set()
+        outside: list[str] = []
+        queue = [(k, origin) for k, origin in start.items()]
+        while queue:
+            k, origin = queue.pop()
+            if k in visited:
+                continue
+            visited.add(k)
+            if k in other_pins and k not in start:
+                outside.append(f"{origin} → {other_pins[k]}")
+                continue
+            for node in power_at.get(k, []):
+                if not any(node is n for n in taken_power):
+                    taken_power.append(node)
+            for w, pts in wires:
+                if any(w is t for t in taken_wires) or not _on_path(k, pts):
+                    continue
+                taken_wires.append(w)
+                queue += [(_key(*p), origin) for p in pts]
+                # Wires that end on this one's middle (T connections) belong to the same net.
+                for w2, pts2 in wires:
+                    if not any(w2 is t for t in taken_wires):
+                        queue += [(_key(*p), origin) for p in (pts2[0], pts2[-1]) if _on_path(_key(*p), pts)]
+        paths = [pts for w, pts in wires if any(w is t for t in taken_wires)]
+        labels = [lab for kind in LABEL_KINDS for lab in self.root.lists(kind)
+                  if _key(*_xy(lab)) in visited or any(_on_path(_key(*_xy(lab)), pts) for pts in paths)]
+        return {
+            "symbols": [s.node for s in moved], "wires": taken_wires, "labels": labels, "power": taken_power,
+            "junctions": [j for j in self.root.lists("junction") if _key(*_xy(j)) in visited],
+            "no_connects": [n for n in self.root.lists("no_connect") if _key(*_xy(n)) in visited],
+            "outside": sorted(set(outside)),
+        }
+
+    def _extent(self, references: list[str]) -> tuple[float, float, float, float]:
+        """Bounding box of parts plus their visible fields, wiring, labels and power symbols."""
+        att = self._attached(references)
+        pts: list[tuple[float, float]] = []
+        for node in att["symbols"] + att["power"]:
+            sym = SymbolRef(node)
+            lib = self.lib_symbol(sym.lib_id)
+            box = geometry.body_bbox(lib, sym.at, sym.mirror, sym.unit, sym.body_style) if lib is not None else None
+            if box:
+                pts += [(box[0], box[1]), (box[2], box[3])]
+            if lib is not None:
+                pts += [(p["x"], p["y"]) for p in geometry.placed_pins(lib, sym.at, sym.mirror, sym.unit, sym.body_style)]
+            for prop in node.lists("property"):
+                if prop.find("hide") is None and not _effects_hidden(prop) and prop.value(1):
+                    px, py = _xy(prop)
+                    half = len(prop.value(1) or "") * 0.65
+                    pts += [(px - half, py - 1), (px + half, py + 1)]
+        for w in att["wires"]:
+            pts += [_pt(p) for p in w.find("pts").lists("xy")]
+        for lab in att["labels"]:
+            lx, ly = _xy(lab)
+            length = len(lab.value(0) or "") * 1.0 + (3 if lab.head != "label" else 0)
+            rot = int(_f(lab.find("at").value(2)))
+            dx, dy = {0: (length, 0), 90: (0, -length), 180: (-length, 0), 270: (0, length)}.get(rot, (length, 0))
+            pts += [(lx, ly), (lx + dx, ly + dy), (lx - 1.27, ly - 1.27), (lx + 1.27, ly + 1.27)]
+        for n in att["junctions"] + att["no_connects"]:
+            pts.append(_xy(n))
+        xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+        return min(xs), min(ys), max(xs), max(ys)
+
+    def move_symbols(self, references: list[str], dx: float, dy: float) -> dict:
+        """Move parts together with their wires, labels, power symbols, junctions and no-connect flags."""
+        if not references:
+            raise SchematicError("move_symbols needs at least one reference")
+        dx, dy = geometry.snap(dx), geometry.snap(dy)
+        att = self._attached(references)
+        if att["outside"]:
+            raise SchematicError(
+                "these pins are wired to parts that are not being moved: " + "; ".join(att["outside"]) +
+                ". Move those parts too, or replace the wire with net labels first (disconnect_pin, then "
+                "connect_pin_to_net on both ends) so the groups connect by name.")
+        moved = 0
+        for group in ("symbols", "power", "wires", "labels", "junctions", "no_connects"):
+            for node in att[group]:
+                _shift(node, dx, dy)
+                moved += 1
+        self.changes.append(f"moved {', '.join(references)} by ({dx}, {dy}) with {moved - len(att['symbols'])} attached item(s)")
+        return {"moved": sorted(set(references), key=_ref_key), "by": [dx, dy],
+                "attached": {k: len(att[k]) for k in ("wires", "labels", "power", "junctions", "no_connects")}}
+
+    def move_block(self, title: str, dx: float | None = None, dy: float | None = None,
+                   x: float | None = None, y: float | None = None) -> dict:
+        """Move a block (frame, title, the parts inside and their wiring) by (dx, dy) or to top-left (x, y)."""
+        block = self._find_block(title)
+        if x is not None or y is not None:
+            dx = (x if x is not None else block["at"][0]) - block["at"][0]
+            dy = (y if y is not None else block["at"][1]) - block["at"][1]
+        dx, dy = geometry.snap(dx or 0), geometry.snap(dy or 0)
+        x0, y0 = block["at"]
+        x1, y1 = x0 + block["size"][0], y0 + block["size"][1]
+        inside = lambda px, py: x0 <= px <= x1 and y0 <= py <= y1  # noqa: E731
+        # Every part inside, including those of nested blocks.
+        refs = sorted({s.reference for s in self.symbols()
+                       if (lib := self.lib_symbol(s.lib_id)) is not None and lib.find("power") is None
+                       and inside(*_center(geometry.body_bbox(lib, s.at, s.mirror, s.unit, s.body_style), s.at))}, key=_ref_key)
+        result = self.move_symbols(refs, dx, dy) if refs else {"moved": [], "by": [dx, dy]}
+        for item in list(self.root.lists("rectangle")) + list(self.root.lists("text")):
+            if item.head == "text":
+                hit = inside(*_xy(item))
+            else:
+                (ax, ay), (bx, by) = _pt(item.find("start")), _pt(item.find("end"))
+                hit = item.child_value("uuid") == block["uuid"] or (inside(ax, ay) and inside(bx, by))
+            if hit:
+                _shift(item, dx, dy)
+        self.changes.append(f"moved block {title!r} by ({dx}, {dy})")
+        return {"title": title, "at": [round(x0 + dx, 4), round(y0 + dy, 4)], **result}
+
     # ---- batch ---------------------------------------------------------------------
     def apply(self, op: dict[str, Any]) -> Any:
         """Apply one operation dict (``{"op": "add_symbol", ...}``)."""
@@ -722,6 +1009,65 @@ def _autoplace_fields(symbol: SList, bbox: tuple[float, float, float, float] | N
         if eff is not None:
             for j in list(eff.lists("justify")):
                 eff.remove(j)
+
+
+def _pt(node: SList | None) -> tuple[float, float]:
+    return (_f(node.value(0)), _f(node.value(1))) if node is not None else (0.0, 0.0)
+
+
+def _on_path(k: tuple[float, float], pts: list[tuple[float, float]]) -> bool:
+    """Whether point ``k`` lies on the polyline ``pts`` (endpoints included)."""
+    px, py = k
+    for (ax, ay), (bx, by) in zip(pts, pts[1:]):
+        if min(ax, bx) - 0.005 <= px <= max(ax, bx) + 0.005 and min(ay, by) - 0.005 <= py <= max(ay, by) + 0.005:
+            if abs((bx - ax) * (py - ay) - (by - ay) * (px - ax)) <= 0.01 * max(1.0, abs(bx - ax) + abs(by - ay)):
+                return True
+    return len(pts) == 1 and _key(*pts[0]) == k
+
+
+SHIFTED = ("at", "xy", "start", "end", "center", "mid")
+
+
+def _shift(node: SList, dx: float, dy: float) -> None:
+    """Translate every absolute position inside an item (its anchor, field positions, wire points)."""
+    for child in node.lists():
+        if child.head in SHIFTED:
+            atoms = child.atoms()
+            if len(atoms) >= 2:
+                atoms[0].set(fmt_num(round(_f(atoms[0].value) + dx, 4)))
+                atoms[1].set(fmt_num(round(_f(atoms[1].value) + dy, 4)))
+        elif child.head not in ("lib_symbols", "instances", "pin"):
+            _shift(child, dx, dy)
+
+
+def _snap_down(v: float, grid: float = 2.54) -> float:
+    return round(math.floor(round(v / grid, 6)) * grid, 4)
+
+
+def _snap_up(v: float, grid: float = 2.54) -> float:
+    return round(math.ceil(round(v / grid, 6)) * grid, 4)
+
+
+def _center(box: tuple[float, float, float, float] | None, at: tuple[float, float, float]) -> tuple[float, float]:
+    return ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2) if box else (at[0], at[1])
+
+
+def _frame(block: dict) -> tuple[float, float, float, float]:
+    x, y = block["at"]
+    return x, y, x + block["size"][0], y + block["size"][1]
+
+
+def _overlap(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> bool:
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+
+def _insert_in_order(parent: SList, node: SList, order: tuple[str, ...]) -> None:
+    rank = order.index(node.head) if node.head in order else len(order)
+    for i, item in enumerate(parent.items):
+        if isinstance(item, SList) and item.head in order and order.index(item.head) > rank:
+            parent.insert(i, node)
+            return
+    parent.append(node)
 
 
 def _key(x: float, y: float) -> tuple[float, float]:
@@ -758,6 +1104,12 @@ OPERATIONS: dict[str, Callable[..., Any]] = {
     "remove_item": lambda s, uuid: s.remove_item(uuid),
     "remove_label": lambda s, text, x=None, y=None: s.remove_label(text, x, y),
     "remove_wire": lambda s, x, y: s.remove_wire(x, y),
+    "move_symbols": lambda s, references, dx, dy: s.move_symbols(references, dx, dy),
+    "add_text": lambda s, text, x, y, size=1.27, bold=False, rotation=0: s.add_text(text, x, y, size, bold, rotation),
+    "add_rectangle": lambda s, x, y, width, height, style="dash": s.add_rectangle(x, y, width, height, style),
+    "add_block": lambda s, title, **kw: s.add_block(title, **kw),
+    "move_block": lambda s, title, **kw: s.move_block(title, **kw),
+    "set_page": lambda s, **kw: s.set_page(**kw),
 }
 
 
