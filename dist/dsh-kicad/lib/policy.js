@@ -76,6 +76,20 @@ function agentCwd(ctx, agent) {
 function assemblyAgent(context) {
   return context?.agent;
 }
+function sessionPermissions(ctx, agent) {
+  const session = agent?.session;
+  if (!session) return {};
+  const out = {};
+  try {
+    out.approval = ctx.get("approval")?.effectivePolicy(session);
+  } catch {
+  }
+  try {
+    out.sandbox = ctx.get("sandboxPolicy")?.resolve({ session }).mode;
+  } catch {
+  }
+  return out;
+}
 
 // packages/kicad-policy/src/paths.ts
 import { realpathSync } from "node:fs";
@@ -173,7 +187,7 @@ function projectContext(cwd, memory) {
 var name = "dsh-kicad-policy";
 var inject = ["tools", "kicad"];
 var Config = default2.object({
-  approval: default2.union(["ask", "allow"]).default("ask").volatile().description("Ask before KiCad design edits, or allow them."),
+  approval: default2.union(["follow", "ask", "allow"]).default("follow").volatile().description("follow: like dsh file writes (no extra prompt); ask: approve every edit; allow: never ask."),
   restrictToWorkspace: default2.boolean().default(true).description("Only allow KiCad writes inside the working directory."),
   extraRoots: default2.array(default2.string()).default([]).description("Additional directories KiCad tools may write to."),
   autoErc: default2.boolean().default(true).volatile().description("Run ERC after every schematic edit."),
@@ -219,7 +233,12 @@ function apply(ctx, config) {
       const denied = outsideWorkspace(exec);
       if (denied) return { kind: "deny", reason: denied };
       const args = exec.arguments ?? {};
-      if (args.dry_run || config.approval.get() !== "ask") return next();
+      if (args.dry_run) return next();
+      const permissions = sessionPermissions(ctx, exec.agent);
+      if (permissions.sandbox === "read-only") {
+        return { kind: "deny", reason: `${exec.name} writes a design file, but this session is read-only. Ask the user to switch permissions to workspace write (or full access) and try again.` };
+      }
+      if (config.approval.get() !== "ask" || permissions.approval === "never") return next();
       const decision = await next();
       if (decision.kind !== "allow") return decision;
       return { kind: "ask", ...describeEdit(exec.name, args) };

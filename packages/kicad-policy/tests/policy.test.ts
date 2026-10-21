@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { type Context, Service } from '@deepseek-ai/cordis'
 import * as toolKiCad from 'dsh-tool-kicad'
 import * as policy from '../src/index.ts'
 import { bootKiCad, disposeAll, fixtureProject, hasKiCadCli, runTool, text } from '../../../test/harness.ts'
@@ -66,5 +67,39 @@ describe('dsh-kicad-policy', () => {
     expect(text).toContain('- projects: rc_filter.kicad_pro')
     expect(text).toContain('- last ERC of rc_filter.kicad_sch: FAILED (2 errors, 0 warnings: pin_not_connected)')
     expect(policy.projectContext('/proc/self/fdinfo')).toBe('')
+  })
+})
+
+describe('session permissions', () => {
+  const stubs = (approval: 'ask' | 'never', sandbox: string) => {
+    class Approval extends Service { constructor(ctx: Context) { super(ctx, 'approval') } effectivePolicy() { return approval } }
+    class Sandbox extends Service { constructor(ctx: Context) { super(ctx, 'sandboxPolicy') } resolve() { return { mode: sandbox, root: '/' } } }
+    return [[Approval], [Sandbox]] as Array<[unknown]>
+  }
+  const agent = { session: {}, options: {} }
+  const op = [{ op: 'set_value', reference: 'R1', value: '22k' }]
+
+  it('denies design edits in a read-only session', async () => {
+    const path = fixtureProject('rc_filter')
+    const ctx = await bootKiCad(...stubs('ask', 'read-only'), [toolKiCad], [policy, config({ approval: 'follow', extraRoots: [dirname(path)] })])
+    const r = await runTool(ctx, 'kicad_edit_schematic', { path, operations: op }, { agent })
+    expect(r.isError).toBe(true)
+    expect(text(r)).toMatch(/read-only/)
+  })
+
+  it('follow (default): writes without an extra prompt in workspace-write', async () => {
+    const path = fixtureProject('rc_filter')
+    const ctx = await bootKiCad(...stubs('ask', 'workspace-write'), [toolKiCad], [policy, config({ approval: 'follow', autoErc: false, extraRoots: [dirname(path)] })])
+    const r = await runTool(ctx, 'kicad_edit_schematic', { path, operations: op }, { agent })
+    expect(r.isError).toBeFalsy()
+    expect(readFileSync(path, 'utf8')).toContain('"22k"')
+  })
+
+  it('ask: no prompt (so no rejection) when the session never asks', async () => {
+    const path = fixtureProject('rc_filter')
+    const ctx = await bootKiCad(...stubs('never', 'danger-full-access'), [toolKiCad], [policy, config({ approval: 'ask', autoErc: false, extraRoots: [dirname(path)] })])
+    const r = await runTool(ctx, 'kicad_edit_schematic', { path, operations: op }, { agent })
+    expect(r.isError).toBeFalsy()
+    expect(readFileSync(path, 'utf8')).toContain('"22k"')
   })
 })

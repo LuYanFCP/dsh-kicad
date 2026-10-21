@@ -13,6 +13,7 @@
  *    @material-symbols/svg-400 (Apache-2.0), so no icon font is needed;
  *  - the SVG sprite URL (zoom icons) is set, which the embed alone does not do;
  *  - <kicanvas-embed theme> is forwarded to the viewer (upstream only reads stored preferences);
+ *  - <kicanvas-embed> gains dsh_get_camera()/dsh_set_camera() so live reloads keep pan/zoom;
  *  - customElements.define is guarded, so a plugin reload cannot throw
  *    "already defined".
  */
@@ -72,6 +73,28 @@ function patchPlugin(src, icons) {
           const before = code
           code = code.replace(/document\.body\.appendChild\(\s*html`<link[\s\S]*?fonts\.googleapis[\s\S]*?`,?\s*\);?/, '')
           if (code === before) throw new Error('KiCanvas font <link> block not found; update scripts/vendor-kicanvas.mjs')
+          // Camera access for live reloads: the host keeps the user's pan/zoom across file updates.
+          const anchor = 'custom_resolver: ((name: string) => URL) | null = null;'
+          if (!code.includes(anchor)) throw new Error('KiCanvas embed anchor not found; update scripts/vendor-kicanvas.mjs')
+          code = code.replace(anchor, `${anchor}
+
+    /** dsh-kicad: current camera of the visible viewer, or null before it loaded. */
+    dsh_get_camera(): { x: number; y: number; zoom: number } | null {
+        const viewer = (this.#schematic_app ?? this.#board_app)?.viewer as any;
+        const camera = viewer?.viewport?.camera;
+        return camera ? { x: camera.center.x, y: camera.center.y, zoom: camera.zoom } : null;
+    }
+
+    /** dsh-kicad: restore a camera saved with dsh_get_camera(). */
+    dsh_set_camera(state: { x: number; y: number; zoom: number }): boolean {
+        const viewer = (this.#schematic_app ?? this.#board_app)?.viewer as any;
+        const camera = viewer?.viewport?.camera;
+        if (!camera) return false;
+        camera.center.set(state.x, state.y);
+        camera.zoom = state.zoom;
+        viewer.draw();
+        return true;
+    }`)
         }
         if (args.path.endsWith(join('kicanvas', 'elements', 'common', 'app.ts'))) {
           // Upstream gap: <kicanvas-embed theme="…"> never reaches the viewer, which then uses stored preferences.

@@ -9,7 +9,7 @@
  */
 import type { ComponentType } from 'react'
 import { basename, isDesignFile, parseFileAddress } from './address.ts'
-import { CheckCard, createDoctorCard, EditCard, withKiCadHint } from './Cards.tsx'
+import { CheckCard, CreateCard, createDoctorCard, EditCard, withKiCadHint } from './Cards.tsx'
 import type { ClientContext } from './dsh.ts'
 import { en, NS, zh } from './locales.ts'
 import { createBridgeSettings, PolicySettings } from './Settings.tsx'
@@ -46,6 +46,7 @@ export function apply(ctx: ClientContext): void {
     ['kicad_erc', withKiCadHint(ctx.remote, CheckCard)],
     ['kicad_drc', withKiCadHint(ctx.remote, CheckCard)],
     ['kicad_edit_schematic', withKiCadHint(ctx.remote, EditCard)],
+    ['kicad_create_schematic', withKiCadHint(ctx.remote, CreateCard)],
   ] as const
   for (const [tool, view] of cards) {
     ctx.effect(() => ctx.slots.inject('tool.call.toolview', () => ctx.slots.register(

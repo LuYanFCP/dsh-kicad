@@ -83,9 +83,9 @@ describe('settings cards', () => {
     const mutate = vi.fn(async () => true)
     const form = { state: { status: 'ready' as const, value: { approval: 'ask', autoErc: true, autoRender: true }, revision: 7, writable: true }, mutate }
     render(<PolicySettings view="page" form={form} />)
-    fireEvent.click(screen.getByLabelText('Ask before schematic edits'))
+    fireEvent.click(screen.getByLabelText(/Ask before every schematic edit/))
     await act(async () => { fireEvent.click(screen.getByText('Save')) })
-    expect(mutate).toHaveBeenCalledWith([{ op: 'set', path: ['approval'], value: 'allow' }], 7)
+    expect(mutate).toHaveBeenCalledWith([{ op: 'set', path: ['approval'], value: 'follow' }], 7)
     render(<BridgeSettings view="summary" form={form} />)
     expect(screen.getByText('kicad-cli: default')).toBeTruthy()
   })

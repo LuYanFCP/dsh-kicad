@@ -3,7 +3,8 @@
  * tools run, kept out of the tools themselves.
  *
  * - `ctx.tools.guard()`      monotonic denial of writes outside the project
- * - `tools/pre-execute`      design edits return `ask` (approval card)
+ * - `tools/pre-execute`      design edits follow the session's dsh permissions
+ *                            (read-only denies; `approval: ask` adds an approval card)
  * - `tools/post-execute`     a successful edit is followed by KiCad ERC, whose
  *                            verdict is appended to the tool result
  * - `tools/result`           remembers the latest ERC per schematic
@@ -12,7 +13,7 @@
  */
 import { basename } from 'node:path'
 import { DESIGN_WRITE_TOOLS, formatCheck, PATH_ARGUMENTS, TOOL_ACCESS, type CheckReport, type KiCadToolName } from 'dsh-tool-kicad'
-import { agentCwd, assemblyAgent, z, type Context, type PostToolDecision, type PreToolDecision, type ToolExecution, type Volatile } from './dsh.ts'
+import { agentCwd, assemblyAgent, sessionPermissions, z, type Context, type PostToolDecision, type PreToolDecision, type ToolExecution, type Volatile } from './dsh.ts'
 import { inside, resolveArg } from './paths.ts'
 import { ErcMemory, projectContext } from './project.ts'
 
@@ -22,8 +23,13 @@ export const name = 'dsh-kicad-policy'
 export const inject = ['tools', 'kicad']
 
 export interface Config {
-  /** `ask` routes design edits through dsh approval; `allow` runs them directly. */
-  approval: Volatile<'ask' | 'allow'>
+  /**
+   * `follow` (default): design edits behave like dsh's own file writes — denied in a
+   * read-only session, run without a prompt in workspace-write / full access.
+   * `ask`: additionally ask before every edit, unless the session never asks.
+   * `allow`: never add a prompt (read-only sessions still deny).
+   */
+  approval: Volatile<'follow' | 'ask' | 'allow'>
   /** Deny writes outside the session's working directory (plus `extraRoots`). */
   restrictToWorkspace: boolean
   extraRoots: string[]
@@ -38,7 +44,7 @@ export interface Config {
 }
 
 export const Config: z<Config> = z.object({
-  approval: z.union(['ask', 'allow'] as const).default('ask').volatile().description('Ask before KiCad design edits, or allow them.'),
+  approval: z.union(['follow', 'ask', 'allow'] as const).default('follow').volatile().description('follow: like dsh file writes (no extra prompt); ask: approve every edit; allow: never ask.'),
   restrictToWorkspace: z.boolean().default(true).description('Only allow KiCad writes inside the working directory.'),
   extraRoots: z.array(z.string()).default([]).description('Additional directories KiCad tools may write to.'),
   autoErc: z.boolean().default(true).volatile().description('Run ERC after every schematic edit.'),
@@ -95,7 +101,14 @@ export function apply(ctx: Context, config: Config): void {
       const denied = outsideWorkspace(exec)
       if (denied) return { kind: 'deny', reason: denied }
       const args = (exec.arguments ?? {}) as { path?: string, operations?: Array<{ op?: string }>, dry_run?: boolean }
-      if (args.dry_run || config.approval.get() !== 'ask') return next()
+      if (args.dry_run) return next()
+      const permissions = sessionPermissions(ctx, exec.agent)
+      if (permissions.sandbox === 'read-only') {
+        return { kind: 'deny', reason: `${exec.name} writes a design file, but this session is read-only. Ask the user to switch permissions to workspace write (or full access) and try again.` }
+      }
+      // Under the session's "never ask" policy an approval card would be rejected outright,
+      // so the extra prompt only applies while the session still asks.
+      if (config.approval.get() !== 'ask' || permissions.approval === 'never') return next()
       const decision = await next()
       if (decision.kind !== 'allow') return decision
       return { kind: 'ask', ...describeEdit(exec.name, args) }

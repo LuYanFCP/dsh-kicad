@@ -16,7 +16,7 @@ export const BRIDGE_FIELDS: Field[] = [
   { key: 'python', label: 'settings.python', hint: 'settings.pythonHint', kind: 'text' },
 ]
 export const POLICY_FIELDS: Field[] = [
-  { key: 'approval', label: 'settings.approval', kind: 'check', on: 'ask', off: 'allow' },
+  { key: 'approval', label: 'settings.approval', kind: 'check', on: 'ask', off: 'follow' },
   { key: 'autoErc', label: 'settings.autoErc', kind: 'check' },
   { key: 'autoRender', label: 'settings.autoRender', kind: 'check' },
 ]
@@ -98,6 +98,6 @@ export function createBridgeSettings(remote: ClientRemote) {
 
 export const BridgeSettings = createSettingsCard(BRIDGE_FIELDS, bridgeSummary)
 export const PolicySettings = createSettingsCard(POLICY_FIELDS, (v, tr) => tr('settings.summaryPolicy', {
-  approval: v.approval === 'allow' ? tr('common.off') : tr('common.on'),
+  approval: v.approval === 'ask' ? tr('common.on') : tr('common.off'),
   erc: v.autoErc === false ? tr('common.off') : tr('common.on'),
 }))

@@ -12,6 +12,7 @@ Changes made while bundling (so it runs inside the dsh Web UI and offline):
   `@material-symbols/svg-400` (Apache-2.0), so no icon font is loaded;
 - the SVG sprite URL for the zoom icons is set (the embed alone does not set it);
 - `<kicanvas-embed theme>` is forwarded to the viewer (upstream ignores it and uses stored preferences);
+- `<kicanvas-embed>` gains `dsh_get_camera()` / `dsh_set_camera()` so live reloads keep the user's pan and zoom;
 - `customElements.define` is guarded so re-evaluating the module cannot throw.
 
 Third-party notices (from KiCanvas's `LICENSE.md`): Earcut (ISC), Newstroke font

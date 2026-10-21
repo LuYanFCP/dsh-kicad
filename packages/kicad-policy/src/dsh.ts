@@ -26,3 +26,24 @@ export function agentCwd(ctx: Context, agent: unknown): string | undefined {
 export function assemblyAgent(context: unknown): unknown {
   return (context as { agent?: unknown } | undefined)?.agent
 }
+
+interface ApprovalLike { effectivePolicy(session: unknown): 'ask' | 'never' }
+interface SandboxPolicyLike { resolve(request?: { session?: unknown }): { mode: 'read-only' | 'workspace-write' | 'danger-full-access' } }
+
+/** The session's dsh permission knobs (approval policy, sandbox mode), when those services exist. */
+export function sessionPermissions(ctx: Context, agent: unknown): { approval?: 'ask' | 'never', sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access' } {
+  const session = (agent as { session?: unknown } | undefined)?.session
+  if (!session) return {}
+  const out: { approval?: 'ask' | 'never', sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access' } = {}
+  try {
+    out.approval = (ctx.get('approval' as never) as ApprovalLike | undefined)?.effectivePolicy(session)
+  } catch {
+    // no approval service or no policy for this session
+  }
+  try {
+    out.sandbox = (ctx.get('sandboxPolicy' as never) as SandboxPolicyLike | undefined)?.resolve({ session }).mode
+  } catch {
+    // no sandbox policy service
+  }
+  return out
+}
