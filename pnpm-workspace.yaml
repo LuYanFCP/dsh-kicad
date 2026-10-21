@@ -1,2 +1,8 @@
 packages:
   - 'packages/*'
+allowBuilds:
+  esbuild: true
+  # Test-only dsh dependencies; their native builds are not needed for spawn().
+  '@deepseek-ai/dsh-subprocess-local': false
+  koffi: false
+  node-pty: false

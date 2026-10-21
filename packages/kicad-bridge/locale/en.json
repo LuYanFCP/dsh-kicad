@@ -1,0 +1,1 @@
+{ "meta": { "title": "KiCad bridge", "description": "Runs the KiCad sidecar (kicad-cli and schematic editing) and exposes it as ctx.kicad." } }
