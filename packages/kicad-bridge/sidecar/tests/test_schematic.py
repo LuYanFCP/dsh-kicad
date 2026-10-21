@@ -161,3 +161,16 @@ def test_sideways_two_pin_part_gets_readable_fields(project):
     assert float(ref.value(1)) < 80.01 < float(val.value(1))  # above and below the body
     assert ref.value(2) == "90" and val.value(2) == "90"
     assert float(ref.value(0)) == float(val.value(0)) == 100.33
+
+
+@needs_symbols
+def test_derived_symbols_report_and_place_their_pins(project):
+    from dsh_kicad_sidecar.symbols import SymbolLibraries
+
+    hits = {r["lib_id"]: r for r in SymbolLibraries().search("attiny85", limit=10)}
+    assert hits["MCU_Microchip_ATtiny:ATtiny85-20S"]["pins"] == 8
+    s = Schematic(project("blank"))
+    placed = s.add_symbol("MCU_Microchip_ATtiny:ATtiny85-20S", 100.33, 80.01)
+    assert placed["reference"] == "U1" and len(placed["pins"]) == 8
+    names = {p["name"] for p in placed["pins"]}
+    assert {"VCC", "GND"} <= names and any("PB0" in n for n in names)
