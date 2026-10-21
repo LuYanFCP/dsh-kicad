@@ -85,9 +85,10 @@ export function createCommands(ctx: Context): CommandDefinition[] {
     {
       name: 'kicad-render',
       description: 'Re-render a KiCad schematic or board to SVG for the sidebar viewer',
-      input: { hint: 'path/to/file.kicad_sch' },
+      input: { hint: 'path/to/file.kicad_sch [--json]' },
       handler: wrap(async (inv, cwd) => {
-        const arg = inv.rawInput.trim()
+        // `--json` marks the viewer's automatic re-renders, whose chat rows stay hidden; the output is JSON either way.
+        const arg = inv.rawInput.replace(/(^|\s)--json(?=\s|$)/g, ' ').trim()
         const path = arg ? (isAbsolute(arg) ? arg : resolve(cwd, arg)) : targetFile(cwd, '', '.kicad_sch')
         const out = await ctx.kicad.run<{ svg: string[] }>('render', { path, format: 'svg' }, inv.signal)
         return JSON.stringify({ path, svg: out.svg })

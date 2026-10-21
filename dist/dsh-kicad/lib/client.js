@@ -11847,6 +11847,10 @@ function remember(key, value) {
   } catch {
   }
 }
+var SELF_RENDER_DELAY_MS = 1500;
+function rendersItself(path) {
+  return /\.kicad_pcb$/i.test(path);
+}
 function createViewer(remote) {
   const SvgView = createSvgView(remote);
   return function KiCadViewer(props) {
@@ -11929,7 +11933,10 @@ function createSvgView(remote) {
     const sourceState = props.useResource?.(tab.contentId ?? "none:");
     const svgVersion = svgState?.value?.version;
     const sourceVersion = sourceState?.value?.version;
-    const sourceAtLoad = (0, import_react6.useRef)(void 0);
+    const [sourceAtLoad, setSourceAtLoad] = (0, import_react6.useState)(void 0);
+    const sourceAtOpen = (0, import_react6.useRef)(void 0);
+    const renderedFrom = (0, import_react6.useRef)(void 0);
+    const selfRendered = (0, import_react6.useRef)(void 0);
     (0, import_react6.useEffect)(() => {
       if (!sessionId) return;
       let live = true;
@@ -11955,7 +11962,8 @@ function createSvgView(remote) {
           return;
         }
         url = URL.createObjectURL(new Blob([result.value.data], { type: "image/svg+xml" }));
-        sourceAtLoad.current = sourceVersion;
+        setSourceAtLoad(renderedFrom.current ?? sourceVersion);
+        renderedFrom.current = void 0;
         setError(void 0);
         setSvgUrl(url);
       }, (cause) => !controller.signal.aborted && setError(tr2("viewer.failed", { message: String(cause) })));
@@ -11996,30 +12004,50 @@ function createSvgView(remote) {
     const onPointerUp = () => {
       drag.current = void 0;
     };
-    const render = async () => {
+    const render = async (background = false) => {
       if (!sessionId) return;
       setRendering(true);
       setError(void 0);
+      renderedFrom.current = sourceVersion;
+      let failure;
       try {
-        const result = await remote.commands.execute(sessionId, `/kicad-render ${designPath}`, []);
-        if (!result.ok) setError(tr2("viewer.renderFailed", { message: result.error.message }));
+        const result = await remote.commands.execute(sessionId, `/kicad-render ${designPath}${background ? " --json" : ""}`, []);
+        if (!result.ok) failure = result.error.message;
         else if (result.value?.result.kind === "error") {
-          setError(tr2("viewer.renderFailed", { message: result.value.result.text }));
-          if (KICAD_MISSING.test(result.value.result.text)) setKicadFailed(true);
+          failure = result.value.result.text;
+          if (KICAD_MISSING.test(failure)) setKicadFailed(true);
         } else setListing((n) => n + 1);
       } catch (cause) {
-        setError(tr2("viewer.renderFailed", { message: String(cause) }));
+        failure = String(cause);
       } finally {
         setRendering(false);
       }
+      if (failure !== void 0) {
+        renderedFrom.current = void 0;
+        setError(tr2("viewer.renderFailed", { message: failure }));
+      }
     };
+    (0, import_react6.useEffect)(() => {
+      if (sourceAtOpen.current?.path !== designPath) sourceAtOpen.current = { path: designPath, version: sourceVersion };
+      else sourceAtOpen.current.version ??= sourceVersion;
+    }, [designPath, sourceVersion]);
+    (0, import_react6.useEffect)(() => {
+      if (!sessionId || !rendersItself(designPath) || tab.visible === false || rendering || sourceVersion === void 0) return;
+      const shown = svgUrl !== void 0 ? sourceAtLoad : sourceAtOpen.current?.version;
+      if (shown === void 0 || shown === sourceVersion || selfRendered.current === sourceVersion) return;
+      const timer = setTimeout(() => {
+        selfRendered.current = sourceVersion;
+        void render(true);
+      }, SELF_RENDER_DELAY_MS);
+      return () => clearTimeout(timer);
+    }, [sessionId, designPath, sourceVersion, svgUrl, sourceAtLoad, rendering, tab.visible]);
     if (!sessionId) {
       return /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("div", { className: "dshk-root", children: [
         /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("style", { children: CSS }),
         /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("div", { className: "dshk-note", children: tr2("viewer.noSession") })
       ] });
     }
-    const stale = svgUrl !== void 0 && sourceAtLoad.current !== void 0 && sourceVersion !== void 0 && sourceVersion !== sourceAtLoad.current;
+    const stale = svgUrl !== void 0 && sourceAtLoad !== void 0 && sourceVersion !== void 0 && sourceVersion !== sourceAtLoad;
     return /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("div", { className: "dshk-root", "data-kicad-viewer": designPath, children: [
       /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("style", { children: CSS }),
       /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("div", { className: "dshk-bar", children: [

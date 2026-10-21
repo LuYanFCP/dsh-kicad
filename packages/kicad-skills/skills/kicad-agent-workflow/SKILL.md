@@ -18,3 +18,12 @@ Use this loop for any schematic change. KiCad, not you, decides whether the resu
 9. **Board work.** `kicad_read_pcb` shows the outline, footprints (position, side, courtyard, pad nets), rules and the unrouted count; change the board with one `kicad_edit_pcb` batch (outline, placement, rules and net classes, tracks routed pad to pad with `"REF:PAD"` endpoints, vias, zones, keepouts, silkscreen) and read the DRC verdict appended to it. `kicad_drc` with `schematic_parity: true` after schematic changes.
 
 Report to the user: what changed (from the edit result's change list), the final ERC verdict, and anything left for them (footprint choices, layout).
+
+## Handing over to the board
+
+Start board work (syncing the schematic to a `.kicad_pcb`) only when both hold; otherwise finish the schematic first:
+
+1. **0 ERC errors.** `kicad_erc` on the root schematic; explain any remaining warnings.
+2. **Every symbol that goes on the board has a footprint.** Check the BOM (`kicad_export` kind `bom`, Footprint column) or `kicad_read_schematic` (`footprint` of each component; power symbols and `on_board: false` parts need none). Fill gaps with `set_footprint`, using `kicad_search_footprints` with pads so the pad names match the symbol's pin numbers.
+
+Then sync (`kicad_update_pcb` when this session has it, otherwise the user runs Update PCB from Schematic in KiCad), and check the board with `kicad_drc` and `schematic_parity: true`. Parity is clean only when the report has no `schematic_parity` items (KiCad lists them as warnings). Triage the rest with the `kicad-drc-triage` skill.
