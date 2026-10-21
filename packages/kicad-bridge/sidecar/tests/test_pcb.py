@@ -12,8 +12,8 @@ import pytest
 
 from dsh_kicad_sidecar.footprints import FootprintLibraries, default_footprint_dirs
 from dsh_kicad_sidecar.kicad_cli import KiCadCli, find_kicad_cli
-from dsh_kicad_sidecar.pcb import Board, Footprint, PcbError
-from dsh_kicad_sidecar.sexpr import parse
+from dsh_kicad_sidecar.pcb import Board, Footprint, PcbError, attr_flags, set_attr_flags
+from dsh_kicad_sidecar.sexpr import S, parse
 from dsh_kicad_sidecar.tools import ToolError, Toolbox
 
 from conftest import FIXTURES, needs_kicad_cli
@@ -451,3 +451,69 @@ def test_numbered_net_board(tmp_path):
     text = open(path).read()
     assert '(net 2)' in text and '(net_name "GND")' in text
     assert len(Board(path).outline_items()) == 8  # no rounded rectangles before KiCad 10: lines and arcs
+
+
+# ---- building blocks of schematic → board sync (#10) ----------------------------------
+
+def test_rename_net_named(board):
+    b = Board(board)
+    b.apply({"op": "add_track", "points": ["J1:1", [110, 110], "R1:1"]})
+    assert b.rename_net("IN", "VIN") == 4  # J1:1, R1:1 and two segments
+    assert b.nets() == ["GND", "OUT", "VIN"] and {t["net"] for t in b.tracks()} == {"VIN"}
+    assert b.rename_net("VIN", "OUT") == 4  # into an existing net: the two merge
+    assert b.nets() == ["GND", "OUT"]
+
+
+@needs_kicad_cli
+def test_rename_net_numbered(tmp_path):
+    path = demo(tmp_path, "ecc83/ecc83-pp.kicad_pcb")
+    unrouted = drc(path)[0]
+    b = Board(path)
+    code = b.net_code("Net-(P3-P1)")
+    tracks = sum(1 for t in b.tracks() if t["net"] == "Net-(P3-P1)")
+    assert b.rename_net("Net-(P3-P1)", "INPUT") > tracks
+    assert b.net_code("INPUT") == code and "Net-(P3-P1)" not in b.nets()  # tracks keep pointing at the code
+    gnd = b.net_code("GND")
+    b.rename_net("INPUT", "GND")  # a merge: the old code's items move to GND's code, the declaration goes
+    assert "INPUT" not in b.nets() and sum(1 for t in b.tracks() if t["net"] == "GND") >= tracks
+    assert all(n.value(0) != str(code) for n in b.root.lists("net")) and b.net_code("GND") == gnd
+    b.save()
+    b2 = Board(path)
+    b2.rename_net("GND", "0V")
+    b2.save()
+    assert '(net_name "0V")' in open(path).read()  # zones name their net too
+    assert drc(path)[0] == unrouted
+
+
+def test_footprints_are_inserted_where_kicad_saves_them(board):
+    """Front footprints, then back ones, each in uuid order (KiCad's BOARD_ITEM::ptr_cmp)."""
+    b = Board(board)
+    node = FootprintLibraries().load("Resistor_SMD:R_0603_1608Metric") if default_footprint_dirs() else None
+    if node is None:
+        pytest.skip("KiCad footprint libraries not installed")
+    for n, (uuid, side) in enumerate([("00000000-0000-4000-8000-000000000001", "front"), ("ffffffff-0000-4000-8000-000000000001", "front"),
+                                      ("00000000-0000-4000-8000-000000000002", "back")]):
+        fp = b.add_footprint(node, f"R{10 + n}", 120, 120, side=side)
+        fp.node.find("uuid").set_atoms(S(uuid))
+        b.root.remove(fp.node)
+        b.insert_item(fp.node)
+    order = [(Footprint(n).side, Footprint(n).uuid) for n in b.root.lists("footprint")]
+    assert order == sorted(order, key=lambda o: (o[0] == "back", o[1]))
+
+
+def test_set_attr_flags_keeps_kicads_order():
+    fp = parse('(footprint "x" (layer "F.Cu") (attr smd) (fp_line (start 0 0) (end 1 1)))').root
+    assert set_attr_flags(fp, {"dnp": True, "exclude_from_bom": True, "board_only": True})
+    assert attr_flags(fp) == ["smd", "board_only", "exclude_from_bom", "dnp"]
+    assert not set_attr_flags(fp, {"dnp": True})
+    set_attr_flags(fp, {"smd": False, "board_only": False, "exclude_from_bom": False, "dnp": False})
+    assert fp.find("attr") is None
+    set_attr_flags(fp, {"dnp": True})  # a footprint without attributes gets (attr) before its graphics
+    assert [i.head for i in fp.lists()] == ["layer", "attr", "fp_line"]
+
+
+@needs_kicad_cli
+@needs_footprints
+def test_mounting_holes_are_board_only(board):
+    (hole,) = edit(board, {"op": "add_mounting_hole", "x": 145, "y": 105})
+    assert "board_only" in attr_flags(Board(board).footprint(hole["reference"]).node)

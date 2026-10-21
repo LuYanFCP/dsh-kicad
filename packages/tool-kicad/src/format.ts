@@ -20,6 +20,8 @@ export interface CheckReport {
   unrouted?: number
   /** DRC with schematic parity only: why the comparison could not run (no parity issues are reported then). */
   schematic_parity_error?: string
+  /** DRC with schematic parity only: KiCad's parity findings (warnings in KiCad 10, so counted on their own). */
+  parity?: number
   violations: CheckViolation[]
 }
 
@@ -34,6 +36,26 @@ export interface EditValue {
 }
 
 type Box = [number, number, number, number]
+
+/** Result of kicad_update_pcb (schematic → board sync). */
+export interface SyncValue {
+  schematic: string
+  pcb: string
+  created: boolean
+  dry_run: boolean
+  written: boolean
+  files?: string[]
+  changes: string[]
+  /** Footprints without a symbol that stayed on the board. */
+  flagged: string[]
+  /** New footprints parked right of the outline, waiting for placement. */
+  staged: Array<{ reference: string, footprint: string, at: [number, number] }>
+  counts: Record<string, number>
+  board: { format: number, copper_layers: string[], footprints: number, outline: Box | null }
+  notes?: string[]
+  parity?: { total: number, by_type: Record<string, number> }
+  drc?: CheckReport
+}
 
 export interface BoardFootprint {
   reference: string
@@ -79,6 +101,7 @@ export function formatCheck(report: CheckReport): string {
   const head = `${label} by KiCad ${report.kicad_version ?? ''}`.trim()
     + `${report.path ? ` on ${report.path}` : ''}: ${verdict} — ${report.counts.error} error(s), ${report.counts.warning} warning(s)`
     + (report.unrouted !== undefined ? `, ${report.unrouted} unrouted` : '')
+    + (report.parity !== undefined ? `, ${report.parity} schematic parity issue(s)` : '')
     + (report.counts.exclusion ? `, ${report.counts.exclusion} excluded` : '')
     + (report.schematic_parity_error ? `\nSchematic parity was NOT checked: ${report.schematic_parity_error}` : '')
   const active = report.violations.filter(v => !v.excluded)
@@ -95,6 +118,36 @@ export function formatEdit(value: EditValue): string {
     : `Dry run on ${value.path}: ${value.applied} operations valid, nothing written.`
   const results = value.results?.length ? `\nResults:\n${formatJson(value.results)}` : ''
   return `${head}\n${value.changes.map(c => `- ${c}`).join('\n')}${results}`
+}
+
+const MAX_CHANGES = 80
+
+/** The sync as the model reads it: what changed, what waits for placement or deletion, and KiCad's parity count. */
+export function formatSync(v: SyncValue): string {
+  const counts = Object.entries(v.counts).map(([kind, n]) => `${kind} ${n}`).join(', ')
+  const head = v.dry_run
+    ? `Dry run, nothing written: ${v.changes.length ? `${v.created ? 'creating' : 'updating'} ${v.pcb} from ${v.schematic} would make ${v.changes.length} change(s) (${counts}).` : `${v.pcb} is already in sync with ${v.schematic}.`}`
+    : v.written
+      ? `${v.created ? 'Created' : 'Updated'} ${v.pcb} from ${v.schematic}: ${v.changes.length} change(s) (${counts}).`
+      : `${v.pcb} is in sync with ${v.schematic}: nothing to change, nothing written.`
+  const lines = [head, ...v.changes.slice(0, MAX_CHANGES).map(c => `- ${c}`)]
+  if (v.changes.length > MAX_CHANGES) lines.push(`… ${v.changes.length - MAX_CHANGES} more`)
+  if (v.flagged.length) lines.push(`Footprints without a symbol, kept (${v.flagged.length}):`, ...v.flagged.map(f => `- ${f}`))
+  if (v.staged.length) {
+    lines.push(`Staged right of the board outline, to be placed: ${v.staged.map(s => `${s.reference} @ (${round(s.at[0])}, ${round(s.at[1])})`).join(', ')}`)
+  }
+  const o = v.board.outline
+  lines.push(`Board: ${v.board.footprints} footprint(s), ${v.board.copper_layers.length} copper layers, format ${v.board.format}`
+    + (o ? `, outline (${round(o[0])}, ${round(o[1])})–(${round(o[2])}, ${round(o[3])})` : ', no outline'))
+  lines.push(...(v.notes ?? []))
+  if (v.parity) {
+    const types = Object.entries(v.parity.by_type).map(([t, n]) => `${t}×${n}`).join(', ')
+    const extra = v.parity.by_type.extra_footprint ? ' Footprints without a symbol go with delete_removed: true.' : ''
+    lines.push(v.parity.total === 0
+      ? 'Schematic parity (KiCad DRC): 0 issues.'
+      : `Schematic parity (KiCad DRC): ${v.parity.total} issue(s) (${types}).${extra} Details: kicad_drc with schematic_parity.`)
+  }
+  return lines.join('\n')
 }
 
 const KEY_RULES = [

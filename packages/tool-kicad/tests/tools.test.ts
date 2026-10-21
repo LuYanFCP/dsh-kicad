@@ -123,6 +123,36 @@ describe('dsh-tool-kicad', () => {
     expect(text(drc)).toMatch(/DRC by KiCad .*: FAILED — 3 error\(s\), 0 warning\(s\), 3 unrouted/)
   })
 
+  it.runIf(hasKiCadCli())('creates a board from its schematic, then finds it in sync', async () => {
+    const ctx = await bootKiCad([toolKiCad])
+    const schematic = fixtureProject('usb_attiny')
+    const board = schematic.replace(/\.kicad_sch$/, '.kicad_pcb')
+    const dry = await runTool(ctx, 'kicad_update_pcb', { schematic, dry_run: true })
+    expect(text(dry)).toMatch(/^Dry run, nothing written: creating .*usb_attiny\.kicad_pcb from .*usb_attiny\.kicad_sch would make 17 change\(s\) \(created 1, added 15, outline 1\)\./)
+    expect(existsSync(board)).toBe(false)
+    const created = await runTool(ctx, 'kicad_update_pcb', { schematic })
+    expect(created.isError).toBeFalsy()
+    const out = text(created)
+    expect(out).toMatch(/^Created .*usb_attiny\.kicad_pcb from .*usb_attiny\.kicad_sch: 17 change\(s\) \(created 1, added 15, outline 1\)\./)
+    expect(out).toContain('- added U1 (Package_SO:SOIC-8_5.3x5.3mm_P1.27mm) at (')
+    expect(out).toMatch(/Board: 15 footprint\(s\), 2 copper layers, format \d+, outline/)
+    expect(out).toContain('Schematic parity (KiCad DRC): 0 issues.')
+    const before = readFileSync(board, 'utf8')
+    const again = await runTool(ctx, 'kicad_update_pcb', { schematic })
+    expect(text(again)).toMatch(/is in sync with .*usb_attiny\.kicad_sch: nothing to change, nothing written\.\n/)
+    expect(readFileSync(board, 'utf8')).toBe(before)
+  })
+
+  it.runIf(hasKiCadCli())('refuses with the REF:PINs to fix and writes nothing', async () => {
+    const ctx = await bootKiCad([toolKiCad])
+    const schematic = fixtureProject('usb_attiny')
+    await runTool(ctx, 'kicad_edit_schematic', { path: schematic, operations: [{ op: 'set_footprint', reference: 'U1', footprint: 'Package_TO_SOT_SMD:SOT-23' }] })
+    const refused = await runTool(ctx, 'kicad_update_pcb', { schematic })
+    expect(refused.isError).toBe(true)
+    expect(text(refused)).toMatch(/refused, nothing was written[\s\S]*U1:4, U1:5, U1:6, U1:7, U1:8: no pad with that number on Package_TO_SOT_SMD:SOT-23/)
+    expect(existsSync(schematic.replace(/\.kicad_sch$/, '.kicad_pcb'))).toBe(false)
+  })
+
   it('searches symbol libraries', async () => {
     const ctx = await bootKiCad([toolKiCad])
     const result = await runTool(ctx, 'kicad_search_symbols', { query: 'resistor', library: 'Device', limit: 5 })
@@ -211,5 +241,40 @@ describe('formatCheck', () => {
       violations: [{ severity: 'error', type: 'pin_not_connected', description: 'Pin not connected', items: [{ description: 'R1 Pin 1', pos: { x: 1.234, y: 5 } }] }],
     })
     expect(out).toBe('ERC by KiCad 10.0.7: FAILED — 1 error(s), 0 warning(s)\n- [error] pin_not_connected: Pin not connected — R1 Pin 1 @ (1.23, 5)')
+  })
+})
+
+describe('formatSync', () => {
+  const base = {
+    schematic: '/p/a.kicad_sch', pcb: '/p/a.kicad_pcb', created: false, dry_run: false, written: true,
+    board: { format: 20260206, copper_layers: ['F.Cu', 'B.Cu'], footprints: 4, outline: [100, 100, 150, 130] as [number, number, number, number] },
+  }
+
+  it('reports changes, staged and flagged footprints, and the parity count', () => {
+    const out = toolKiCad.formatSync({
+      ...base,
+      changes: ['R2: Value \'330\' → \'470\'', 'added R6 (Resistor_SMD:R_0603_1608Metric) at (156.48, 100.73), staged right of the board for placement'],
+      counts: { field: 1, added: 1 },
+      flagged: ['R5 (Resistor_SMD:R_0603_1608Metric): no symbol at /x; kept (delete_removed: true deletes it)'],
+      staged: [{ reference: 'R6', footprint: 'Resistor_SMD:R_0603_1608Metric', at: [156.48, 100.73] }],
+      parity: { total: 1, by_type: { extra_footprint: 1 } },
+    })
+    expect(out.split('\n')).toEqual([
+      'Updated /p/a.kicad_pcb from /p/a.kicad_sch: 2 change(s) (field 1, added 1).',
+      '- R2: Value \'330\' → \'470\'',
+      '- added R6 (Resistor_SMD:R_0603_1608Metric) at (156.48, 100.73), staged right of the board for placement',
+      'Footprints without a symbol, kept (1):',
+      '- R5 (Resistor_SMD:R_0603_1608Metric): no symbol at /x; kept (delete_removed: true deletes it)',
+      'Staged right of the board outline, to be placed: R6 @ (156.48, 100.73)',
+      'Board: 4 footprint(s), 2 copper layers, format 20260206, outline (100, 100)–(150, 130)',
+      'Schematic parity (KiCad DRC): 1 issue(s) (extra_footprint×1). Footprints without a symbol go with delete_removed: true. Details: kicad_drc with schematic_parity.',
+    ])
+  })
+
+  it('caps long change lists', () => {
+    const changes = Array.from({ length: 100 }, (_, i) => `added R${i + 1}`)
+    const out = toolKiCad.formatSync({ ...base, created: true, changes, counts: { added: 100 }, flagged: [], staged: [] })
+    expect(out).toContain('- added R80\n… 20 more\n')
+    expect(out).not.toContain('R81')
   })
 })

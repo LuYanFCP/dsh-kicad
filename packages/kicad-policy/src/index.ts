@@ -66,7 +66,7 @@ export const GUIDANCE = `# KiCad (EDA) work
 - Draw the circuit with wires: connect parts that work together with connect_pins (it routes around parts and other nets). Use power symbols for supply rails and net labels only between blocks or across the page, not for two parts side by side. Place parts so the pins you will wire face each other.
 - Fix mistakes with disconnect_pin / remove_item / move_symbol. Never rebuild or rewrite a schematic file to change its layout.
 - Organise a schematic by function: one titled frame per block (add_block / move_block), parts inside a block wired together, blocks connected only through net labels and power symbols, never through wires that cross a frame.
-- Boards: read with kicad_read_pcb (outline, footprints with courtyards and pad nets, rules, unrouted count), then change them with one kicad_edit_pcb batch: outline and mounting holes, placement, rules and net classes, tracks (route pad to pad with "REF:PAD" endpoints), vias, zones, keepouts, silkscreen.
+- Boards: create or refresh the board from the schematic with kicad_update_pcb (after ERC passes, and after every schematic change; it lists the REF:PINs to fix when it refuses), read with kicad_read_pcb (outline, footprints with courtyards and pad nets, rules, unrouted count), then change them with one kicad_edit_pcb batch: outline and mounting holes, placement, rules and net classes, tracks (route pad to pad with "REF:PAD" endpoints), vias, zones, keepouts, silkscreen.
 - To order a board: kicad_export_fab writes Gerber, drill, position and BOM files in one zip, and refuses while KiCad reports DRC errors, unrouted connections or schematic parity issues; pass force only when the user explicitly asks. kicad_fab_preset makes a fab house's limits (JLCPCB, PCBWay) the project's design rules.
 - KiCad decides correctness: after edits read the ERC/DRC verdict appended to the result (or run kicad_erc / kicad_drc). Do not declare a design correct while KiCad reports errors or unrouted connections.
 - Coordinates are millimetres, Y grows downward, on the 1.27 mm grid.
@@ -75,7 +75,7 @@ export const GUIDANCE = `# KiCad (EDA) work
 const isKiCadTool = (name: string): name is KiCadToolName => Object.hasOwn(TOOL_ACCESS, name)
 
 /** The KiCad check that follows a successful edit of each kind of design file (new fab rules change what DRC reports). */
-const AUTO_CHECK: Readonly<Record<string, 'erc' | 'drc'>> = { kicad_edit_schematic: 'erc', kicad_edit_pcb: 'drc', kicad_fab_preset: 'drc' }
+const AUTO_CHECK: Readonly<Record<string, 'erc' | 'drc'>> = { kicad_edit_schematic: 'erc', kicad_edit_pcb: 'drc', kicad_update_pcb: 'drc', kicad_fab_preset: 'drc' }
 
 /** Tools whose path arguments must stay inside the workspace. */
 const GUARDED: ReadonlySet<string> = new Set(
@@ -111,7 +111,7 @@ export function apply(ctx: Context, config: Config): void {
       if (!(DESIGN_WRITE_TOOLS as readonly string[]).includes(exec.name)) return next()
       const denied = outsideWorkspace(exec)
       if (denied) return { kind: 'deny', reason: denied }
-      const args = (exec.arguments ?? {}) as { path?: string, operations?: Array<{ op?: string }>, preset?: string, dry_run?: boolean }
+      const args = (exec.arguments ?? {}) as Parameters<typeof describeEdit>[1] & { dry_run?: boolean }
       if (args.dry_run) return next()
       const permissions = sessionPermissions(ctx, exec.agent)
       if (permissions.sandbox === 'read-only') {
@@ -132,8 +132,12 @@ export function apply(ctx: Context, config: Config): void {
       const check = AUTO_CHECK[exec.name]
       if (!check || result.isError || decision.kind !== 'accept') return decision
       const args = exec.arguments as { path?: string, dry_run?: boolean }
-      if (args.dry_run || typeof args.path !== 'string') return decision
-      let path = resolveArg(cwdOf(exec), args.path)
+      if (args.dry_run) return decision
+      // kicad_update_pcb names its board in the result (by default the schematic's name) and has already run
+      // KiCad's DRC with schematic parity: that verdict is appended instead of a second run.
+      const synced = exec.name === 'kicad_update_pcb' ? (result as { value?: { pcb?: string, drc?: CheckReport } }).value : undefined
+      let path = synced ? synced.pcb : typeof args.path === 'string' ? resolveArg(cwdOf(exec), args.path) : undefined
+      if (!path) return decision
       if (exec.name === 'kicad_fab_preset') {
         // The preset may be applied through the .kicad_pro: check the project's board, when there is one and rules changed.
         path = path.replace(/\.kicad_pro$/, '.kicad_pcb')
@@ -148,7 +152,9 @@ export function apply(ctx: Context, config: Config): void {
       let note: string
       try {
         // DRC refills zones itself when the board has any (the file is not changed).
-        const report = await ctx.kicad.call<CheckReport>(check, { path }, exec.signal)
+        const report = synced?.drc
+          ? { ok: true, value: synced.drc, text: '' }
+          : await ctx.kicad.call<CheckReport>(check, { path, ...(synced ? { schematic_parity: true } : {}) }, exec.signal)
         if (report.ok && report.value) {
           memory.remember(path, report.value)
           note = `Automatic ${formatCheck(report.value)}`
@@ -188,13 +194,22 @@ export function apply(ctx: Context, config: Config): void {
 }
 
 /** The audited approval reason plus localized prompt text for one design write. */
-export function describeEdit(tool: string, args: { path?: string, operations?: Array<{ op?: string }>, preset?: string }): Pick<Extract<PreToolDecision, { kind: 'ask' }>, 'reason' | 'displayReason'> {
+export function describeEdit(tool: string, args: { path?: string, operations?: Array<{ op?: string }>, preset?: string, schematic?: string, pcb?: string, delete_removed?: boolean }): Pick<Extract<PreToolDecision, { kind: 'ask' }>, 'reason' | 'displayReason'> {
   const file = args.path ? basename(args.path) : 'a design file'
   if (tool === 'kicad_create_schematic') {
     return { reason: `create ${args.path}`, displayReason: { en: `Create KiCad schematic ${file}`, zh: `创建 KiCad 原理图 ${file}` } }
   }
   if (tool === 'kicad_fab_preset') {
     return { reason: `apply ${args.preset} design rules to ${args.path}`, displayReason: { en: `Apply ${args.preset} design rules to ${file}`, zh: `将 ${args.preset} 设计规则应用到 ${file}` } }
+  }
+  if (tool === 'kicad_update_pcb') {
+    const sch = args.schematic ? basename(args.schematic) : 'the schematic'
+    const board = args.pcb ? basename(args.pcb) : sch.replace(/\.kicad_sch$/, '.kicad_pcb')
+    const removed = args.delete_removed ? { en: ', deleting footprints whose symbol is gone', zh: '，并删除原理图中已不存在的封装' } : { en: '', zh: '' }
+    return {
+      reason: `update ${args.pcb ?? board} from ${args.schematic}${args.delete_removed ? ' (delete_removed)' : ''}`,
+      displayReason: { en: `Update board ${board} from ${sch}${removed.en}`, zh: `根据 ${sch} 更新电路板 ${board}${removed.zh}` },
+    }
   }
   const ops = args.operations ?? []
   const counts = new Map<string, number>()

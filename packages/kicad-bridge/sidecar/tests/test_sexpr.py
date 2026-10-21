@@ -3,7 +3,7 @@ import os
 
 import pytest
 
-from dsh_kicad_sidecar.sexpr import A, L, ParseError, S, dumps, fmt_num, parse
+from dsh_kicad_sidecar.sexpr import A, L, ParseError, S, dumps, fmt_num, kicad_layout, parse, prettify
 
 DEMO_ROOTS = [os.environ.get("KICAD_DEMOS", "/usr/share/kicad/demos"), "/usr/share/kicad/symbols"]
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
@@ -75,3 +75,36 @@ def test_queries():
     assert root.child_value("at", 2) == "90"
     assert [a.value for a in root.atoms()] == ["yes"]
     assert A("x").text() == "x" and S('a"b').text() == '"a\\"b"'
+
+
+def kicad_written_files():
+    """Boards and schematics KiCad itself saved (library files are generator-written, not by KiCad)."""
+    files = sorted(glob.glob(os.path.join(FIXTURES, "**", "*.kicad_pcb"), recursive=True))
+    for ext in ("kicad_pcb", "kicad_sch"):
+        files += sorted(glob.glob(os.path.join(DEMO_ROOTS[0], "**", f"*.{ext}"), recursive=True), key=os.path.getsize)[:6]
+    return files
+
+
+@pytest.mark.parametrize("path", kicad_written_files())
+def test_prettify_reproduces_kicads_writer(path):
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    assert prettify(text) == text.rstrip("\n")
+
+
+def test_prettify_wraps_long_token_lists_and_point_runs():
+    # A token list wraps at the first space past column 72; its ")" then gets a line of its own.
+    pins = L("pins", *(S(str(n)) for n in range(1, 31)))
+    text = prettify(dumps(pins, 3), 3)
+    first, *rest = text.split("\n")
+    assert len(first) > 72 - 3 and all(line.startswith("\t" * 4) for line in rest[:-1]) and rest[-1] == "\t\t\t)"
+    assert prettify(text, 3) == text
+    # (xy …) runs share a line up to column 99.
+    pts = L("pts", *(L("xy", n, n) for n in range(12)))
+    lines = prettify(dumps(pts, 1), 1).split("\n")
+    assert lines[1].startswith("\t\t(xy 0 0) (xy 1 1)") and 99 <= len(lines[1]) < 99 + 12 and lines[2].startswith("\t\t(xy")
+
+
+def test_kicad_layout_is_kept_by_dumps():
+    node = kicad_layout(L("attr", "smd", "board_only", "exclude_from_pos_files", "exclude_from_bom", "allow_missing_courtyard", "dnp"), 2)
+    assert dumps(node, 2) == "(attr smd board_only exclude_from_pos_files exclude_from_bom allow_missing_courtyard\n\t\t\tdnp\n\t\t)"

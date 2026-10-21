@@ -10,7 +10,7 @@ var MAX_LISTED = 60;
 function formatCheck(report) {
   const label = report.kind.toUpperCase();
   const verdict = report.passed ? "PASSED" : "FAILED";
-  const head = `${label} by KiCad ${report.kicad_version ?? ""}`.trim() + `${report.path ? ` on ${report.path}` : ""}: ${verdict} \u2014 ${report.counts.error} error(s), ${report.counts.warning} warning(s)` + (report.unrouted !== void 0 ? `, ${report.unrouted} unrouted` : "") + (report.counts.exclusion ? `, ${report.counts.exclusion} excluded` : "") + (report.schematic_parity_error ? `
+  const head = `${label} by KiCad ${report.kicad_version ?? ""}`.trim() + `${report.path ? ` on ${report.path}` : ""}: ${verdict} \u2014 ${report.counts.error} error(s), ${report.counts.warning} warning(s)` + (report.unrouted !== void 0 ? `, ${report.unrouted} unrouted` : "") + (report.parity !== void 0 ? `, ${report.parity} schematic parity issue(s)` : "") + (report.counts.exclusion ? `, ${report.counts.exclusion} excluded` : "") + (report.schematic_parity_error ? `
 Schematic parity was NOT checked: ${report.schematic_parity_error}` : "");
   const active = report.violations.filter((v) => !v.excluded);
   if (active.length === 0)
@@ -48,9 +48,10 @@ var TOOL_ACCESS = {
   kicad_create_schematic: "write",
   kicad_edit_schematic: "write",
   kicad_read_pcb: "read",
-  kicad_edit_pcb: "write"
+  kicad_edit_pcb: "write",
+  kicad_update_pcb: "write"
 };
-var DESIGN_WRITE_TOOLS = ["kicad_create_schematic", "kicad_edit_schematic", "kicad_edit_pcb", "kicad_fab_preset"];
+var DESIGN_WRITE_TOOLS = ["kicad_create_schematic", "kicad_edit_schematic", "kicad_edit_pcb", "kicad_update_pcb", "kicad_fab_preset"];
 var PATH_ARGUMENTS = {
   kicad_doctor: [],
   kicad_read_schematic: ["path"],
@@ -69,7 +70,8 @@ var PATH_ARGUMENTS = {
   kicad_create_schematic: ["path"],
   kicad_edit_schematic: ["path"],
   kicad_read_pcb: ["path"],
-  kicad_edit_pcb: ["path"]
+  kicad_edit_pcb: ["path"],
+  kicad_update_pcb: ["schematic", "pcb"]
 };
 
 // packages/kicad-policy/src/dsh.ts
@@ -219,13 +221,13 @@ var GUIDANCE = `# KiCad (EDA) work
 - Draw the circuit with wires: connect parts that work together with connect_pins (it routes around parts and other nets). Use power symbols for supply rails and net labels only between blocks or across the page, not for two parts side by side. Place parts so the pins you will wire face each other.
 - Fix mistakes with disconnect_pin / remove_item / move_symbol. Never rebuild or rewrite a schematic file to change its layout.
 - Organise a schematic by function: one titled frame per block (add_block / move_block), parts inside a block wired together, blocks connected only through net labels and power symbols, never through wires that cross a frame.
-- Boards: read with kicad_read_pcb (outline, footprints with courtyards and pad nets, rules, unrouted count), then change them with one kicad_edit_pcb batch: outline and mounting holes, placement, rules and net classes, tracks (route pad to pad with "REF:PAD" endpoints), vias, zones, keepouts, silkscreen.
+- Boards: create or refresh the board from the schematic with kicad_update_pcb (after ERC passes, and after every schematic change; it lists the REF:PINs to fix when it refuses), read with kicad_read_pcb (outline, footprints with courtyards and pad nets, rules, unrouted count), then change them with one kicad_edit_pcb batch: outline and mounting holes, placement, rules and net classes, tracks (route pad to pad with "REF:PAD" endpoints), vias, zones, keepouts, silkscreen.
 - To order a board: kicad_export_fab writes Gerber, drill, position and BOM files in one zip, and refuses while KiCad reports DRC errors, unrouted connections or schematic parity issues; pass force only when the user explicitly asks. kicad_fab_preset makes a fab house's limits (JLCPCB, PCBWay) the project's design rules.
 - KiCad decides correctness: after edits read the ERC/DRC verdict appended to the result (or run kicad_erc / kicad_drc). Do not declare a design correct while KiCad reports errors or unrouted connections.
 - Coordinates are millimetres, Y grows downward, on the 1.27 mm grid.
 - If a kicad_* tool fails because KiCad or Python is missing or too old, run kicad_doctor and give the user its fix. Do not install software yourself; the user installs KiCad (the doctor panel's Install button or /kicad-install).`;
 var isKiCadTool = (name2) => Object.hasOwn(TOOL_ACCESS, name2);
-var AUTO_CHECK = { kicad_edit_schematic: "erc", kicad_edit_pcb: "drc", kicad_fab_preset: "drc" };
+var AUTO_CHECK = { kicad_edit_schematic: "erc", kicad_edit_pcb: "drc", kicad_update_pcb: "drc", kicad_fab_preset: "drc" };
 var GUARDED = new Set(
   Object.keys(TOOL_ACCESS).filter((n) => TOOL_ACCESS[n] === "write" || n === "kicad_render")
 );
@@ -270,8 +272,10 @@ function apply(ctx, config) {
       const check = AUTO_CHECK[exec.name];
       if (!check || result.isError || decision.kind !== "accept") return decision;
       const args = exec.arguments;
-      if (args.dry_run || typeof args.path !== "string") return decision;
-      let path = resolveArg(cwdOf(exec), args.path);
+      if (args.dry_run) return decision;
+      const synced = exec.name === "kicad_update_pcb" ? result.value : void 0;
+      let path = synced ? synced.pcb : typeof args.path === "string" ? resolveArg(cwdOf(exec), args.path) : void 0;
+      if (!path) return decision;
       if (exec.name === "kicad_fab_preset") {
         path = path.replace(/\.kicad_pro$/, ".kicad_pcb");
         if (result.value?.written === false || !existsSync(path)) return decision;
@@ -283,7 +287,7 @@ function apply(ctx, config) {
       const label = check.toUpperCase();
       let note;
       try {
-        const report = await ctx.kicad.call(check, { path }, exec.signal);
+        const report = synced?.drc ? { ok: true, value: synced.drc, text: "" } : await ctx.kicad.call(check, { path, ...synced ? { schematic_parity: true } : {} }, exec.signal);
         if (report.ok && report.value) {
           memory.remember(path, report.value);
           note = `Automatic ${formatCheck(report.value)}`;
@@ -326,6 +330,15 @@ function describeEdit(tool, args) {
   }
   if (tool === "kicad_fab_preset") {
     return { reason: `apply ${args.preset} design rules to ${args.path}`, displayReason: { en: `Apply ${args.preset} design rules to ${file}`, zh: `\u5C06 ${args.preset} \u8BBE\u8BA1\u89C4\u5219\u5E94\u7528\u5230 ${file}` } };
+  }
+  if (tool === "kicad_update_pcb") {
+    const sch = args.schematic ? basename(args.schematic) : "the schematic";
+    const board = args.pcb ? basename(args.pcb) : sch.replace(/\.kicad_sch$/, ".kicad_pcb");
+    const removed = args.delete_removed ? { en: ", deleting footprints whose symbol is gone", zh: "\uFF0C\u5E76\u5220\u9664\u539F\u7406\u56FE\u4E2D\u5DF2\u4E0D\u5B58\u5728\u7684\u5C01\u88C5" } : { en: "", zh: "" };
+    return {
+      reason: `update ${args.pcb ?? board} from ${args.schematic}${args.delete_removed ? " (delete_removed)" : ""}`,
+      displayReason: { en: `Update board ${board} from ${sch}${removed.en}`, zh: `\u6839\u636E ${sch} \u66F4\u65B0\u7535\u8DEF\u677F ${board}${removed.zh}` }
+    };
   }
   const ops = args.operations ?? [];
   const counts = /* @__PURE__ */ new Map();

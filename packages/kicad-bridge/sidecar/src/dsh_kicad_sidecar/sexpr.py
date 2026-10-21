@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Iterator, Union
 
 __all__ = [
-    "Atom", "SList", "Node", "ParseError", "parse", "dumps", "L", "S", "A", "num", "fmt_num",
+    "Atom", "SList", "Node", "ParseError", "parse", "dumps", "prettify", "kicad_layout", "L", "S", "A", "num", "fmt_num",
 ]
 
 
@@ -242,6 +242,92 @@ def _dump(node: Node, depth: int) -> str:
     parts.append(tail)
     parts.append(")")
     return "".join(parts)
+
+
+_XY_COLUMN_LIMIT = 99   # runs of (xy …) stay on one line up to this column
+_TOKEN_WRAP_COLUMN = 72  # a space between tokens past this column becomes a newline
+
+
+def prettify(text: str, depth: int = 0) -> str:
+    """Lay out S-expression text exactly as KiCad's writer does (``Prettify`` in KiCad's
+    ``common/io/kicad/kicad_io_utils.cpp``, normal saves): every sub-list on its own line, tab-indented,
+    runs of ``(xy …)`` sharing a line up to column 99, and a token list wrapped at its first space past
+    column 72 (its ``)`` then gets a line of its own). Tabs count as one column.
+
+    ``depth`` is the nesting level the text's first list will sit at, so a node built for insertion is laid
+    out the way KiCad writes it when it saves the whole file. :func:`dumps` alone keeps long token lists on
+    one line, which KiCad would rewrap on its next save.
+    """
+    out: list[str] = []
+    n = len(text)
+    list_depth, column = depth, depth
+    last = ""
+    first = True
+    in_quote = in_xy = multi_line = inserted_space = False
+    backslashes = 0
+    i = 0
+    while i < n:
+        ch = text[i]
+        if ch in _WS and not in_quote:
+            j = i
+            while j < n and text[j] in _WS:
+                j += 1
+            nxt = text[j] if j < n else ""
+            if not inserted_space and list_depth > 0 and last != "(" and nxt not in (")", "("):
+                if in_xy or column < _TOKEN_WRAP_COLUMN:
+                    out.append(" ")
+                    column += 1
+                else:
+                    out.append("\n" + "\t" * list_depth)
+                    column = list_depth
+                    multi_line = True
+                inserted_space = True
+            i += 1
+            continue
+        inserted_space = False
+        if ch == "(" and not in_quote:
+            is_xy = text.startswith("(xy ", i)
+            if first:
+                out.append("(")
+                column += 1
+            elif in_xy and is_xy and column < _XY_COLUMN_LIMIT:
+                out.append(" (")
+                column += 2
+            else:
+                out.append("\n" + "\t" * list_depth + "(")
+                column = list_depth + 1
+            first = False
+            in_xy = is_xy
+            list_depth += 1
+        elif ch == ")" and not in_quote:
+            list_depth = max(list_depth - 1, 0)
+            if last == ")" or multi_line:
+                out.append("\n" + "\t" * list_depth + ")")
+                column = list_depth + 1
+                multi_line = False
+            else:
+                out.append(")")
+                column += 1
+        else:
+            # KiCad escapes quotes as \" ; an odd run of backslashes before a quote escapes it.
+            if ch == "\\":
+                backslashes += 1
+            elif ch == '"' and backslashes % 2 == 0:
+                in_quote = not in_quote
+            if ch != "\\":
+                backslashes = 0
+            out.append(ch)
+            column += 1
+        last = ch
+        i += 1
+    return "".join(out)
+
+
+def kicad_layout(node: SList, depth: int) -> SList:
+    """A copy of ``node`` whose whitespace is what KiCad writes for a list at nesting ``depth`` (see
+    :func:`prettify`). Insert it where KiCad would keep it; the copy carries its layout, so :func:`dumps`
+    reproduces KiCad's text byte for byte."""
+    return parse(prettify(_dump(node, depth), depth)).root
 
 
 # ---- construction helpers ------------------------------------------------------------

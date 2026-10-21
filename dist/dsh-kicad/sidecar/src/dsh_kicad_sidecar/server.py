@@ -82,7 +82,7 @@ class Server:
         elif method == "tools/list":
             self.reply(msg_id, {"tools": [
                 {"name": s.name, "description": s.description, "inputSchema": s.schema,
-                 "annotations": {"readOnlyHint": not s.writes, "destructiveHint": s.name in ("edit_schematic", "edit_pcb")}}
+                 "annotations": {"readOnlyHint": not s.writes, "destructiveHint": s.name in ("edit_schematic", "edit_pcb", "update_pcb")}}
                 for s in TOOL_SPECS
             ]})
         elif method == "tools/call":

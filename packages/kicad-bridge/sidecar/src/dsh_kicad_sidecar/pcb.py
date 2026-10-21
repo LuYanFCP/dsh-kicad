@@ -26,7 +26,7 @@ import uuid as uuidlib
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from .sexpr import Atom, Document, SList, L, S, dumps, parse
+from .sexpr import Atom, Document, SList, L, S, dumps, kicad_layout, parse
 from .symbols import clone
 
 __all__ = ["Board", "Footprint", "PcbError", "OPERATIONS", "RULE_KEYS"]
@@ -483,9 +483,17 @@ class Board:
         return [dest for dest, _ in files]
 
     def insert_item(self, node: SList) -> SList:
-        """Insert a top-level item where KiCad keeps items of its kind."""
+        """Insert a top-level item where KiCad keeps items of its kind. Footprints go where KiCad saves them
+        (front side first, then by uuid), so a later save in KiCad does not move them."""
         rank = _RANK.get(node.head or "", 11)
         items = self.root.items
+        if node.head == "footprint" and _uuid(node):
+            key = _footprint_order(node)
+            after = next((i for i, item in enumerate(items) if isinstance(item, SList) and item.head == "footprint"
+                          and _footprint_order(item) > key), None)
+            if after is not None:
+                self.root.insert(after, node)
+                return node
         last_same = first_after = None
         for i, item in enumerate(items):
             if not isinstance(item, SList):
@@ -561,6 +569,55 @@ class Board:
             self.insert_item(L("net", code, S(name)))
             self.changes.append(f"declared net {name}")
         return name
+
+    def rename_net(self, old: str, new: str) -> int:
+        """Rename net ``old`` to ``new`` on every pad, track, arc, via and zone, and in the net table of
+        numbered-net files. If ``new`` already exists the two nets merge. Returns the number of items changed."""
+        if not old or not new:
+            raise PcbError("rename_net needs two net names")
+        if old == new:
+            return 0
+        changed = 0
+        if any(True for _ in self.root.lists("net")):
+            table = {int(_f(n.value(0))): n for n in self.root.lists("net")}
+            old_code = next((c for c, n in table.items() if n.value(1) == old), None)
+            new_code = next((c for c, n in table.items() if n.value(1) == new), None)
+            if old_code is None:
+                return 0
+            if new_code is None:
+                table[old_code].set_atoms(old_code, S(new))  # tracks keep pointing at the code
+                code = old_code
+            else:
+                self.root.remove(table[old_code])
+                code = new_code
+            for item in self._net_items():
+                net = item.find("net")
+                atoms = net.atoms() if net is not None else []
+                if not atoms or int(_f(atoms[0].value, -1)) != old_code:
+                    continue
+                if item.head == "pad":
+                    net.set_atoms(code, S(new))
+                elif code != old_code:
+                    net.set_atoms(code)
+                name = item.find("net_name")
+                if name is not None:
+                    name.set_atoms(S(new))
+                changed += 1
+        else:
+            for item in self._net_items():
+                if _net_name_of(item) == old:
+                    item.find("net").set_atoms(S(new))
+                    changed += 1
+        self.changes.append(f"renamed net {old} to {new} ({changed} item(s))")
+        return changed
+
+    def _net_items(self):
+        """Every item that carries a net: pads, tracks, arcs, vias and zones."""
+        for item in self.root.lists():
+            if item.head == "footprint":
+                yield from item.lists("pad")
+            elif item.head in TRACKS or item.head == "zone":
+                yield item
 
     def net_code(self, name: str) -> int:
         for code, net in self._net_codes().items():
@@ -887,6 +944,8 @@ class Board:
             chosen = candidates[-1]
             node = _mounting_hole_node(drill, plated)
         fp = self.add_footprint(node, reference, float(x), float(y), value="MountingHole", lib_id=chosen)
+        # No symbol stands behind a hole added here: board_only keeps schematic parity (and sync) from calling it extra.
+        set_attr_flags(fp.node, {"board_only": True})
         self.changes.append(f"added mounting hole {reference} ({chosen}) at ({_mm(float(x))}, {_mm(float(y))})")
         return {"reference": reference, "footprint": chosen, "uuid": fp.uuid}
 
@@ -1328,6 +1387,50 @@ def _pair(value: Any, what: str) -> tuple[float, float]:
 
 def _pad_on_layer(layers: list[str], layer: str) -> bool:
     return any(l == layer or l in ("*.Cu", "F&B.Cu") for l in layers)
+
+
+# Footprint (attr …) flags in the order KiCad writes them.
+ATTR_ORDER = ("smd", "through_hole", "board_only", "exclude_from_pos_files", "exclude_from_bom",
+              "allow_missing_courtyard", "dnp", "allow_soldermask_bridges")
+
+
+def attr_flags(footprint: SList) -> list[str]:
+    attr = footprint.find("attr")
+    return [a.value for a in attr.atoms()] if attr is not None else []
+
+
+def set_attr_flags(footprint: SList, flags: dict[str, bool]) -> bool:
+    """Set (True) or clear (False) footprint attribute flags, keeping KiCad's order. Returns whether it changed."""
+    have = attr_flags(footprint)
+    want = [f for f in have if flags.get(f, True)] + [f for f, on in flags.items() if on and f not in have]
+    want.sort(key=lambda f: ATTR_ORDER.index(f) if f in ATTR_ORDER else len(ATTR_ORDER))
+    if want == have:
+        return False
+    attr = footprint.find("attr")
+    if attr is None:
+        # KiCad writes (attr …) after the symbol link (path, sheetname, sheetfile, units), before the graphics.
+        anchor = next((i for i, item in enumerate(footprint.items) if isinstance(item, SList) and (
+            item.head in ("duplicate_pad_numbers_are_jumpers", "net_tie_pad_groups", "jumper_pad_groups", "pad", "model",
+                          "group", "embedded_fonts", "embedded_files", "zone") or (item.head or "").startswith("fp_"))),
+                      len(footprint.items))
+        if want:
+            footprint.insert(anchor, L("attr", *want))
+    elif want:
+        footprint.items[footprint.index_of(attr)] = kicad_layout(L("attr", *want), _depth_of_attr(footprint, attr))
+    else:
+        footprint.remove(attr)
+    return True
+
+
+def _depth_of_attr(footprint: SList, attr: SList) -> int:
+    """Nesting depth of a footprint's (attr) from its indentation (2 on a board, 1 in a .kicad_mod)."""
+    ws = footprint.ws[footprint.index_of(attr)] or ""
+    return ws.count("\t") if "\n" in ws else 2
+
+
+def _footprint_order(node: SList) -> tuple[int, str]:
+    """KiCad's save order of footprints (BOARD_ITEM::ptr_cmp): by layer (front before back), then by uuid."""
+    return (1 if node.child_value("layer") == "B.Cu" else 0), _uuid(node) or ""
 
 
 def _pad_net_index(pad: SList) -> int:
