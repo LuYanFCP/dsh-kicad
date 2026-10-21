@@ -9,6 +9,11 @@ describe('launchSpec', () => {
     expect(spec.env.PYTHONDONTWRITEBYTECODE).toBe('1')
   })
 
+  it('passes the Java and Freerouting settings to the sidecar', () => {
+    const spec = launchSpec({ launcher: 'python', executable: 'python3', sidecarDir: '/x', java: '/opt/jdk/bin/java', freerouting: '/opt/freerouting-2.5.0.jar', platform: 'linux' })
+    expect(spec.argv).toEqual(['python3', '-m', 'dsh_kicad_sidecar', '--java', '/opt/jdk/bin/java', '--freerouting', '/opt/freerouting-2.5.0.jar'])
+  })
+
   it('runs through uv with extras', () => {
     const spec = launchSpec({ launcher: 'uv', executable: 'uv', sidecarDir: '/x/sidecar', extras: ['png', 'ipc'] })
     expect(spec.argv).toEqual(['uv', 'run', '--quiet', '--project', '/x/sidecar', '--extra', 'png', '--extra', 'ipc', 'python', '-m', 'dsh_kicad_sidecar'])

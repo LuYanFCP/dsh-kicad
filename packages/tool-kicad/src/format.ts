@@ -57,6 +57,33 @@ export interface SyncValue {
   drc?: CheckReport
 }
 
+/** What kicad_autoroute returns (the sidecar's autoroute tool). */
+export interface AutorouteValue {
+  pcb: string
+  written: boolean
+  files: string[]
+  nets: { routed: number, left_out: string[], changed: string[] }
+  added: { segments: number, vias: number, length_mm: number }
+  /** Tracks and vias already on the board, handed to the router as fixed wiring. */
+  kept: { tracks: number, vias: number }
+  zones_filled: boolean
+  freerouting: {
+    version: string | null
+    state: string | null
+    passes: number
+    optimizer_passes: number
+    unrouted_before: number | null
+    unrouted: number | null
+    seconds: number
+    timed_out: boolean
+    command: string
+    files: string
+  }
+  unrouted: number
+  drc: CheckReport
+  notes: string[]
+}
+
 export interface BoardFootprint {
   reference: string
   value: string
@@ -149,6 +176,24 @@ export function formatSync(v: SyncValue): string {
       ? 'Schematic parity (KiCad DRC): 0 issues.'
       : `Schematic parity (KiCad DRC): ${v.parity.total} issue(s) (${types}).${extra} Details: kicad_drc with schematic_parity.`)
   }
+  return lines.join('\n')
+}
+
+/** The routing run as the model reads it; KiCad's DRC verdict follows (the policy appends it, or kicad_drc). */
+export function formatAutoroute(v: AutorouteValue): string {
+  const fr = v.freerouting
+  const router = fr.version ? `Freerouting ${fr.version}` : 'Freerouting'
+  const lines = [v.written
+    ? `Routed ${v.pcb} with ${router} in ${fr.seconds} s: +${v.added.segments} track segment(s), +${v.added.vias} via(s), ${round(v.added.length_mm)} mm on ${v.nets.changed.length} net(s).`
+    : `${router} found nothing to add on ${v.pcb} (${fr.seconds} s); the board was not changed.`]
+  lines.push(`Router: ${fr.state ?? 'finished'} after ${fr.passes} routing pass(es)${fr.optimizer_passes ? ` and ${fr.optimizer_passes} optimizer pass(es)` : ''}`
+    + (fr.unrouted_before !== null ? `, ${fr.unrouted_before} → ${fr.unrouted ?? '?'} unrouted by its count` : '') + '.')
+  if (v.kept.tracks || v.kept.vias) lines.push(`Kept as fixed wiring: ${v.kept.tracks} track(s), ${v.kept.vias} via(s) already on the board.`)
+  if (v.nets.left_out.length) lines.push(`Not routed (nets / exclude_nets): ${v.nets.left_out.join(', ')}.`)
+  if (v.zones_filled) lines.push('Copper zones refilled and saved by KiCad.')
+  lines.push(`KiCad: ${v.unrouted} unrouted connection(s), ${v.drc.counts.error} DRC error(s).`)
+  lines.push(...v.notes)
+  lines.push(`Design, session and router log: ${fr.files}`)
   return lines.join('\n')
 }
 

@@ -157,7 +157,13 @@ function defaultPython(platform = process.platform) {
   return platform === "win32" ? "python" : "python3";
 }
 function launchSpec(options) {
-  const tail = ["-m", "dsh_kicad_sidecar", ...options.kicadCli ? ["--kicad-cli", options.kicadCli] : []];
+  const tail = [
+    "-m",
+    "dsh_kicad_sidecar",
+    ...options.kicadCli ? ["--kicad-cli", options.kicadCli] : [],
+    ...options.java ? ["--java", options.java] : [],
+    ...options.freerouting ? ["--freerouting", options.freerouting] : []
+  ];
   const env = { PYTHONUTF8: "1", PYTHONUNBUFFERED: "1", PYTHONDONTWRITEBYTECODE: "1" };
   if (options.launcher === "uv") {
     const extras = (options.extras ?? []).flatMap((extra) => ["--extra", extra]);
@@ -187,6 +193,7 @@ var McpClient = class {
   }
   nextId = 1;
   pending = /* @__PURE__ */ new Map();
+  progress = /* @__PURE__ */ new Map();
   buffer = "";
   closedError;
   /** Perform the MCP handshake and return the server info. */
@@ -203,20 +210,28 @@ var McpClient = class {
     const result = await this.request("tools/list", {}, signal);
     return result.tools;
   }
-  async callTool(name, args, signal) {
-    return await this.request("tools/call", { name, arguments: args }, signal);
+  async callTool(name, args, signal, options = {}) {
+    const token = options.onProgress ? `p${this.nextId}` : void 0;
+    if (token) this.progress.set(token, options.onProgress);
+    try {
+      const params = { name, arguments: args, ...token ? { _meta: { progressToken: token } } : {} };
+      return await this.request("tools/call", params, signal, options.timeoutMs);
+    } finally {
+      if (token) this.progress.delete(token);
+    }
   }
   notify(method, params) {
     this.write({ jsonrpc: "2.0", method, ...params === void 0 ? {} : { params } });
   }
-  request(method, params, signal) {
+  request(method, params, signal, timeoutMs = this.timeoutMs) {
     if (this.closedError) return Promise.reject(this.closedError);
     if (signal?.aborted) return Promise.reject(signal.reason ?? new RpcError("aborted"));
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.settle(id)?.reject(new RpcError(`sidecar did not answer ${method} within ${this.timeoutMs} ms`));
-      }, this.timeoutMs);
+        this.notify("notifications/cancelled", { requestId: id, reason: "timeout" });
+        this.settle(id)?.reject(new RpcError(`sidecar did not answer ${method} within ${timeoutMs} ms`));
+      }, timeoutMs);
       const onAbort = () => {
         this.notify("notifications/cancelled", { requestId: id, reason: "aborted" });
         this.settle(id)?.reject(signal?.reason instanceof Error ? signal.reason : new RpcError("aborted"));
@@ -272,6 +287,11 @@ var McpClient = class {
     } catch {
       return;
     }
+    if (message.method === "notifications/progress") {
+      const { progressToken, ...progress } = message.params ?? {};
+      if (progressToken !== void 0) this.progress.get(String(progressToken))?.(progress);
+      return;
+    }
     if (typeof message.id !== "number") return;
     const entry = this.settle(message.id);
     if (!entry) return;
@@ -287,6 +307,8 @@ var Config = default2.object({
   uv: default2.string().default("uv").description("uv executable for the uv launcher."),
   uvExtras: default2.array(default2.string()).default([]).description("Sidecar extras for the uv launcher: png, ipc."),
   kicadCli: default2.string().volatile().description("kicad-cli path; empty searches $KICAD_CLI, PATH and standard locations."),
+  java: default2.string().volatile().description("Java for the Freerouting autorouter; empty searches $JAVA_HOME and PATH."),
+  freerouting: default2.string().volatile().description("freerouting.jar for the autorouter; empty uses $FREEROUTING_JAR or the jar /kicad-install freerouting downloaded."),
   requestTimeoutMs: default2.natural().default(3e5).description("Timeout for one sidecar request, in milliseconds."),
   sidecarDir: default2.string().description("Sidecar directory override (development only).")
 });
@@ -338,10 +360,16 @@ var KiCadBridge = class extends Service {
   async install(optionId, signal) {
     if (this.installer.job?.state === "running") throw new Error(`an installation is already running (${this.installer.job.label})`);
     const report = await this.doctor(signal);
-    if (report.status === "ok") throw new Error(`KiCad ${report.kicad.version} is already installed and usable; nothing to install.`);
-    const option = report.install.find((o) => o.id === optionId);
+    const optional = report.checks.flatMap((c) => c.install ?? []);
+    const option = optional.find((o) => o.id === optionId) ?? (report.status === "ok" ? void 0 : report.install.find((o) => o.id === optionId));
     if (!option) {
-      const known = report.install.map((o) => o.id).join(", ");
+      const check = report.checks.find((c) => c.id === optionId && c.status === "ok");
+      if (check) throw new Error(`${check.label}: ${check.summary} Nothing to install.`);
+      if (report.status === "ok") {
+        const others = optional.length ? ` Optional components: ${optional.map((o) => o.id).join(", ")}.` : "";
+        throw new Error(`KiCad ${report.kicad.version} is already installed and usable; nothing to install.${others}`);
+      }
+      const known = [...report.install, ...optional].map((o) => o.id).join(", ");
       throw new Error(known ? `unknown install option "${optionId}"; choose one of: ${known}` : `no install options: ${report.summary}`);
     }
     return this.installer.start(option);
@@ -349,15 +377,18 @@ var KiCadBridge = class extends Service {
   pythonCommand() {
     return this.config.launcher === "uv" ? this.config.uv : this.config.python.get() || defaultPython();
   }
-  /** Call one sidecar tool (see the sidecar catalog for names and arguments). */
-  async call(tool, args, signal) {
+  /**
+   * Call one sidecar tool (see the sidecar catalog for names and arguments). Aborting `signal` cancels the call in
+   * the sidecar too (MCP `notifications/cancelled`); `options` sets a longer timeout and receives progress.
+   */
+  async call(tool, args, signal, options) {
     const { client } = await this.ensure(signal);
-    const result = await client.callTool(tool, args, signal);
+    const result = await client.callTool(tool, args, signal, options);
     return toResult(result);
   }
   /** Like {@link call} but throws on a domain error. */
-  async run(tool, args, signal) {
-    const result = await this.call(tool, args, signal);
+  async run(tool, args, signal, options) {
+    const result = await this.call(tool, args, signal, options);
     if (!result.ok) throw new Error(result.text);
     return result.value;
   }
@@ -382,7 +413,7 @@ var KiCadBridge = class extends Service {
     }
   }
   launchKey() {
-    return JSON.stringify([this.config.launcher, this.config.python.get(), this.config.kicadCli.get()]);
+    return JSON.stringify([this.config.launcher, this.config.python.get(), this.config.kicadCli.get(), this.config.java.get(), this.config.freerouting.get()]);
   }
   async ensure(signal) {
     if (this.running) {
@@ -410,6 +441,8 @@ var KiCadBridge = class extends Service {
       executable,
       sidecarDir: this.sidecarDir,
       kicadCli: this.config.kicadCli.get() || void 0,
+      java: this.config.java.get() || void 0,
+      freerouting: this.config.freerouting.get() || void 0,
       extras: this.config.uvExtras
     });
     const handle = subprocess.spawn({

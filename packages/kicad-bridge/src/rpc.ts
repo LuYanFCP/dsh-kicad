@@ -18,6 +18,20 @@ export interface ToolInfo {
   annotations?: { readOnlyHint?: boolean, destructiveHint?: boolean }
 }
 
+/** One MCP `notifications/progress` from a long call (autoroute: one per routing pass). */
+export interface Progress {
+  progress: number
+  total?: number
+  message?: string
+}
+
+export interface CallOptions {
+  /** Upper bound for this call instead of the client's default. */
+  timeoutMs?: number
+  /** Receives the call's progress notifications. */
+  onProgress?: (progress: Progress) => void
+}
+
 export class RpcError extends Error {
   constructor(message: string, readonly code?: number) {
     super(message)
@@ -34,6 +48,7 @@ interface Pending {
 export class McpClient {
   private nextId = 1
   private readonly pending = new Map<number, Pending>()
+  private readonly progress = new Map<string, (progress: Progress) => void>()
   private buffer = ''
   private closedError: Error | undefined
 
@@ -60,22 +75,31 @@ export class McpClient {
     return result.tools
   }
 
-  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<ToolCallResult> {
-    return await this.request('tools/call', { name, arguments: args }, signal) as ToolCallResult
+  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal, options: CallOptions = {}): Promise<ToolCallResult> {
+    const token = options.onProgress ? `p${this.nextId}` : undefined
+    if (token) this.progress.set(token, options.onProgress!)
+    try {
+      const params = { name, arguments: args, ...(token ? { _meta: { progressToken: token } } : {}) }
+      return await this.request('tools/call', params, signal, options.timeoutMs) as ToolCallResult
+    } finally {
+      if (token) this.progress.delete(token)
+    }
   }
 
   notify(method: string, params?: unknown): void {
     this.write({ jsonrpc: '2.0', method, ...(params === undefined ? {} : { params }) })
   }
 
-  request(method: string, params: unknown, signal?: AbortSignal): Promise<unknown> {
+  request(method: string, params: unknown, signal?: AbortSignal, timeoutMs = this.timeoutMs): Promise<unknown> {
     if (this.closedError) return Promise.reject(this.closedError)
     if (signal?.aborted) return Promise.reject(signal.reason ?? new RpcError('aborted'))
     const id = this.nextId++
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.settle(id)?.reject(new RpcError(`sidecar did not answer ${method} within ${this.timeoutMs} ms`))
-      }, this.timeoutMs)
+        // Tell the sidecar too, so a long call (autoroute) stops instead of running on unseen.
+        this.notify('notifications/cancelled', { requestId: id, reason: 'timeout' })
+        this.settle(id)?.reject(new RpcError(`sidecar did not answer ${method} within ${timeoutMs} ms`))
+      }, timeoutMs)
       const onAbort = (): void => {
         this.notify('notifications/cancelled', { requestId: id, reason: 'aborted' })
         this.settle(id)?.reject(signal?.reason instanceof Error ? signal.reason : new RpcError('aborted'))
@@ -131,11 +155,16 @@ export class McpClient {
   }
 
   private onMessage(line: string): void {
-    let message: { id?: number, result?: unknown, error?: { code: number, message: string } }
+    let message: { id?: number, method?: string, params?: unknown, result?: unknown, error?: { code: number, message: string } }
     try {
       message = JSON.parse(line)
     } catch {
       return // stray non-protocol output; the sidecar logs to stderr
+    }
+    if (message.method === 'notifications/progress') {
+      const { progressToken, ...progress } = (message.params ?? {}) as Progress & { progressToken?: string }
+      if (progressToken !== undefined) this.progress.get(String(progressToken))?.(progress)
+      return
     }
     if (typeof message.id !== 'number') return
     const entry = this.settle(message.id)

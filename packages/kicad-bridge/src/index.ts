@@ -7,10 +7,10 @@ import { fileURLToPath } from 'node:url'
 import { Service, z, type Context, type SubprocessHandle, type SubprocessRuntime, type Volatile } from './dsh.ts'
 import { Installer, needsElevation, unavailableReport, type DoctorCheck, type DoctorReport, type InstallJob, type InstallOption } from './doctor.ts'
 import { launchSpec, defaultPython, type LauncherKind } from './launcher.ts'
-import { McpClient, RpcError, type ToolCallResult, type ToolInfo } from './rpc.ts'
+import { McpClient, RpcError, type CallOptions, type Progress, type ToolCallResult, type ToolInfo } from './rpc.ts'
 
 export { Installer, McpClient, RpcError, launchSpec, defaultPython, needsElevation, unavailableReport }
-export type { DoctorCheck, DoctorReport, InstallJob, InstallOption, ToolCallResult, ToolInfo, LauncherKind }
+export type { CallOptions, DoctorCheck, DoctorReport, InstallJob, InstallOption, Progress, ToolCallResult, ToolInfo, LauncherKind }
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -29,6 +29,10 @@ export interface Config {
   uvExtras: string[]
   /** kicad-cli executable; empty uses $KICAD_CLI, PATH, and standard install locations. */
   kicadCli: Volatile<string | undefined>
+  /** Java for Freerouting (kicad_autoroute); empty uses $JAVA_HOME, then PATH. */
+  java: Volatile<string | undefined>
+  /** freerouting.jar (or a freerouting executable); empty uses $FREEROUTING_JAR, then the jar /kicad-install freerouting downloaded. */
+  freerouting: Volatile<string | undefined>
   /** Upper bound for one sidecar request. */
   requestTimeoutMs: number
   /** Override the sidecar directory (development). */
@@ -41,6 +45,8 @@ export const Config: z<Config> = z.object({
   uv: z.string().default('uv').description('uv executable for the uv launcher.'),
   uvExtras: z.array(z.string()).default([]).description('Sidecar extras for the uv launcher: png, ipc.'),
   kicadCli: z.string().volatile().description('kicad-cli path; empty searches $KICAD_CLI, PATH and standard locations.'),
+  java: z.string().volatile().description('Java for the Freerouting autorouter; empty searches $JAVA_HOME and PATH.'),
+  freerouting: z.string().volatile().description('freerouting.jar for the autorouter; empty uses $FREEROUTING_JAR or the jar /kicad-install freerouting downloaded.'),
   requestTimeoutMs: z.natural().default(300_000).description('Timeout for one sidecar request, in milliseconds.'),
   sidecarDir: z.string().description('Sidecar directory override (development only).'),
 }) as unknown as z<Config>
@@ -109,10 +115,17 @@ export class KiCadBridge extends Service {
   async install(optionId: string, signal?: AbortSignal): Promise<InstallJob> {
     if (this.installer.job?.state === 'running') throw new Error(`an installation is already running (${this.installer.job.label})`)
     const report = await this.doctor(signal)
-    if (report.status === 'ok') throw new Error(`KiCad ${report.kicad.version} is already installed and usable; nothing to install.`)
-    const option = report.install.find(o => o.id === optionId)
+    // Optional components (Freerouting, Java) carry their plans on their checks; KiCad's own are report.install.
+    const optional = report.checks.flatMap(c => c.install ?? [])
+    const option = optional.find(o => o.id === optionId) ?? (report.status === 'ok' ? undefined : report.install.find(o => o.id === optionId))
     if (!option) {
-      const known = report.install.map(o => o.id).join(', ')
+      const check = report.checks.find(c => c.id === optionId && c.status === 'ok')
+      if (check) throw new Error(`${check.label}: ${check.summary} Nothing to install.`)
+      if (report.status === 'ok') {
+        const others = optional.length ? ` Optional components: ${optional.map(o => o.id).join(', ')}.` : ''
+        throw new Error(`KiCad ${report.kicad.version} is already installed and usable; nothing to install.${others}`)
+      }
+      const known = [...report.install, ...optional].map(o => o.id).join(', ')
       throw new Error(known ? `unknown install option "${optionId}"; choose one of: ${known}` : `no install options: ${report.summary}`)
     }
     return this.installer.start(option)
@@ -122,16 +135,19 @@ export class KiCadBridge extends Service {
     return this.config.launcher === 'uv' ? this.config.uv : (this.config.python.get() || defaultPython())
   }
 
-  /** Call one sidecar tool (see the sidecar catalog for names and arguments). */
-  async call<T = unknown>(tool: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<KiCadResult<T>> {
+  /**
+   * Call one sidecar tool (see the sidecar catalog for names and arguments). Aborting `signal` cancels the call in
+   * the sidecar too (MCP `notifications/cancelled`); `options` sets a longer timeout and receives progress.
+   */
+  async call<T = unknown>(tool: string, args: Record<string, unknown>, signal?: AbortSignal, options?: CallOptions): Promise<KiCadResult<T>> {
     const { client } = await this.ensure(signal)
-    const result = await client.callTool(tool, args, signal)
+    const result = await client.callTool(tool, args, signal, options)
     return toResult<T>(result)
   }
 
   /** Like {@link call} but throws on a domain error. */
-  async run<T = unknown>(tool: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
-    const result = await this.call<T>(tool, args, signal)
+  async run<T = unknown>(tool: string, args: Record<string, unknown>, signal?: AbortSignal, options?: CallOptions): Promise<T> {
+    const result = await this.call<T>(tool, args, signal, options)
     if (!result.ok) throw new Error(result.text)
     return result.value as T
   }
@@ -160,7 +176,7 @@ export class KiCadBridge extends Service {
   }
 
   private launchKey(): string {
-    return JSON.stringify([this.config.launcher, this.config.python.get(), this.config.kicadCli.get()])
+    return JSON.stringify([this.config.launcher, this.config.python.get(), this.config.kicadCli.get(), this.config.java.get(), this.config.freerouting.get()])
   }
 
   private async ensure(signal?: AbortSignal): Promise<Running> {
@@ -190,6 +206,8 @@ export class KiCadBridge extends Service {
       executable,
       sidecarDir: this.sidecarDir,
       kicadCli: this.config.kicadCli.get() || undefined,
+      java: this.config.java.get() || undefined,
+      freerouting: this.config.freerouting.get() || undefined,
       extras: this.config.uvExtras,
     })
     const handle = subprocess.spawn({

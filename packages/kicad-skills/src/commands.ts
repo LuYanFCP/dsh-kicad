@@ -45,7 +45,7 @@ export function createCommands(ctx: Context): CommandDefinition[] {
     },
     {
       name: 'kicad-install',
-      description: 'Install KiCad: list the ways for this machine, or run one you confirm (never with sudo)',
+      description: 'Install KiCad, or the Freerouting autorouter: list the ways for this machine, or run one you confirm (never with sudo)',
       input: { hint: '[<method> --yes | status | cancel] [--json]' },
       handler: wrap(async (inv) => installCommand(ctx, inv.rawInput, inv.signal)),
     },
@@ -178,7 +178,7 @@ export async function installCommand(ctx: Context, raw: string, signal?: AbortSi
   const method = verb === 'start' ? words[1] ?? '' : verb
   if (!yes) {
     const report = await ctx.kicad.doctor(signal)
-    const option = report.install.find(o => o.id === method)
+    const option = [...optionalInstalls(report), ...report.install].find(o => o.id === method)
     if (!option) return formatPlan(report)
     return option.runnable
       ? `This will run:\n\n    ${option.command}\n\nRun \`/kicad-install ${option.id} --yes\` to confirm.`
@@ -190,6 +190,11 @@ export async function installCommand(ctx: Context, raw: string, signal?: AbortSi
 
 const MARK = { ok: '✓', warn: '!', error: '✗' } as const
 
+/** Install plans of optional components (Freerouting, a Java runtime), carried by their doctor checks. */
+export function optionalInstalls(report: DoctorReport): InstallOption[] {
+  return report.checks.flatMap(c => c.install ?? [])
+}
+
 export function formatDoctor(report: DoctorReport): string {
   const lines = [`**${report.summary}**`, '']
   for (const c of report.checks) {
@@ -197,6 +202,8 @@ export function formatDoctor(report: DoctorReport): string {
     if (c.fix) lines.push(`  - fix: ${c.fix}`)
   }
   if (report.install.length) lines.push('', 'Install KiCad: run `/kicad-install` to see the options for this machine.')
+  const optional = optionalInstalls(report).filter(o => o.runnable)
+  if (optional.length) lines.push('', `Optional: ${optional.map(o => `\`/kicad-install ${o.id}\` (${o.label})`).join(', ')}.`)
   return lines.join('\n')
 }
 
@@ -209,9 +216,15 @@ function formatOption(o: InstallOption): string {
 }
 
 export function formatPlan(report: DoctorReport): string {
-  if (report.status === 'ok') return `${report.summary}\nNothing to install.`
-  if (!report.install.length) return formatDoctor(report)
-  return [`**${report.summary}**`, '', ...report.install.map(formatOption), '', 'After installing, run /kicad-doctor; dsh does not need a restart.'].join('\n\n')
+  const optional = optionalInstalls(report)
+  const extras = optional.length
+    ? ['**Optional, for kicad_autoroute:**', ...optional.map(formatOption)]
+    : []
+  if (report.status === 'ok') {
+    return optional.length ? [`**${report.summary}**`, ...extras].join('\n\n') : `${report.summary}\nNothing to install.`
+  }
+  if (!report.install.length) return [formatDoctor(report), ...extras].join('\n\n')
+  return [`**${report.summary}**`, '', ...report.install.map(formatOption), ...extras, '', 'After installing, run /kicad-doctor; dsh does not need a restart.'].join('\n\n')
 }
 
 export function formatJob(job: InstallJob): string {

@@ -21,6 +21,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="dsh-kicad-sidecar", description="KiCad tools over MCP-style JSON-RPC on stdio.")
     parser.add_argument("--kicad-cli", help="kicad-cli executable (default: $KICAD_CLI, PATH, standard install locations)")
     parser.add_argument("--root", action="append", default=[], help="restrict file access to this directory (repeatable)")
+    parser.add_argument("--java", help="Java for Freerouting (default: $JAVA_HOME, PATH)")
+    parser.add_argument("--freerouting", help="freerouting.jar or a freerouting executable (default: $FREEROUTING_JAR, the downloaded jar)")
     parser.add_argument("--call", metavar="TOOL", help="run one tool and print its JSON result instead of serving")
     parser.add_argument("--args", default="{}", help="JSON arguments for --call")
     parser.add_argument("--version", action="version", version=__version__)
@@ -28,7 +30,7 @@ def main(argv: list[str] | None = None) -> int:
     # Line-buffered UTF-8 regardless of the platform's default encoding.
     sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)  # type: ignore[attr-defined]
     sys.stdin.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
-    toolbox = Toolbox(kicad_cli=opts.kicad_cli, roots=opts.root)
+    toolbox = Toolbox(kicad_cli=opts.kicad_cli, roots=opts.root, java=opts.java, freerouting=opts.freerouting)
     if opts.call:
         print(json.dumps(toolbox.call(opts.call, json.loads(opts.args)), indent=1, ensure_ascii=False))
         return 0

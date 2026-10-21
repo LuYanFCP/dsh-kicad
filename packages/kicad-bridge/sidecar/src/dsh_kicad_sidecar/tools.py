@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import contextvars
 import os
 import re
 import shutil
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from . import __version__
@@ -17,6 +18,8 @@ from .schematic import OPERATIONS, Schematic, SchematicError, new_schematic_text
 from .pcb import OPERATIONS as PCB_OPERATIONS, Board, PcbError
 from .pcb_sync import update_pcb
 from .placement import OPERATIONS as PLACE_OPERATIONS, apply as apply_placement, check_placement
+from .autoroute import DEFAULT_TIMEOUT, MAX_TIMEOUT, autoroute
+from .freerouting import Cancelled, locate as locate_freerouting
 from .footprints import FootprintLibraries, default_footprint_dirs
 from . import geometry
 from .symbols import LibraryError, SymbolLibraries, default_symbol_dirs
@@ -26,6 +29,18 @@ __all__ = ["ToolError", "Toolbox", "TOOL_SPECS"]
 
 class ToolError(Exception):
     """A domain failure reported to the caller as an ``isError`` result."""
+
+
+@dataclass
+class CallContext:
+    """What a long tool call can see of its request: the client's cancellation and a progress channel
+    (MCP ``notifications/cancelled`` and ``notifications/progress``)."""
+
+    cancel: threading.Event = field(default_factory=threading.Event)
+    progress: Callable[[float, "float | None", str], None] | None = None
+
+
+_CALL: contextvars.ContextVar[CallContext | None] = contextvars.ContextVar("kicad_call", default=None)
 
 
 @dataclass
@@ -82,8 +97,8 @@ PCB_OPERATION_SCHEMA: dict[str, Any] = {
         "Rules (stored in the .kicad_pro): set_design_rules{min_clearance?,min_track_width?,min_via_diameter?,min_via_annular_width?,"
         "min_through_hole_diameter?,min_hole_to_hole?,min_hole_clearance?,min_copper_edge_clearance?,min_silk_clearance?,min_text_height?,...} · "
         "set_net_class{name,nets?,track_width?,clearance?,via_diameter?,via_drill?}. "
-        "Copper: add_track{points:[[x,y] | 'REF:PAD',...],net?,layer?=F.Cu,width?} (pad endpoints snap to the pad centre and must be on that net and layer) · "
-        "add_via{x,y,net,diameter?,drill?} · add_zone{net,layer|layers,outline?:'board'|[[x,y],...],priority?,clearance?,connect_pads?:thermal|solid|none} · "
+        "Copper: add_track{points:[[x,y] | 'REF:PAD',...],net?,layer?=F.Cu,width?,locked?} (pad endpoints snap to the pad centre and must be on that net and layer; "
+        "locked tracks stay as they are when autoroute runs) · add_via{x,y,net,diameter?,drill?,locked?} · lock_tracks{nets? | uuids?,locked?} · remove_tracks{nets?,locked?} (unroute; locked tracks stay unless locked: true) · add_zone{net,layer|layers,outline?:'board'|[[x,y],...],priority?,clearance?,connect_pads?:thermal|solid|none} · "
         "add_keepout{outline,layers?,tracks?,vias?,pads?,copperpour?,footprints?}. "
         "Silkscreen: add_text{text,x,y,layer?=F.SilkS,size?,thickness?,rotation?} · "
         "set_reference_text{reference,x?,y?,size?,thickness?,rotation?,hide?}. "
@@ -197,6 +212,19 @@ TOOL_SPECS: list[ToolSpec] = [
                    "copper_layers": {"type": "integer", "enum": [2, 4], "default": 2, "description": "Copper layers of a new board."},
                    "drc": {"type": "boolean", "default": True, "description": "Run KiCad DRC with schematic parity afterwards."}},
                   ["schematic"]), writes=True),
+    ToolSpec("autoroute", "Route a board with the Freerouting autorouter, headless: export a Specctra design (tracks and vias already "
+             "on the board are fixed wiring, so hand-routed critical nets stay as they are), run Freerouting (Java), import "
+             "only the new tracks and vias (footprints never move), save, refill copper zones and run KiCad's DRC. Needs "
+             "Java and Freerouting; when they are missing the error says how to install them (doctor has the details). "
+             "Cancellable; progress is reported per routing pass.",
+             _obj({"pcb": PCB,
+                   "nets": {"type": "array", "items": {"type": "string"}, "description": "Route only these nets (names or glob patterns)."},
+                   "exclude_nets": {"type": "array", "items": {"type": "string"}, "description": "Leave these nets unrouted (e.g. a GND net left to the pour)."},
+                   "passes": {"type": "integer", "minimum": 1, "maximum": 1000, "description": "Maximum routing passes (default: Freerouting's)."},
+                   "timeout": {"type": "number", "minimum": 5, "maximum": MAX_TIMEOUT, "default": DEFAULT_TIMEOUT,
+                               "description": "Seconds; Freerouting stops and keeps the routes it has."},
+                   "fill_zones": {"type": "boolean", "default": True, "description": "Refill and save copper zones afterwards."}},
+                  ["pcb"]), writes=True),
     ToolSpec("ipc_status", "Probe a running KiCad GUI through the IPC API (requires the 'ipc' extra and KiCad's API server enabled).", _obj({}, [])),
 ]
 
@@ -204,8 +232,11 @@ SPEC_BY_NAME = {s.name: s for s in TOOL_SPECS}
 
 
 class Toolbox:
-    def __init__(self, kicad_cli: str | None = None, roots: list[str] | None = None, cwd: str | None = None):
+    def __init__(self, kicad_cli: str | None = None, roots: list[str] | None = None, cwd: str | None = None,
+                 java: str | None = None, freerouting: str | None = None):
         self.cli = KiCadCli(kicad_cli)
+        self.java = java  # the bridge's java / freerouting settings (None: search)
+        self.freerouting = freerouting
         self.roots = [os.path.realpath(r) for r in roots or []]
         self.cwd = cwd or os.getcwd()
         self._libraries: dict[str, SymbolLibraries] = {}
@@ -239,14 +270,17 @@ class Toolbox:
         return Schematic(full, libraries=self.libraries(os.path.dirname(full)))
 
     # ---- dispatch ------------------------------------------------------------------
-    def call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+    def call(self, name: str, args: dict[str, Any], context: CallContext | None = None) -> dict[str, Any]:
         handler: Callable[[dict[str, Any]], dict[str, Any]] | None = getattr(self, f"tool_{name}", None)
         if name not in SPEC_BY_NAME or handler is None:
             raise ToolError(f"unknown tool '{name}'")
+        token = _CALL.set(context)
         try:
             return handler(args or {})
-        except (SchematicError, PcbError, LibraryError, KiCadCliError, ValueError, OSError) as exc:
+        except (SchematicError, PcbError, LibraryError, KiCadCliError, Cancelled, ValueError, OSError) as exc:
             raise ToolError(str(exc)) from exc
+        finally:
+            _CALL.reset(token)
 
     # ---- tools ---------------------------------------------------------------------
     def tool_environment(self, _args):
@@ -279,7 +313,7 @@ class Toolbox:
         }
 
     def tool_doctor(self, _args):
-        report = run_doctor(self.cli)
+        report = run_doctor(self.cli, router=self.router())
         return {**report, "text": format_report(report)}
 
     def tool_read_schematic(self, args):
@@ -417,6 +451,17 @@ class Toolbox:
             return update_pcb(self.cli, schematic, pcb, delete_removed=bool(args.get("delete_removed")),
                               dry_run=bool(args.get("dry_run")), copper_layers=layers, drc=args.get("drc", True) is not False,
                               on_created=self.board_created)
+
+    def router(self):
+        return locate_freerouting(self.java, self.freerouting)
+
+    def tool_autoroute(self, args):
+        pcb = self.resolve(args["pcb"], ".kicad_pcb")
+        context = _CALL.get() or CallContext()
+        with self.lock(pcb):
+            return autoroute(self.cli, pcb, self.router(), nets=args.get("nets"), exclude_nets=args.get("exclude_nets"),
+                             passes=args.get("passes"), timeout=args.get("timeout", DEFAULT_TIMEOUT),
+                             fill_zones=args.get("fill_zones", True) is not False, cancel=context.cancel, progress=context.progress)
 
     def board_created(self, board: str) -> list[str]:
         """Hook run after update_pcb writes a new board; returns change lines. A fab-preset step plugs in here

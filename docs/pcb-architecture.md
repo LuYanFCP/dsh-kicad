@@ -367,7 +367,7 @@ Rules:
   - Fallback and test oracle: `pcbnew.ExportSpecctraDSN` / `ImportSpecctraSES`, run in a subprocess by
     the KiCad Python that `doctor` finds: `python3` where it imports pcbnew, KiCad's bundled interpreter on
     macOS/Windows, `flatpak run --command=python3 org.kicad.KiCad`. The sidecar core stays stdlib-only.
-- Freerouting needs Java 17+ (`java -version` here: OpenJDK 25). `doctor` detects both; download only
+- Freerouting needs Java 17+ (`java -version` here: OpenJDK 25; #13 found that 2.5.0 needs Java 25). `doctor` detects both; download only
   after user confirmation, never with sudo.
 - The GND pour is an unfilled zone plus `--refill-zones --save-board`.
 
@@ -483,6 +483,99 @@ where they were, so place before routing), and `ratsnest_length` measures pads o
 - Silkscreen text extents are estimated (0.9 × size per character), not measured with KiCad's font.
 - Rotated footprints are reordered by KiCad's next save (see Open risks); content is unchanged.
 
+## Routing (#13): Freerouting through a sidecar DSN/SES codec
+
+`kicad_autoroute {pcb, nets?, exclude_nets?, passes?, timeout?, fill_zones?}` routes a board with
+[Freerouting](https://github.com/freerouting/freerouting) and lets KiCad judge the result.
+
+| Module | Content |
+|---|---|
+| `specctra.py` | `write_dsn(board, nets, exclude_nets) -> Dsn`, `parse_ses(text) -> Session`, `import_session(board, session, dsn)` |
+| `freerouting.py` | `locate(java, freerouting) -> Router`, `run(router, dsn, ses, passes, timeout, cancel, progress)`, `download()` (stdlib only, runnable as a script for the install step) |
+| `autoroute.py` | the tool: DSN → Freerouting → import → save → `kicad-cli pcb drc [--refill-zones --save-board]` |
+| `pcb.py` (small) | `add_track` / `add_via` `locked`, `lock_tracks{nets? \| uuids?, locked?}`, `remove_tracks{nets?, locked?}` (unroute before placing again), tracks inserted in KiCad's save order |
+
+### The flow the agent (and the `kicad-pcb-layout` skill) follows
+
+1. `kicad_update_pcb` → place every part inside the outline: `kicad_edit_pcb` `auto_place` (#12; raise `gap` when routing
+   leaves connections open, see the result below), or `set_board_outline` + `move_footprint` by hand.
+2. Critical nets by hand, locked: `add_track{points:["J1:A5", [x, y], "R4:1"], locked: true}`, `add_via{…, locked: true}` for power,
+   USB/differential pairs, crystals.
+3. GND pour: `add_zone{net: "GND", layers: ["F.Cu", "B.Cu"], connect_pads: "solid"}` (thermal reliefs on a crowded 2-layer
+   board end as `starved_thermal`; `solid` avoids that).
+4. `kicad_autoroute{pcb}` (or `nets` / `exclude_nets`). The result carries KiCad's DRC: unrouted 0, errors 0, parity 0 is done.
+5. Leftover connections: route them by hand and run it again (everything on the board is kept), or give the parts room:
+   `remove_tracks{}`, `auto_place{outline: "fit", gap: 2, group_gap: 4}`, redraw the pour, route again. The tool's note
+   says so whenever connections stay open (it cannot tell whether `auto_place` laid the board out: nothing records it).
+
+### What the DSN holds
+
+KiCad's exporter (`specctra_export.cpp`) is the reference; the differences are deliberate:
+
+- **One image per footprint, placed front side up at 0°.** Pins carry their offsets and the pads' absolute angles,
+  padstacks name the copper layers the pads are on. Rotated and back-side parts need none of Specctra's mirroring rules.
+  Duplicate pad numbers are `2`, `2@1`, … as in KiCad; names are quoted by KiCad's rule (`SPECCTRA_LEXER::GetQuoteChar`:
+  white space, `()%{}`, or a `-` after the first character; component and pin are quoted separately in `REF-PIN`).
+  Freerouting rejects a quoted `"R1-1"`.
+- **Pad shapes:** circle, rect, oval (a path), roundrect (a polygon around the arcs), trapezoid (its box), custom (the
+  primitive polygon that holds the anchor, exact for notched solder-jumper pads; otherwise the convex hull). NPTH holes
+  are keepouts grown by the hole clearance.
+- **Copper texts and graphics are keepouts.** KiCad's exporter leaves them out and Freerouting runs tracks through copper
+  labels (pic_programmer: `shorting_items`). Text boxes use the stroke font's measured advances.
+- **The boundary is the chained Edge.Cuts outline** (board and footprint lines, arcs, rectangles, polygons), pulled in by
+  copper-to-edge minus clearance; inner loops and rule areas that forbid tracks/vias are keepouts.
+- **Existing tracks and vias are fixed wiring**, `(type fix)` when locked, `(type protect)` otherwise (KiCad exports them as
+  `route`, which the router may rip up). Nets left out by `nets` / `exclude_nets` leave the network; their pads and copper
+  stay as obstacles without a net.
+- **Clearances get +0.01 mm.** Without it Freerouting's integer geometry lands 1–2 µm under KiCad's limit now and then.
+- **Copper zones are not exported** (KiCad writes them as `plane`s). Every connection is routed with tracks, so the pour,
+  refilled afterwards, only adds copper; a plane can be cut into islands by the refill, and its pads would then be open.
+
+Checked against two oracles (`tests/test_specctra.py`): pcbnew's own DSN for the same board (pin centres within 2 µm,
+copper extents within 0.02 mm, same nets, parts at 0°, 30° and 90°) and KiCad's IPC-D-356 pad positions (rotated and
+back-side parts).
+
+### Freerouting
+
+- **Pinned release: 2.5.0, the jar.** Its classes are version 69: **Java 25+**. 2.5.0 also ships GraalVM native
+  `freerouting-cli` builds that need no Java, but they crash on KiCad's DSN (`UnsupportedFeatureError` serializing
+  `ComponentOutline`) and then hang, so the doctor offers the jar; the `freerouting` setting accepts a native executable.
+- **Flags:** `--gui.enabled=false`, `--usage_and_diagnostic_data.disable_analytics=true`, `--profile.allow_telemetry=false`,
+  `--router.automatic_neckdown=false` and `--router.fanout.enabled=false` (neck-down and SMD fan-out write 0.15 mm tracks
+  under the net class width: `track_width` errors; fan-out also adds a via per SMD pad), `--router.job_timeout=HH:MM:SS`
+  (Freerouting stops and still writes its best session), `--router.autorouter.max_passes=N` (`-mp` is deprecated).
+  Unknown settings only warn. Freerouting keeps its own `~/.config/freerouting/freerouting.json` and logs in
+  `~/.local/state/freerouting/logs`.
+- **Run:** a subprocess, polled; `notifications/cancelled` from the bridge (dsh aborted the tool call, or the bridge's
+  per-call timeout) terminates it and nothing is written. Each routing pass is an MCP `notifications/progress` when the
+  request carries a `progressToken` (the bridge logs them; dsh has no progress channel to the UI yet).
+- **Import:** only nets handed to the router; wires typed `fix`/`protect` and anything already on the board are skipped;
+  placements in the session are ignored. New tracks are inserted in KiCad's save order (`PCB_TRACK::cmp_tracks`: net
+  code, layer, type, uuid), so a routed board re-saved by KiCad is byte-identical.
+- **Install:** the doctor's `freerouting` and `java` checks are optional (`warn`) and carry their own plans:
+  `/kicad-install freerouting --yes` runs `python -I freerouting.py download` (the sidecar's Python, size and SHA-256
+  checked before the jar is moved into `<data dir>/dsh-kicad/freerouting/`, no root). Java comes from the package manager
+  (root: shown, not run), Homebrew/winget (run after confirmation) or Temurin.
+
+### Results (KiCad 10.0.7, Freerouting 2.5.0, OpenJDK 25)
+
+| Board | Before | After `kicad_autoroute` | Time |
+|---|---|---|---|
+| usb-attiny85, 15 parts placed by hand on 48 × 30 mm, CC1/CC2/3V3 locked, GND pour both layers | 36 unrouted | **0 unrouted, 0 errors, 0 warnings, parity 0**; +121 segments, +8 vias | 4.5 s |
+| usb_attiny_blocks, nothing by hand: `auto_place` (default gaps, 34 × 28 mm), GND pour both layers | 39 unrouted | 1 unrouted (J2:5 `/nRESET`); a second run adds nothing | 4.9 s |
+| the same with `auto_place{gap: 2, group_gap: 4}` (38 × 30 mm) | 39 unrouted | **0 unrouted, 0 errors, parity 0**; the JLCPCB fab gate passes | 5.1 s |
+| ecc83-pp (demo, THT, all tracks removed) | 14 unrouted | 0 unrouted, 0 errors | 3.6 s |
+| ecc83-pp_v2 (demo) | 14 unrouted | 0 unrouted, 0 errors | 3.6 s |
+| complex_hierarchy (demo, 68 parts) | 87 unrouted | 0 unrouted, 0 errors | 4.9 s |
+| pic_programmer (demo, 63 parts, copper labels) | 86 unrouted | 6 unrouted, 0 errors | 7.5 s |
+| interf_u (demo, 25 parts, 815 tracks removed) | 164 unrouted | 0 unrouted; 3 `starved_thermal` (the original board has 2) | 37 s |
+| StickHub (demo, 94 parts, fine-pitch USB hub) | 128 unrouted | 37 unrouted, 2 `solder_mask_bridge` | 42 s |
+
+KiCad's own DSN on the stripped pic_programmer gets to 1 unrouted, but its tracks cross copper texts (shorts); with the
+texts as keepouts Freerouting stops at 6 (it ends after 10 passes without improvement). On StickHub KiCad's DSN leaves
+67 connections unrouted by Freerouting's count (75 s), this one 50 (38 s). Freerouting does not know solder mask
+apertures, so a track between fine-pitch pads can create a `solder_mask_bridge`.
+
 ## Open risks
 
 - **KiCad 8/9 not tested end to end.** Only KiCad 10.0.7 is installed. The numbered-net path was checked
@@ -500,8 +593,8 @@ where they were, so place before routing), and `ratsnest_length` measures pads o
   sit at 0° on the front and are not affected.
 - **Swap** is implemented and checked against KiCad's pad positions; text positions the user changed on the
   old footprint are not carried over.
-- **Specctra without pcbnew** means writing a DSN/SES codec. If #13 judges that too costly, routing works
-  only where `doctor` finds a pcbnew-capable Python.
+- **Specctra without pcbnew**: done (#13), a stdlib codec checked against pcbnew's exporter. Freerouting's own
+  risks (Java 25, versions, licence) are in the routing section above and in #13's PR.
 - **Schematic annotation:** the eval produced non-`#` power-flag references. `add_symbol` now gives power
   symbols the library's `#` prefix (`#FLG`, `#PWR`) and adds `#` to a given reference that lacks it (#10);
   the pre-sync check still names any other non-`#` power symbol.

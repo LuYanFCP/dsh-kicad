@@ -241,6 +241,52 @@ def test_lock_footprint(board, tmp_path):
     assert not Board(board).footprint("J1").locked
 
 
+@needs_kicad_cli
+def test_locked_tracks_and_vias(board, tmp_path):
+    """Hand-routed critical nets are locked so the autorouter keeps them; KiCad reads the flag back."""
+    track, via = edit(board, {"op": "add_track", "points": ["J1:1", [110, 110], "R1:1"], "locked": True},
+                      {"op": "add_via", "x": 134, "y": 117.225, "net": "GND", "locked": True})
+    edit(board, {"op": "add_track", "points": ["C1:2", [134, 117.225]]})
+    tracks = Board(board).tracks()  # in KiCad's order: by net (IN before GND here), layer, type
+    assert [(t["net"], t["kind"], t.get("locked", False)) for t in tracks] == [
+        ("IN", "segment", True), ("IN", "segment", True), ("GND", "segment", False), ("GND", "via", True)]
+    text = open(board).read()
+    assert "\t\t(width 0.2)\n\t\t(locked yes)\n\t\t(layer \"F.Cu\")" in text  # where KiCad writes it
+    assert "\t\t(layers \"F.Cu\" \"B.Cu\")\n\t\t(locked yes)\n\t\t(net \"GND\")" in text
+    kicad_resave(board, tmp_path)
+    assert open(str(tmp_path / "resaved" / "rc_board.kicad_pcb")).read() == text  # KiCad's re-save changes nothing
+    (unlocked,) = edit(board, {"op": "lock_tracks", "nets": ["IN"], "locked": False})
+    assert unlocked == {"unlocked": 2} and [t.get("locked", False) for t in Board(board).tracks()] == [False, False, False, True]
+    (locked,) = edit(board, {"op": "lock_tracks", "uuids": [track["segments"][0]]})
+    assert locked == {"locked": 1}
+    with pytest.raises(PcbError, match="no track or via with uuid nope"):
+        edit(board, {"op": "lock_tracks", "uuids": ["nope"]})
+    with pytest.raises(PcbError, match="lock_tracks needs nets or uuids"):
+        edit(board, {"op": "lock_tracks"})
+
+
+def test_remove_tracks_unroutes_but_keeps_locked_ones(board):
+    edit(board, {"op": "add_track", "points": ["J1:1", [110, 110], "R1:1"], "locked": True},
+         {"op": "add_track", "points": ["C1:2", [134, 117.225]]}, {"op": "add_via", "x": 134, "y": 117.225, "net": "GND"},
+         {"op": "add_track", "points": ["R1:2", [125, 110]]})
+    (only_gnd,) = edit(board, {"op": "remove_tracks", "nets": ["GND"]})
+    assert only_gnd == {"removed": 2, "kept_locked": 0} and {t["net"] for t in Board(board).tracks()} == {"IN", "OUT"}
+    (rest,) = edit(board, {"op": "remove_tracks"})
+    assert rest == {"removed": 1, "kept_locked": 2} and all(t.get("locked") for t in Board(board).tracks())
+    (everything,) = edit(board, {"op": "remove_tracks", "locked": True})
+    assert everything == {"removed": 2, "kept_locked": 0} and Board(board).tracks() == []
+    with pytest.raises(PcbError, match="net 'VCC' does not exist"):
+        edit(board, {"op": "remove_tracks", "nets": ["VCC"]})
+
+
+def test_locked_tracks_in_an_old_file(board):
+    b = Board(board)
+    b.add_track(["J1:1", [110, 110]])
+    b.root.find("version").items[1].set("20221018")  # KiCad 7: a bare "locked" after the head
+    b.lock_tracks(nets=["IN"])
+    assert "(segment locked\n" in b.text() and b.tracks()[0]["locked"]
+
+
 # ---- rules ---------------------------------------------------------------------------
 
 @needs_kicad_cli

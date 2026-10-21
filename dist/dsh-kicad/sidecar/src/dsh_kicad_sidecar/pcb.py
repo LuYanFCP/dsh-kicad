@@ -494,6 +494,14 @@ class Board:
             if after is not None:
                 self.root.insert(after, node)
                 return node
+        if node.head in TRACKS and _uuid(node):
+            order = self._track_order()
+            key = order(node)
+            after = next((i for i, item in enumerate(items) if isinstance(item, SList) and item.head in TRACKS
+                          and order(item) > key), None)
+            if after is not None:
+                self.root.insert(after, node)
+                return node
         last_same = first_after = None
         for i, item in enumerate(items):
             if not isinstance(item, SList):
@@ -506,6 +514,27 @@ class Board:
         index = last_same + 1 if last_same is not None else (first_after if first_after is not None else len(items))
         self.root.insert(index, node)
         return node
+
+    def _track_order(self) -> Callable[[SList], tuple]:
+        """KiCad's save order of tracks, arcs and vias (``PCB_TRACK::cmp_tracks``): net code, layer, type, uuid.
+        Files with a net table carry the codes; KiCad 10 files get them in the order the nets first appear."""
+        if any(True for _ in self.root.lists("net")):
+            codes = {name: code for code, name in self._net_codes().items()}
+        else:
+            codes = {"": 0}
+            for item in self.root.lists():
+                for carrier in (item.lists("pad") if item.head == "footprint" else [item] if item.head in TRACKS or item.head == "zone" else []):
+                    codes.setdefault(_net_name_of(carrier), len(codes))
+        layers = {l["name"]: int(_f(l["id"])) for l in self.layer_table()}
+        kinds = {"segment": 0, "via": 1, "arc": 2}  # KICAD_T: PCB_TRACE_T < PCB_VIA_T < PCB_ARC_T
+        net_codes = self._net_codes()
+
+        def key(item: SList) -> tuple:
+            net = _net_name_of(item, net_codes)
+            layer = item.child_value("layer") if item.head != "via" else (_layers_of(item) or [""])[0]
+            return codes.get(net, len(codes)), layers.get(layer or "", 999), kinds.get(item.head or "", 3), _uuid(item) or ""
+
+        return key
 
     # ---- layers --------------------------------------------------------------------
     def layer_table(self) -> list[dict[str, str]]:
@@ -1077,10 +1106,16 @@ class Board:
             elif item.head == "via":
                 out.append({"kind": "via", "uuid": _uuid(item), "net": _net_name_of(item, codes), "at": list(_xy(item.find("at"))),
                             "size": _f(item.child_value("size")), "drill": _f(item.child_value("drill")), "layers": _layers_of(item)})
+            else:
+                continue
+            if _track_locked(item):
+                out[-1]["locked"] = True
         return out
 
-    def add_track(self, points: list, net: str | None = None, layer: str = "F.Cu", width: float | None = None) -> dict:
-        """Straight segments through ``points`` ([x, y] or "REF:PAD", which snaps to the pad centre)."""
+    def add_track(self, points: list, net: str | None = None, layer: str = "F.Cu", width: float | None = None,
+                  locked: bool = False) -> dict:
+        """Straight segments through ``points`` ([x, y] or "REF:PAD", which snaps to the pad centre). ``locked``
+        tracks are kept as they are by the autorouter (and by KiCad's interactive tools)."""
         if not isinstance(points, list) or len(points) < 2:
             raise PcbError("a track needs at least two points")
         layer = self.layer_name(layer, copper=True)
@@ -1113,17 +1148,83 @@ class Board:
             if math.hypot(bx - ax, by - ay) < 1e-6:
                 continue
             uid = new_uuid()
-            self.insert_item(L("segment", L("start", _n(ax), _n(ay)), L("end", _n(bx), _n(by)), L("width", _n(width)),
-                               L("layer", S(layer)), *self.net_nodes(net, "track"), L("uuid", S(uid))))
+            node = self.insert_item(L("segment", L("start", _n(ax), _n(ay)), L("end", _n(bx), _n(by)), L("width", _n(width)),
+                                      L("layer", S(layer)), *self.net_nodes(net, "track"), L("uuid", S(uid))))
+            if locked:
+                self._set_locked(node, True)
             uuids.append(uid)
             length += math.hypot(bx - ax, by - ay)
         if not uuids:
             raise PcbError("the track has no length")
-        self.changes.append(f"track on {net} ({layer}, {_mm(width)} mm, {len(uuids)} segment(s), {round(length, 3)} mm)")
+        self.changes.append(f"{'locked ' if locked else ''}track on {net} ({layer}, {_mm(width)} mm, {len(uuids)} segment(s), "
+                            f"{round(length, 3)} mm)")
         return {"net": net, "layer": layer, "width": width, "segments": uuids, "length": round(length, 4)}
 
+    def _set_locked(self, item: SList, locked: bool) -> None:
+        """Lock or unlock a track, arc or via where KiCad writes the flag: ``(locked yes)`` after the width of a track
+        or the layers of a via (KiCad 8+), a bare ``locked`` after the head in older files."""
+        for flag in list(item.lists("locked")):
+            item.remove(flag)
+        for atom in [a for a in item.atoms() if a.value == "locked"]:
+            item.remove(atom)
+        if not locked:
+            return
+        if self.version >= 20240000:
+            anchor = item.find("width" if item.head in ("segment", "arc") else "layers")
+            item.insert(item.index_of(anchor) + 1 if anchor is not None else 1, L("locked", "yes"))
+        else:
+            item.insert(1, Atom("locked"))
+            item.ws[1] = " "
+
+    def lock_tracks(self, nets: list[str] | None = None, uuids: list[str] | None = None, locked: bool = True) -> dict:
+        """Lock (or unlock) the tracks, arcs and vias of ``nets`` and/or the items ``uuids``."""
+        if not nets and not uuids:
+            raise PcbError("lock_tracks needs nets or uuids")
+        for name, value in (("nets", nets), ("uuids", uuids)):
+            if value is not None and (isinstance(value, str) or not all(isinstance(v, str) and v for v in value)):
+                raise PcbError(f"{name} must be a list of strings")
+        for net in nets or []:
+            self._require_net(net)
+        codes = self._net_codes()
+        wanted, found = set(uuids or []), set()
+        count = 0
+        for item in self.root.lists():
+            if item.head not in TRACKS:
+                continue
+            uid = _uuid(item)
+            if uid in wanted or _net_name_of(item, codes) in (nets or []):
+                self._set_locked(item, bool(locked))
+                found.add(uid)
+                count += 1
+        missing = sorted(wanted - found)
+        if missing:
+            raise PcbError(f"no track or via with uuid {', '.join(missing)} (uuids: kicad_read_pcb with include_items)")
+        self.changes.append(f"{'locked' if locked else 'unlocked'} {count} track(s)/via(s)" + (f" on {', '.join(nets)}" if nets else ""))
+        return {"locked" if locked else "unlocked": count}
+
+    def remove_tracks(self, nets: list[str] | None = None, locked: bool = False) -> dict:
+        """Unroute: remove the tracks, arcs and vias of ``nets`` (every net when None). Locked ones stay unless
+        ``locked`` is true. Use it before placing parts again (placement leaves tracks where they are)."""
+        if nets is not None and (isinstance(nets, str) or not all(isinstance(n, str) and n for n in nets)):
+            raise PcbError("nets must be a list of net names")
+        for net in nets or []:
+            self._require_net(net)
+        codes = self._net_codes()
+        removed = kept = 0
+        for item in [i for i in self.root.lists() if i.head in TRACKS]:
+            if nets is not None and _net_name_of(item, codes) not in nets:
+                continue
+            if _track_locked(item) and not locked:
+                kept += 1
+                continue
+            self.root.remove(item)
+            removed += 1
+        self.changes.append(f"removed {removed} track(s)/via(s)" + (f" on {', '.join(nets)}" if nets else "")
+                            + (f", kept {kept} locked" if kept else ""))
+        return {"removed": removed, "kept_locked": kept}
+
     def add_via(self, x: float, y: float, net: str, diameter: float | None = None, drill: float | None = None,
-                size: float | None = None) -> dict:
+                size: float | None = None, locked: bool = False) -> dict:
         self._require_net(net)
         cls = self.net_class_of(net)
         diameter = float(diameter or size or cls.get("via_diameter") or DEFAULT_CLASS["via_diameter"])
@@ -1131,9 +1232,11 @@ class Board:
         if drill <= 0 or diameter <= drill:
             raise PcbError("a via needs drill > 0 and diameter > drill")
         uid = new_uuid()
-        self.insert_item(L("via", L("at", _n(float(x)), _n(float(y))), L("size", _n(diameter)), L("drill", _n(drill)),
-                           L("layers", S("F.Cu"), S("B.Cu")), *self.net_nodes(net, "track"), L("uuid", S(uid))))
-        self.changes.append(f"via on {net} at ({_mm(float(x))}, {_mm(float(y))}), {_mm(diameter)}/{_mm(drill)} mm")
+        node = self.insert_item(L("via", L("at", _n(float(x)), _n(float(y))), L("size", _n(diameter)), L("drill", _n(drill)),
+                                  L("layers", S("F.Cu"), S("B.Cu")), *self.net_nodes(net, "track"), L("uuid", S(uid))))
+        if locked:
+            self._set_locked(node, True)
+        self.changes.append(f"{'locked ' if locked else ''}via on {net} at ({_mm(float(x))}, {_mm(float(y))}), {_mm(diameter)}/{_mm(drill)} mm")
         return {"uuid": uid, "net": net, "diameter": diameter, "drill": drill}
 
     def _zone_layers(self, layer: Any, layers: Any) -> list[str]:
@@ -1385,6 +1488,13 @@ def _pair(value: Any, what: str) -> tuple[float, float]:
     return float(value[0]), float(value[1])
 
 
+def _track_locked(item: SList) -> bool:
+    flag = item.find("locked")
+    if flag is not None:
+        return (flag.value(0) or "yes") == "yes"
+    return any(a.value == "locked" for a in item.atoms())
+
+
 def _pad_on_layer(layers: list[str], layer: str) -> bool:
     return any(l == layer or l in ("*.Cu", "F&B.Cu") for l in layers)
 
@@ -1550,7 +1660,9 @@ OPERATIONS: dict[str, Callable[..., Any]] = {
     "lock_footprint": lambda b, reference, locked=True: b.lock_footprint(reference, locked),
     "set_design_rules": lambda b, **rules: b.set_design_rules(**rules),
     "set_net_class": lambda b, name, **kw: b.set_net_class(name, **kw),
-    "add_track": lambda b, points, net=None, layer="F.Cu", width=None: b.add_track(points, net, layer, width),
+    "add_track": lambda b, points, net=None, layer="F.Cu", width=None, locked=False: b.add_track(points, net, layer, width, bool(locked)),
+    "lock_tracks": lambda b, nets=None, uuids=None, locked=True: b.lock_tracks(nets, uuids, bool(locked)),
+    "remove_tracks": lambda b, nets=None, locked=False: b.remove_tracks(nets, bool(locked)),
     "add_via": lambda b, x, y, net, **kw: b.add_via(x, y, net, **kw),
     "add_zone": lambda b, net, **kw: b.add_zone(net, **kw),
     "add_keepout": lambda b, **kw: b.add_keepout(**kw),

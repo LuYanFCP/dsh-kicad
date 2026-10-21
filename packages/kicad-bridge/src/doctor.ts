@@ -15,6 +15,8 @@ export interface DoctorCheck {
   required: boolean
   summary: string
   fix?: string
+  /** Optional components (Java, Freerouting) carry their own install plans. */
+  install?: InstallOption[]
   [extra: string]: unknown
 }
 
