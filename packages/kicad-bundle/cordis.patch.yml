@@ -11,7 +11,7 @@
     - id: kicad-policy
       name: 'dsh-kicad-policy'
       config:
-        approval: ask
+        approval: follow
         restrictToWorkspace: true
         autoErc: true
         autoRender: true
