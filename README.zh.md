@@ -15,7 +15,7 @@
 | **技能** | `kicad-agent-workflow`、`kicad-erc-triage`、`kicad-schematic-design`。 |
 | **命令** | `/erc`、`/drc`、`/bom`（不经过模型，作用于工程根设计）、`/kicad-render`。 |
 | **Agent 预设** | `eda`：与 standard 类似的工具集 + 电子设计人设。KiCad 工具为全局注册，任何预设都可使用。 |
-| **Web 界面** | 右侧边栏 `*.kicad_sch` / `*.kicad_pcb` 查看器（kicad-cli SVG、平移缩放、多图纸、实时刷新、渲染按钮）；ERC/DRC 与原理图修改的对话卡片；sidecar（kicad-cli 路径、Python）与策略（审批、自动 ERC、自动渲染）的设置页。 |
+| **Web 界面** | 右侧边栏 `*.kicad_sch` / `*.kicad_pcb` 查看器，两种模式：**交互**——内嵌 [KiCanvas](https://github.com/theacodes/kicanvas)（层次图纸、查看元件/封装/网络、图层开关、KiCad 或 Witch Hazel 主题、文件变化时自动刷新）；**SVG**——kicad-cli 渲染（平移缩放、多图纸、渲染按钮，也是交互模式失败时的自动回退）；ERC/DRC 与原理图修改的对话卡片；sidecar（kicad-cli 路径、Python）与策略（审批、自动 ERC、自动渲染）的设置页。 |
 | **独立 MCP server** | Python sidecar 通过 stdio 说 MCP 协议，Claude Code 或 RL 环境可以不经 dsh 直接复用同一套工具。 |
 | **KiCad 端（可选）** | IPC 插件，工具栏按钮 “Open in DSH”。 |
 
@@ -126,7 +126,7 @@ python packages/kicad-bridge/sidecar/tests/make_fixtures.py   # 用编辑器本�
 - 新放置在子图纸中的元件只向上查找一层根图纸来确定 instance 路径；更深的层次可能需要 KiCad 重新标注。
 - 只有当模型路由声明支持图片输入且挂载了附件存储时，图片才会传给模型；否则渲染工具只返回 SVG 路径。
 - 审批需要交互式审批通道；没有审批通道的 headless 运行会拒绝设计修改，除非设置 `approval: allow`。
-- 侧边栏查看器显示 kicad-cli 导出的 SVG，不在浏览器中原生渲染 `.kicad_sch`（曾评估 KiCanvas，但它对新版 KiCad 文件格式的支持滞后）。
+- 交互查看器是 KiCanvas，由 `scripts/vendor-kicanvas.mjs` 按固定 commit 打包进插件（离线、图标、主题等补丁见 `packages/client-ui-kicad/vendor/kicanvas/README.md`）。它能解析 KiCad 10 文件，但会忽略尚不认识的新字段；SVG 模式是 kicad-cli 的准确渲染。需要 WebGL2。
 - IPC 通道目前只有状态探测和 KiCad 端启动按钮，未实现通过 IPC 实时编辑（KiCad IPC API 以 PCB 为主）。
 
 ## 许可证

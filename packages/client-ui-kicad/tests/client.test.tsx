@@ -1,10 +1,12 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { orderPages, parseFileAddress, readCheckMeta, renderDir, sessionFileAddress, toOps } from '../src/client/index.tsx'
 import { CheckCard, EditCard } from '../src/client/Cards.tsx'
 import { createViewer } from '../src/client/Viewer.tsx'
 import { BridgeSettings, PolicySettings } from '../src/client/Settings.tsx'
 import type { ClientRemote, ToolViewProps } from '../src/client/dsh.ts'
+import { stubLocalStorage } from './storage.ts'
+stubLocalStorage()
 
 describe('addresses', () => {
   it('parses session and absolute file addresses', () => {
@@ -89,7 +91,8 @@ describe('settings cards', () => {
   })
 })
 
-describe('sidebar viewer', () => {
+describe('sidebar viewer (SVG mode)', () => {
+  beforeEach(() => localStorage.setItem('dsh-kicad:viewer-mode', 'svg'))
   const SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>'
   const address = sessionFileAddress('s1', 'rc.kicad_sch')
 
