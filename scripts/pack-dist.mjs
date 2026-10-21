@@ -11,7 +11,8 @@
  * Only @deepseek-ai/* stay external (dsh supplies them at runtime).
  */
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { execFileSync } from 'node:child_process'
+import { join, relative, resolve } from 'node:path'
 import { build } from 'esbuild'
 import { buildClient } from './build-client.mjs'
 
@@ -125,4 +126,13 @@ One self-contained package with every plugin of the KiCad bundle, installable wi
 
 See the [project README](../../README.md). Third-party notices: \`third_party/kicanvas/\`.
 `)
-console.log(`packed ${NAME}@${manifest.version} → ${out}`)
+// Git installs only see committed files: refuse a distribution that .gitignore would drop.
+const files = execFileSync('find', [out, '-type', 'f'], { encoding: 'utf8' }).trim().split('\n')
+let ignored = ''
+try {
+  ignored = execFileSync('git', ['-C', root, 'check-ignore', '--stdin'], { input: files.map(f => relative(root, f)).join('\n'), encoding: 'utf8' }).trim()
+} catch (error) {
+  if (error.status !== 1) throw error // 1 = nothing ignored
+}
+if (ignored) throw new Error(`these distribution files are git-ignored and would be missing from a Git install:\n${ignored}`)
+console.log(`packed ${NAME}@${manifest.version} → ${out} (${files.length} files, none git-ignored)`)
