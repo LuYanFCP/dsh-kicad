@@ -83,6 +83,10 @@ dsh web
 
 `dsh plugin … add <目录>` 会以 link 方式安装；子包通过本仓库的 `node_modules` 解析，`@deepseek-ai/*` 的 import 由 dsh 映射到正在运行的安装。修改代码后需重新构建并重启 dsh。也可以在 Web 界面 **Plugins → Install** 中填入同一绝对路径。
 
+### 直接粘贴仓库地址（最简单）
+
+在 dsh 里 **Plugins → Add plugin**，填 `https://github.com/LuYanFCP/dsh-kicad` 后安装（或运行 `dsh plugin --profile web add https://github.com/LuYanFCP/dsh-kicad`）。仓库根目录本身就是 `dsh-kicad` bundle，会加载预构建好的 `dist/dsh-kicad`。在地址后加 `#<tag 或 commit>` 可以固定版本。
+
 ### 通过插件市场（在 dsh 里搜索安装）
 
 dsh 通过**插件市场**检索插件：添加一次市场索引（JSON）即可搜索。本仓库发布了一个索引。

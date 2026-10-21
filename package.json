@@ -1,11 +1,76 @@
 {
-  "name": "dsh-kicad-root",
+  "name": "dsh-kicad",
+  "version": "0.2.0",
+  "description": "KiCad for DeepSeek Harness: schematic tools, ERC/DRC, approval policy, skills, commands, sidebar viewer and an EDA agent preset",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.28.6",
-  "engines": {
-    "node": ">=22.19.0"
+  "icon": "./dist/dsh-kicad/icon.svg",
+  "main": "./dist/dsh-kicad/lib/index.js",
+  "exports": {
+    ".": "./dist/dsh-kicad/lib/index.js",
+    "./client": "./dist/dsh-kicad/lib/client.js",
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./dist/dsh-kicad/cordis.patch.yml",
+    "./presets/*.yml": "./dist/dsh-kicad/presets/*.yml",
+    "./locale/*.json": "./dist/dsh-kicad/locale/*.json",
+    "./icon": "./dist/dsh-kicad/icon.svg",
+    "./bridge": "./dist/dsh-kicad/lib/bridge.js",
+    "./bridge/locale/*.json": "./dist/dsh-kicad/locale/bridge/*.json",
+    "./bridge/icon": "./dist/dsh-kicad/icon.svg",
+    "./tools": "./dist/dsh-kicad/lib/tools.js",
+    "./tools/locale/*.json": "./dist/dsh-kicad/locale/tools/*.json",
+    "./tools/icon": "./dist/dsh-kicad/icon.svg",
+    "./policy": "./dist/dsh-kicad/lib/policy.js",
+    "./policy/locale/*.json": "./dist/dsh-kicad/locale/policy/*.json",
+    "./policy/icon": "./dist/dsh-kicad/icon.svg",
+    "./skills": "./dist/dsh-kicad/lib/skills.js",
+    "./skills/locale/*.json": "./dist/dsh-kicad/locale/skills/*.json",
+    "./skills/icon": "./dist/dsh-kicad/icon.svg"
   },
+  "engines": {
+    "node": ">=22.19.0",
+    "dsh": ">=0.2.1-rc.2 <0.3.0-0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.5",
+    "@deepseek-ai/schemastery": "^3.18.5",
+    "@deepseek-ai/dsh-tools": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-llm": "^0.2.1-rc.2"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": [
+        "./dist/dsh-kicad/cordis.patch.yml",
+        "./dist/dsh-kicad/presets/eda.patch.yml"
+      ]
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-api-remotes",
+        "@deepseek-ai/dsh-client-ui-sidebar-right",
+        "@deepseek-ai/dsh-client-ui-tool",
+        "@deepseek-ai/dsh-client-ui-plugin-manager"
+      ]
+    }
+  },
+  "keywords": [
+    "dsh",
+    "dsh-bundle",
+    "kicad",
+    "eda",
+    "schematic",
+    "pcb",
+    "erc"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LuYanFCP/dsh-kicad.git"
+  },
+  "homepage": "https://github.com/LuYanFCP/dsh-kicad#readme",
   "scripts": {
     "build": "pnpm -r --filter './packages/*' run build",
     "typecheck": "tsc -b tsconfig.json",
