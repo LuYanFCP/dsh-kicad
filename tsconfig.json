@@ -1,6 +1,11 @@
 {
   "files": [],
   "references": [
-    { "path": "packages/kicad-bridge" }
+    {
+      "path": "packages/kicad-bridge"
+    },
+    {
+      "path": "packages/tool-kicad"
+    }
   ]
 }

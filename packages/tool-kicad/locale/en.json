@@ -1,0 +1,1 @@
+{ "meta": { "title": "KiCad tools", "description": "kicad_* tools: read schematics, edit them atomically, run ERC/DRC, render and export." } }

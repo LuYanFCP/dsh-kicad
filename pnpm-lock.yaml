@@ -81,11 +81,23 @@ importers:
         specifier: ^4.0.5
         version: 4.0.5
       '@deepseek-ai/dsh-subprocess':
-        specifier: '*'
-        version: 0.0.1-rc.1(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-invariants@0.0.1-rc.1(@deepseek-ai/cordis@4.0.5))
+        specifier: ^0.2.1-rc.2
+        version: 0.2.1-rc.2(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-http-proxy@0.2.1-rc.2(@deepseek-ai/cordis@4.0.5))
       '@deepseek-ai/schemastery':
         specifier: ^3.18.5
         version: 3.18.5
+
+  packages/tool-kicad:
+    dependencies:
+      '@deepseek-ai/cordis':
+        specifier: ^4.0.5
+        version: 4.0.5
+      '@deepseek-ai/dsh-tools':
+        specifier: ^0.2.1-rc.2
+        version: 0.2.1-rc.2(53871834bb50b7f532ec7289e680bbda)
+      dsh-kicad-bridge:
+        specifier: workspace:^
+        version: link:../kicad-bridge
 
 packages:
 
@@ -199,11 +211,6 @@ packages:
     peerDependencies:
       '@deepseek-ai/cordis': ~4.0.5
 
-  '@deepseek-ai/dsh-invariants@0.0.1-rc.1':
-    resolution: {integrity: sha512-ZoGCGColviu3Tkdnv9hMkgBE4eg0hAz5GXR/knqRf7mJUeBlTCya2dIckYlqekYmp5L+1AeWxf9j+Lv1YRcvXw==}
-    peerDependencies:
-      '@deepseek-ai/cordis': ^4.0.1-rc.1
-
   '@deepseek-ai/dsh-lazy-require@0.2.1-rc.2':
     resolution: {integrity: sha512-5jau8Gv6eCvgeIkQcT2yRl/pfEuN8u6CsO7ZiMTwGqPEW52GHUKyJsFkya5rTAUzIxfG/uZSgi43iKshBta2rQ==}
     peerDependencies:
@@ -267,12 +274,6 @@ packages:
       '@deepseek-ai/cordis': ~4.0.5
       '@deepseek-ai/dsh-subprocess': 0.2.1-rc.2
       '@deepseek-ai/dsh-timeout': 0.2.1-rc.2
-
-  '@deepseek-ai/dsh-subprocess@0.0.1-rc.1':
-    resolution: {integrity: sha512-exYWSwVuLM97VYgBeb+AgyArlRbBJ3wslSwO7IOyYd1ncqVcNSvyXQS1ACjcEVftUa1uycfZnUqX8wL//q2yMw==}
-    peerDependencies:
-      '@deepseek-ai/cordis': ^4.0.1-rc.1
-      '@deepseek-ai/dsh-invariants': ^0.0.1-rc.1
 
   '@deepseek-ai/dsh-subprocess@0.2.1-rc.2':
     resolution: {integrity: sha512-56zNxFUPDFSIHmOaRzcuadXyrGZaFGECqQsLc78d+QIPhFkAN2bXeGIYCo++Ly5SK14FeEtgrYtKpDhRPmBR9g==}
@@ -1481,11 +1482,6 @@ snapshots:
       '@deepseek-ai/cordis': 4.0.5
       undici: 8.11.2
 
-  '@deepseek-ai/dsh-invariants@0.0.1-rc.1(@deepseek-ai/cordis@4.0.5)':
-    dependencies:
-      '@deepseek-ai/cordis': 4.0.5
-      '@deepseek-ai/schemastery': 3.18.5
-
   '@deepseek-ai/dsh-lazy-require@0.2.1-rc.2(@deepseek-ai/cordis@4.0.5)':
     dependencies:
       '@deepseek-ai/cordis': 4.0.5
@@ -1559,11 +1555,6 @@ snapshots:
       '@deepseek-ai/dsh-win32-process': 0.2.1-rc.2(@deepseek-ai/cordis@4.0.5)
       koffi: 3.1.1
       node-pty: 1.2.0-beta.15
-
-  '@deepseek-ai/dsh-subprocess@0.0.1-rc.1(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-invariants@0.0.1-rc.1(@deepseek-ai/cordis@4.0.5))':
-    dependencies:
-      '@deepseek-ai/cordis': 4.0.5
-      '@deepseek-ai/dsh-invariants': 0.0.1-rc.1(@deepseek-ai/cordis@4.0.5)
 
   '@deepseek-ai/dsh-subprocess@0.2.1-rc.2(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-http-proxy@0.2.1-rc.2(@deepseek-ai/cordis@4.0.5))':
     dependencies:
