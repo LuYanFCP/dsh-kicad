@@ -6,7 +6,9 @@ KiCad tools over MCP-style JSON-RPC on stdio. It backs the `ctx.kicad` service o
 - **Core is stdlib-only** (Python ≥ 3.10): a lossless S-expression reader/writer
   (untouched text round-trips byte for byte), a `.kicad_sch` model with atomic edit
   batches, symbol-library lookup/search, pin geometry, and a `kicad-cli` wrapper
-  (ERC, DRC, netlist, BOM, SVG/PDF).
+  (ERC, DRC, netlist, BOM, SVG/PDF). For schematic → PCB sync: the board-side netlist
+  (`netlist.py`) and KiCad's library-table chain (`lib_tables.py`); see
+  [docs/pcb-architecture.md](../../../docs/pcb-architecture.md).
 - **Extras:** `png` (cairosvg rasterizer; otherwise rsvg-convert/ImageMagick/Inkscape),
   `ipc` (kicad-python, for `ipc_status`), `dev` (pytest).
 
