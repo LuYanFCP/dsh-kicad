@@ -84,6 +84,7 @@ describe('follow the agent', () => {
     expect(follow.shouldFollow(base)).toBe(true)
     expect(follow.shouldFollow({ ...base, time: now - 10 * 60_000 })).toBe(false) // replayed history
     expect(follow.shouldFollow({ ...base, path: 'notes.md' })).toBe(false)
+    expect(follow.shouldFollow({ ...base, path: 'hw/.scratch_orient.kicad_sch' })).toBe(false)
     expect(follow.shouldFollow({ ...base, toolName: 'kicad_create_schematic' })).toBe(false) // not created yet
     expect(follow.shouldFollow({ ...base, toolName: 'kicad_create_schematic', phase: 'result' })).toBe(true)
     expect(follow.shouldFollow({ ...base, phase: 'result', isError: true })).toBe(false)

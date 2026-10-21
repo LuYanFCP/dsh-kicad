@@ -4,7 +4,7 @@
  * a hook used by the conversation rows; preferences live in this browser.
  */
 import { useEffect } from 'react'
-import { isDesignFile } from './address.ts'
+import { basename, isDesignFile } from './address.ts'
 import type { ToolViewProps } from './dsh.ts'
 
 export const FOLLOW_KEY = 'dsh-kicad:follow-agent'
@@ -37,6 +37,8 @@ export function resetFollowed(): void {
 /** Whether this tool row should open `path` now. */
 export function shouldFollow(input: { toolName: string, phase: string, time?: number, isError?: boolean, path: string, now: number }): boolean {
   if (!input.path || !isDesignFile(input.path)) return false
+  // Hidden files are the agent's scratch copies, not the design the user is watching.
+  if (basename(input.path).startsWith('.')) return false
   if (input.time === undefined || input.now - input.time > LIVE_WINDOW_MS) return false
   if (input.isError) return false
   // A new file exists only once its creation settled; an edited file already exists when the call starts.

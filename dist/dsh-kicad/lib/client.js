@@ -11033,7 +11033,7 @@ var CSS = `
 .dshk-segmented .dshk-btn:last-child{border-radius:0 6px 6px 0;border-left:0}
 .dshk-segmented .dshk-btn[aria-pressed=true]{background:var(--dsw-alias-interactive-bg-hover);font-weight:600}
 .dshk-kicanvas{cursor:default}
-.dshk-live{position:absolute;left:8px;bottom:8px;z-index:2;display:flex;align-items:center;gap:6px;padding:2px 8px;border-radius:10px;font-size:12px;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l1);pointer-events:none}
+.dshk-live{position:absolute;left:8px;top:8px;z-index:2;display:flex;align-items:center;gap:6px;padding:2px 8px;border-radius:10px;font-size:12px;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l1);pointer-events:none}
 .dshk-live-dot{width:7px;height:7px;border-radius:50%;background:var(--dsw-alias-state-success-primary)}
 .dshk-live-busy{background:var(--dsw-alias-state-warn-primary);animation:dshk-pulse 1s ease-in-out infinite}
 .dshk-live-stale{color:var(--dsw-alias-state-warn-label)}
@@ -11348,6 +11348,7 @@ function setFollowEnabled(on2) {
 var opened = /* @__PURE__ */ new Set();
 function shouldFollow(input) {
   if (!input.path || !isDesignFile(input.path)) return false;
+  if (basename(input.path).startsWith(".")) return false;
   if (input.time === void 0 || input.now - input.time > LIVE_WINDOW_MS) return false;
   if (input.isError) return false;
   if (input.toolName === "kicad_create_schematic") return input.phase === "result";
