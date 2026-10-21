@@ -102,6 +102,18 @@ export interface ToolViewProps {
   t?: (key: string, vars?: Record<string, string | number>) => string
 }
 
+/** Props of one `conversation.chat.commandview` row (dsh-client-ui-conversation CommandNode, fields this plugin reads). */
+export interface CommandRowProps {
+  node: {
+    name: string | null
+    /** Text after the command name; null when the command does not record it. */
+    args: string | null
+    /** null while the command is still running. */
+    outcome: { kind: 'success' | 'error', text?: string } | null
+  }
+  t?: (key: string, vars?: Record<string, string | number>) => string
+}
+
 /** Props of a `plugins.row.config` page. */
 // The page has no session: the bridge page borrows one through `remote.session` for /kicad-doctor.
 export interface ConfigViewProps {

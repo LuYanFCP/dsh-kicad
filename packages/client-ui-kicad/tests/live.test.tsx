@@ -119,3 +119,16 @@ describe('follow the agent', () => {
     expect(off).not.toHaveBeenCalled()
   })
 })
+
+describe('command rows', () => {
+  it('hides the background --json checks and keeps typed commands', async () => {
+    const { CommandRow } = await import('../src/client/Cards.tsx')
+    const hidden = render(<CommandRow node={{ name: 'kicad-doctor', args: ' --json', outcome: { kind: 'success', text: '{}' } }} />)
+    expect(hidden.container.innerHTML).toBe('')
+    const typed = render(<CommandRow node={{ name: 'kicad-doctor', args: '', outcome: { kind: 'success', text: '**Ready**' } }} />)
+    expect(typed.container.querySelector('[data-kicad-command="kicad-doctor"]')).toBeTruthy()
+    const rendered = render(<CommandRow node={{ name: 'kicad-render', args: ' hw/a.kicad_sch', outcome: { kind: 'success', text: '{"path":"/p/hw/a.kicad_sch","svg":["a.svg"]}' } }} />)
+    act(() => (rendered.container.querySelector('button') as HTMLButtonElement).click())
+    expect(rendered.container.textContent).toMatch(/card.rendered|Rendered a.kicad_sch/)
+  })
+})

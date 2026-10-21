@@ -7,7 +7,7 @@
 import { useState, type ComponentType, type ReactNode } from 'react'
 import { basename } from './address.ts'
 import { CheckList, DoctorPanel, KICAD_MISSING, readReport, StatusBadge } from './Doctor.tsx'
-import type { ClientRemote, ToolViewProps } from './dsh.ts'
+import type { ClientRemote, CommandRowProps, ToolViewProps } from './dsh.ts'
 import { useFollowAgent } from './follow.ts'
 import { translate, type KiCadLocaleKey } from './locales.ts'
 import { CSS } from './styles.ts'
@@ -213,6 +213,44 @@ export function CreateCard(props: ToolViewProps): ReactNode {
         <span className="dshk-spacer" />
         {done && path && <span className="dshk-muted dshk-code" role="link" onClick={() => props.openFile?.(path)}>{basename(path)}</span>}
       </div>
+    </div>
+  )
+}
+
+/** Commands this plugin's own surfaces run in the background (doctor checks, installer polling). */
+export const KICAD_COMMANDS = ['kicad-doctor', 'kicad-install', 'kicad-render'] as const
+
+/**
+ * Chat row for /kicad-doctor, /kicad-install and /kicad-render. dsh logs every command
+ * run in the session, so the viewer's and settings page's machine-readable `--json`
+ * checks would otherwise pile up as rows; those render nothing. Commands a person
+ * typed (or the viewer's Render button) keep a compact row.
+ */
+export function CommandRow(props: CommandRowProps): ReactNode {
+  const tr = (key: KiCadLocaleKey, vars?: Record<string, string | number>): string => translate(props.t, key, vars)
+  const [open, setOpen] = useState(false)
+  const { name, args, outcome } = props.node
+  if (/(^|\s)--json(\s|$)/.test(args ?? '')) return null
+  let text = outcome?.text ?? ''
+  if (name === 'kicad-render' && outcome?.kind === 'success') {
+    try {
+      const out = JSON.parse(text) as { path?: string, svg?: string[] }
+      text = tr('card.rendered', { file: basename(out.path ?? ''), count: out.svg?.length ?? 0 })
+    } catch {
+      // not the JSON this plugin writes: show it as is
+    }
+  }
+  const status = outcome === null ? tr('card.commandRunning') : outcome.kind === 'error' ? tr('card.commandFailed') : ''
+  return (
+    <div className="dshk-card" data-kicad-card="command" data-kicad-command={name ?? ''}>
+      <style>{CSS}</style>
+      <button type="button" className="dshk-card-head" aria-expanded={open} onClick={() => setOpen(o => !o)} disabled={!text}>
+        <strong>/{name}</strong>
+        <span className="dshk-muted dshk-code">{(args ?? '').trim()}</span>
+        <span className="dshk-spacer" />
+        {status && <span className={outcome?.kind === 'error' ? 'dshk-badge dshk-fail' : 'dshk-muted'}>{status}</span>}
+      </button>
+      {open && text && <pre className="dshk-list dshk-code" style={{ whiteSpace: 'pre-wrap' }}>{text}</pre>}
     </div>
   )
 }
