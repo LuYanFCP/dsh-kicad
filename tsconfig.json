@@ -6,6 +6,9 @@
     },
     {
       "path": "packages/tool-kicad"
+    },
+    {
+      "path": "packages/kicad-policy"
     }
   ]
 }
