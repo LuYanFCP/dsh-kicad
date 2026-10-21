@@ -44,11 +44,39 @@ def install_dirs() -> list[str]:
     ]
 
 
+def _probe_version(argv: list[str]) -> tuple[int, ...] | None:
+    try:
+        proc = subprocess.run([*argv, "version"], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return parse_version(proc.stdout) if proc.returncode == 0 else None
+
+
+def _discovered():
+    """Candidates found without configuration, in search order (lazily: Flatpak costs a subprocess)."""
+    found = shutil.which("kicad-cli")
+    if found:
+        yield [found], "path"
+    for path in install_dirs():
+        if os.path.isfile(path):
+            yield [path], "install_dir"
+    flatpak = shutil.which("flatpak")
+    if flatpak and sys.platform.startswith("linux"):
+        try:
+            probe = subprocess.run([flatpak, "info", FLATPAK_APP], capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.TimeoutExpired):
+            probe = None
+        if probe is not None and probe.returncode == 0:
+            yield flatpak_argv(flatpak), "flatpak"
+
+
 def locate_kicad_cli(explicit: str | None = None) -> tuple[list[str] | None, str | None, list[str]]:
     """Find kicad-cli. Returns ``(argv, source, problems)``.
 
     ``source`` is one of ``setting``, ``env``, ``path``, ``install_dir``, ``flatpak``; ``problems`` lists
     configured candidates that do not exist (the search then continues, so a stale setting is reported, not fatal).
+    A configured kicad-cli is used as is; among discovered ones the first KiCad 8+ wins, so installing a new
+    KiCad (e.g. the Flatpak) next to an old one on PATH is enough.
     """
     problems: list[str] = []
     for candidate, source in ((explicit, "setting"), (os.environ.get("KICAD_CLI"), "env")):
@@ -59,20 +87,14 @@ def locate_kicad_cli(explicit: str | None = None) -> tuple[list[str] | None, str
             if found:
                 return [found], source, problems
             problems.append(f"{'the kicadCli setting' if source == 'setting' else '$KICAD_CLI'} points to {candidate!r}, which is not an executable")
-    found = shutil.which("kicad-cli")
-    if found:
-        return [found], "path", problems
-    for path in install_dirs():
-        if os.path.isfile(path):
-            return [path], "install_dir", problems
-    flatpak = shutil.which("flatpak")
-    if flatpak and sys.platform.startswith("linux"):
-        try:
-            probe = subprocess.run([flatpak, "info", FLATPAK_APP], capture_output=True, text=True, timeout=30)
-        except (OSError, subprocess.TimeoutExpired):
-            probe = None
-        if probe is not None and probe.returncode == 0:
-            return flatpak_argv(flatpak), "flatpak", problems
+    fallback: tuple[list[str], str] | None = None
+    for argv, source in _discovered():
+        version = _probe_version(argv)
+        if version is not None and version >= MIN_KICAD:
+            return argv, source, problems
+        fallback = fallback or (argv, source)
+    if fallback:
+        return fallback[0], fallback[1], problems
     return None, None, problems
 
 

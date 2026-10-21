@@ -166,7 +166,9 @@ def run_doctor(cli: KiCadCli, info: dict[str, Any] | None = None, which: Which =
         checks.append(_check("kicad_version", "KiCad version", "error" if old else "ok",
                              f"KiCad {version_text}" + (f" is older than {MIN_KICAD[0]}.0." if old else "."),
                              required=True, version=version_text, minimum=f"{MIN_KICAD[0]}.0",
-                             fix=f"Upgrade to KiCad {MIN_KICAD[0]} or newer. {hint}" if old else None))
+                             fix=(f"Upgrade to KiCad {MIN_KICAD[0]} or newer. {hint}"
+                                  + (f" Then clear or update the {'kicadCli setting' if cli.source == 'setting' else '$KICAD_CLI variable'}, which points to this old kicad-cli."
+                                     if cli.source in ("setting", "env") else "")) if old else None))
     else:
         checks.append(_check("kicad_version", "KiCad version", "error", "Unknown: kicad-cli is not available.", required=True,
                              version=None, minimum=f"{MIN_KICAD[0]}.0", fix="Install KiCad first (see kicad-cli)."))
