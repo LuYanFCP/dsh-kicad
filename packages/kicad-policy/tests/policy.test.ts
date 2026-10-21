@@ -4,12 +4,12 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { type Context, Service } from '@deepseek-ai/cordis'
 import * as toolKiCad from 'dsh-tool-kicad'
 import * as policy from '../src/index.ts'
-import { bootKiCad, disposeAll, fixtureProject, hasKiCadCli, runTool, text } from '../../../test/harness.ts'
+import { bootKiCad, disposeAll, fixtureBoard, fixtureProject, hasKiCadCli, runTool, text } from '../../../test/harness.ts'
 
 afterEach(disposeAll)
 
 const config = (over: Record<string, unknown> = {}) => ({
-  approval: 'allow', restrictToWorkspace: true, extraRoots: [], autoErc: true, autoRender: false, guidance: true, projectContext: true, ...over,
+  approval: 'allow', restrictToWorkspace: true, extraRoots: [], autoErc: true, autoDrc: true, autoRender: false, guidance: true, projectContext: true, ...over,
 })
 
 const fix = [{ op: 'connect_pin_to_net', pin: 'R1:1', net: 'VIN', kind: 'global_label' }, { op: 'no_connect_pin', pin: 'R1:2' }]
@@ -54,6 +54,43 @@ describe('dsh-kicad-policy', () => {
     expect(text(done)).toMatch(/Automatic ERC by KiCad .*PASSED/)
   })
 
+  it('board edits are design writes: guarded, and asked for under approval: ask', async () => {
+    const path = fixtureBoard('rc_board')
+    const before = readFileSync(path, 'utf8')
+    const op = [{ op: 'move_footprint', reference: 'R1', x: 121, y: 110 }]
+    const guarded = await bootKiCad([toolKiCad], [policy, config()])
+    const outside = await runTool(guarded, 'kicad_edit_pcb', { path, operations: op })
+    expect(text(outside)).toMatch(/kicad_edit_pcb may only write inside the project directory/)
+    const asking = await bootKiCad([toolKiCad], [policy, config({ approval: 'ask', extraRoots: [dirname(path)] })])
+    const asked = await runTool(asking, 'kicad_edit_pcb', { path, operations: op })
+    expect(asked.isError).toBe(true)
+    expect(readFileSync(path, 'utf8')).toBe(before)
+    const read = await runTool(guarded, 'kicad_read_pcb', { path, drc: false })
+    expect(read.isError).toBeFalsy()
+  })
+
+  it.runIf(hasKiCadCli())('appends KiCad DRC after a board edit (autoDrc)', async () => {
+    const path = fixtureBoard('rc_board')
+    const ctx = await bootKiCad([toolKiCad], [policy, config({ extraRoots: [dirname(path)] })])
+    const route = await runTool(ctx, 'kicad_edit_pcb', { path, operations: [{ op: 'add_track', points: ['J1:1', [110, 110], 'R1:1'] }] })
+    expect(route.isError).toBeFalsy()
+    expect(text(route)).toMatch(/Automatic DRC by KiCad .*FAILED — 3 error\(s\), 0 warning\(s\), 3 unrouted[\s\S]*unconnected_items/)
+    // A GND pour (refilled for the check) plus a via from C1:2 joins GND without a track.
+    const pour = await runTool(ctx, 'kicad_edit_pcb', {
+      path,
+      operations: [
+        { op: 'add_track', points: ['C1:2', [134, 117.225]] },
+        { op: 'add_via', x: 134, y: 117.225, net: 'GND' },
+        { op: 'add_zone', net: 'GND', layer: 'B.Cu' },
+      ],
+    })
+    expect(text(pour)).toMatch(/Automatic DRC by KiCad .*FAILED — 2 error\(s\), 0 warning\(s\), 2 unrouted/)
+    expect(policy.projectContext(dirname(path), undefined)).toContain('- boards: rc_board.kicad_pcb')
+    const off = await bootKiCad([toolKiCad], [policy, config({ autoDrc: false, extraRoots: [dirname(path)] })])
+    const quiet = await runTool(off, 'kicad_edit_pcb', { path, operations: [{ op: 'add_text', text: 'v1', x: 140, y: 104 }] })
+    expect(text(quiet)).not.toMatch(/Automatic DRC/)
+  })
+
   it('describes edits for the approval card', () => {
     const d = policy.describeEdit('kicad_edit_schematic', { path: '/p/a.kicad_sch', operations: [{ op: 'add_symbol' }, { op: 'add_symbol' }, { op: 'connect_pins' }] })
     expect(d.displayReason).toEqual({ en: 'Edit a.kicad_sch: 3 operation(s) — add_symbol×2, connect_pins', zh: '修改 a.kicad_sch：3 项操作 — add_symbol×2, connect_pins' })
@@ -67,6 +104,15 @@ describe('dsh-kicad-policy', () => {
     expect(text).toContain('- projects: rc_filter.kicad_pro')
     expect(text).toContain('- last ERC of rc_filter.kicad_sch: FAILED (2 errors, 0 warnings: pin_not_connected)')
     expect(policy.projectContext('/proc/self/fdinfo')).toBe('')
+  })
+
+  it('project context lists the board and its last DRC', () => {
+    const path = fixtureBoard('rc_board')
+    const memory = new policy.ErcMemory()
+    memory.remember(path, { passed: false, counts: { error: 4, warning: 1, exclusion: 0, total: 5 }, by_type: { unconnected_items: 4, silk_overlap: 1 }, unrouted: 4 })
+    const text = policy.projectContext(dirname(path), memory)
+    expect(text).toContain('- boards: rc_board.kicad_pcb')
+    expect(text).toContain('- last DRC of rc_board.kicad_pcb: FAILED (4 errors, 1 warnings, 4 unrouted: unconnected_items, silk_overlap)')
   })
 })
 

@@ -10,8 +10,8 @@
 
 | 能力 | 说明 |
 |---|---|
-| **工具**（`kicad_*`） | `doctor`（检查本机是否就绪：kicad-cli 与 KiCad 8+、库、Python，附修复方法和安装命令）、`read_schematic`、`list_components`、`get_symbol_pins`、`list_nets`（KiCad 网表）、`search_symbols`（已安装符号库）、`erc`、`drc`、`render`（SVG；模型支持图片时附带 PNG 图片）、`export`（网表/BOM）、`create_schematic`，以及原子批量编辑 `edit_schematic`（增删移动元件、设置值/封装/属性、导线、标签、电源符号、结点、不连接标记、绕开元件和其他网络自动布线的引脚到引脚导线、引脚到网络的连接，以及按功能分区布局：带标题的功能块框、连同导线一起移动元件或整个功能块、图纸尺寸与标题栏）。未修改的文件文本逐字节保持不变。 |
-| **策略** | 设计修改走 dsh 审批（`ask`）；写操作被单调 guard 限制在会话工作目录内；每次成功修改后自动运行 KiCad ERC 并把结论附加到工具结果；系统提示中注入稳定的 KiCad 工作规范，以及动态的“当前目录中的 KiCad 工程 + 最近一次 ERC”上下文。 |
+| **工具**（`kicad_*`） | `doctor`（检查本机是否就绪：kicad-cli 与 KiCad 8+、库、Python，附修复方法和安装命令）、`read_schematic`、`list_components`、`get_symbol_pins`、`list_nets`（KiCad 网表）、`search_symbols`（已安装符号库）、`erc`、`drc`、`render`（SVG；模型支持图片时附带 PNG 图片）、`export`（网表/BOM）、`create_schematic`，以及原子批量编辑 `edit_schematic`（增删移动元件、设置值/封装/属性、导线、标签、电源符号、结点、不连接标记、绕开元件和其他网络自动布线的引脚到引脚导线、引脚到网络的连接，以及按功能分区布局：带标题的功能块框、连同导线一起移动元件或整个功能块、图纸尺寸与标题栏）；电路板有 `read_pcb`（外框、层、设计规则与网络类、带 courtyard 和焊盘网络的封装、覆铜区、DRC 给出的未布线数）和原子批量编辑 `edit_pcb`（板框与安装孔、移动/翻面/锁定封装、写入 `.kicad_pro` 的设计规则与网络类、以焊盘为端点的走线、过孔、覆铜区、禁布区、丝印文字与位号、按 uuid 删除）。未修改的文件文本逐字节保持不变。 |
+| **策略** | 设计修改走 dsh 审批（`ask`）；写操作被单调 guard 限制在会话工作目录内；每次成功修改后自动运行 KiCad ERC（原理图）或 DRC（电路板，先重新填充覆铜）并把结论附加到工具结果；系统提示中注入稳定的 KiCad 工作规范，以及动态的“当前目录中的 KiCad 工程 + 最近一次 ERC/DRC”上下文。 |
 | **技能** | `kicad-agent-workflow`、`kicad-erc-triage`、`kicad-schematic-design`。 |
 | **命令** | `/erc`、`/drc`、`/bom`（不经过模型，作用于工程根设计）、`/kicad-render`、`/kicad-doctor`（环境检查）、`/kicad-install`（安装 KiCad，见下文）。 |
 | **Agent 预设** | `eda`：与 standard 类似的工具集 + 电子设计人设。KiCad 工具为全局注册，任何预设都可使用。 |
@@ -27,7 +27,7 @@ dsh-kicad-bundle  (cordis.patch.yml：全局行 + presets/eda.patch.yml)
 │    └─ sidecar/        Python ≥3.10，核心仅用标准库：无损 .kicad_sch S 表达式编辑、符号库、引脚几何、
 │                       kicad-cli（ERC/DRC/网表/BOM/SVG）；可选 extra：png（cairosvg）、ipc（kicad-python）
 ├─ dsh-tool-kicad       Host  kicad_* 工具（defineTool），路径相对会话工作目录解析
-├─ dsh-kicad-policy     Host  tools.guard + tools/pre-execute（ask/deny）+ tools/post-execute（自动 ERC）+ 提示词 section/context
+├─ dsh-kicad-policy     Host  tools.guard + tools/pre-execute（ask/deny）+ tools/post-execute（自动 ERC/DRC）+ 提示词 section/context
 ├─ dsh-kicad-skills     Host  技能 provider + /erc /drc /bom /kicad-render
 └─ dsh-client-ui-kicad  Client sidebarRightTabs 类型 + tool.call.toolview 行 + plugins.row.config 设置页
 kicad-plugin/           KiCad IPC 插件（"Open in DSH"）
@@ -134,7 +134,8 @@ PYTHONPATH=packages/kicad-bridge/sidecar/src python3 -m dsh_kicad_sidecar --root
 | | `kicadCli` *（实时）* | 自动 | kicad-cli 路径 |
 | | `requestTimeoutMs` | `300000` | |
 | `kicad-policy` | `approval` *（实时）* | `ask` | 设计修改 `ask` / `allow` |
-| | `autoErc` *（实时）* | `true` | 每次修改后运行 ERC |
+| | `autoErc` *（实时）* | `true` | 每次修改原理图后运行 ERC |
+| | `autoDrc` *（实时）* | `true` | 每次修改电路板后运行 DRC（板上有覆铜区时加 `--refill-zones`） |
 | | `autoRender` *（实时）* | `true` | 每次修改后刷新侧边栏 SVG |
 | | `restrictToWorkspace`、`extraRoots` | `true`、`[]` | 写入范围限制 |
 | | `guidance`、`projectContext` | `true` | 提示词 section / 动态上下文 |
@@ -147,7 +148,7 @@ PYTHONPATH=packages/kicad-bridge/sidecar/src python3 -m dsh_kicad_sidecar --root
 ```sh
 pnpm install && pnpm run build
 pnpm test            # vitest：Host 包在 dsh 真实 ToolRuntime/SkillRegistry + 真实 sidecar 上测试；Client 在 jsdom 中测试
-pnpm run test:py     # pytest：S 表达式 round-trip（KiCad demo 文件）、编辑、kicad-cli、MCP server
+pnpm run test:py     # pytest：S 表达式 round-trip（KiCad demo 文件）、由 kicad-cli 判定的原理图与电路板编辑、MCP server
 python packages/kicad-bridge/sidecar/tests/make_fixtures.py   # 用编辑器本身重新生成测试 fixture
 ```
 

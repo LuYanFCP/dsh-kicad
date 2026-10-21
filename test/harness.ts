@@ -28,6 +28,11 @@ export function fixtureProject(name: string): string {
   return join(dir, `${name}.kicad_sch`)
 }
 
+/** Copy a fixture board project into a fresh temp dir; returns the .kicad_pcb path. */
+export function fixtureBoard(name: string): string {
+  return fixtureProject(name).replace(/\.kicad_sch$/, '.kicad_pcb')
+}
+
 const live: Context[] = []
 
 export async function bootKiCad(...plugins: Array<[unknown, unknown?]>): Promise<Context> {

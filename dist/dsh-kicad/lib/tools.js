@@ -46,7 +46,7 @@ var MAX_LISTED = 60;
 function formatCheck(report) {
   const label = report.kind.toUpperCase();
   const verdict = report.passed ? "PASSED" : "FAILED";
-  const head = `${label} by KiCad ${report.kicad_version ?? ""}`.trim() + `${report.path ? ` on ${report.path}` : ""}: ${verdict} \u2014 ${report.counts.error} error(s), ${report.counts.warning} warning(s)` + (report.counts.exclusion ? `, ${report.counts.exclusion} excluded` : "");
+  const head = `${label} by KiCad ${report.kicad_version ?? ""}`.trim() + `${report.path ? ` on ${report.path}` : ""}: ${verdict} \u2014 ${report.counts.error} error(s), ${report.counts.warning} warning(s)` + (report.unrouted !== void 0 ? `, ${report.unrouted} unrouted` : "") + (report.counts.exclusion ? `, ${report.counts.exclusion} excluded` : "");
   const active = report.violations.filter((v) => !v.excluded);
   if (active.length === 0) return head;
   const lines = active.slice(0, MAX_LISTED).map((v) => {
@@ -56,6 +56,70 @@ function formatCheck(report) {
   if (active.length > MAX_LISTED) lines.push(`\u2026 ${active.length - MAX_LISTED} more`);
   return `${head}
 ${lines.join("\n")}`;
+}
+function formatEdit(value) {
+  const also = (value.files ?? []).filter((f) => f !== value.path);
+  const head = value.written ? `Wrote ${value.path}${also.length ? ` and ${also.join(", ")}` : ""} (${value.applied} operations).` : `Dry run on ${value.path}: ${value.applied} operations valid, nothing written.`;
+  const results = value.results?.length ? `
+Results:
+${formatJson(value.results)}` : "";
+  return `${head}
+${value.changes.map((c) => `- ${c}`).join("\n")}${results}`;
+}
+var KEY_RULES = [
+  "min_clearance",
+  "min_track_width",
+  "min_via_diameter",
+  "min_via_annular_width",
+  "min_through_hole_diameter",
+  "min_hole_to_hole",
+  "min_hole_clearance",
+  "min_copper_edge_clearance",
+  "min_silk_clearance",
+  "min_text_height",
+  "min_text_thickness"
+];
+function formatBoard(b) {
+  const mm = (n) => Math.round(n * 1e3) / 1e3;
+  const pt = (p) => `(${mm(p[0])}, ${mm(p[1])})`;
+  const lines = [`Board ${b.path} \u2014 KiCad ${b.format.generator_version ?? "?"} file (format ${b.format.version})`];
+  const o = b.board.outline;
+  lines.push(o ? `Outline: ${o.shape === "polygon" ? `polygon of ${o.points?.length ?? "?"} points` : o.shape === "rectangle" ? "rectangle" : `${o.items} Edge.Cuts shapes`}, ${mm(o.width)} \xD7 ${mm(o.height)} mm, ${pt(o.bbox)}\u2013${pt(o.bbox.slice(2))}${o.corner_radius ? `, corner radius ${o.corner_radius}` : ""}` : "Outline: none (add one with set_board_outline)");
+  lines.push(`Layers: ${b.board.copper_layers.length} copper (${b.board.copper_layers.join(", ")}), ${b.board.thickness} mm thick`);
+  const rules = KEY_RULES.filter((k) => b.design_rules[k] !== void 0).map((k) => `${k} ${b.design_rules[k]}`);
+  lines.push(`Design rules${b.project_file ? "" : " (no .kicad_pro: KiCad defaults)"}: ${rules.length ? rules.join(", ") : "KiCad defaults"}`);
+  lines.push(`Net classes: ${b.net_classes.map((c) => `${c.name} (track ${c.track_width ?? "?"}, clearance ${c.clearance ?? "?"}, via ${c.via_diameter ?? "?"}/${c.via_drill ?? "?"})${c.nets?.length ? `: ${c.nets.join(", ")}` : ""}`).join("; ")}`);
+  if (b.drc && "error" in b.drc) {
+    lines.push(`DRC could not run: ${b.drc.error}`);
+  } else if (b.drc) {
+    const types = Object.entries(b.drc.by_type).filter(([t]) => t !== "unconnected_items").map(([t, n]) => `${t}\xD7${n}`);
+    lines.push(`DRC by KiCad ${b.drc.kicad_version ?? ""}: ${b.drc.unrouted} unrouted connection(s), ${b.drc.errors - b.drc.unrouted} other error(s), ${b.drc.warnings} warning(s)${types.length ? ` (${types.join(", ")})` : ""}`);
+  }
+  if (b.footprints) {
+    lines.push(`Footprints (${b.footprints.length}): reference value footprint @ position rotation side`);
+    for (const f of b.footprints) {
+      const pads = Object.entries(f.pad_nets).map(([n, net]) => `${n}=${net}`).join(" ");
+      lines.push(`- ${f.reference} ${f.value} ${f.footprint} @ ${pt(f.at)} ${f.rotation}\xB0 ${f.side}${f.locked ? " LOCKED" : ""}` + (f.courtyard ? `, courtyard ${pt(f.courtyard)}\u2013${pt(f.courtyard.slice(2))}` : "") + (pads ? `; pads ${pads}` : ""));
+      for (const p of f.pads ?? []) lines.push(`    pad ${p.number} ${p.net || "(no net)"} @ ${pt(p.at)} ${p.layers[0] ?? ""}`);
+    }
+  }
+  if (b.zones?.length) {
+    lines.push(`Zones (${b.zones.length}):`);
+    for (const z of b.zones) {
+      const what = z.keepout ? `keepout (no ${z.keepout.join(", ")})` : `${z.net ?? "(no net)"} pour`;
+      lines.push(`- ${what} on ${z.layers.join(", ")}${z.name ? ` "${z.name}"` : ""}${z.priority ? ` priority ${z.priority}` : ""}${z.bbox ? `, ${pt(z.bbox)}\u2013${pt(z.bbox.slice(2))}` : ""} [${z.uuid}]`);
+    }
+  }
+  lines.push(`Copper: ${b.counts.segments} track segment(s), ${b.counts.vias} via(s)`);
+  if (b.items) {
+    for (const t of b.items.tracks) {
+      lines.push(t.kind === "via" ? `- via ${t.net} @ ${pt(t.at ?? [0, 0])} ${t.size}/${t.drill} [${t.uuid}]` : `- ${t.kind} ${t.net} ${t.layer} ${pt(t.start ?? [0, 0])}\u2192${pt(t.end ?? [0, 0])} width ${t.width} [${t.uuid}]`);
+    }
+    for (const t of b.items.texts) lines.push(`- text "${t.text}" ${t.layer} @ ${pt(t.at)} [${t.uuid}]`);
+    for (const s of b.items.outline) lines.push(`- outline ${s.kind} [${s.uuid}]`);
+  }
+  lines.push(`Nets (${b.counts.nets}): ${b.nets.join(", ")}`);
+  return lines.join("\n");
 }
 function formatJson(value) {
   return JSON.stringify(value, null, 1);
@@ -81,9 +145,11 @@ var TOOL_ACCESS = {
   kicad_render: "read",
   kicad_export: "write",
   kicad_create_schematic: "write",
-  kicad_edit_schematic: "write"
+  kicad_edit_schematic: "write",
+  kicad_read_pcb: "read",
+  kicad_edit_pcb: "write"
 };
-var DESIGN_WRITE_TOOLS = ["kicad_create_schematic", "kicad_edit_schematic"];
+var DESIGN_WRITE_TOOLS = ["kicad_create_schematic", "kicad_edit_schematic", "kicad_edit_pcb"];
 var PATH_ARGUMENTS = {
   kicad_doctor: [],
   kicad_read_schematic: ["path"],
@@ -98,9 +164,12 @@ var PATH_ARGUMENTS = {
   kicad_render: ["path"],
   kicad_export: ["path", "output"],
   kicad_create_schematic: ["path"],
-  kicad_edit_schematic: ["path"]
+  kicad_edit_schematic: ["path"],
+  kicad_read_pcb: ["path"],
+  kicad_edit_pcb: ["path"]
 };
 var SCH = { type: "string", required: true, description: "Path to a .kicad_sch file (relative to the working directory or absolute)." };
+var PCB = { type: "string", required: true, description: "Path to a .kicad_pcb file (relative to the working directory or absolute)." };
 var JSON_OUT = { schema: { type: "json" }, render: (_args, value) => [{ type: "text", text: formatJson(value) }] };
 function apply(ctx, config = {}) {
   const attachRenders = config.attachRenders ?? true;
@@ -220,11 +289,12 @@ function apply(ctx, config = {}) {
     }),
     defineTool({
       name: "kicad_drc",
-      description: "Run KiCad's Design Rules Check on a .kicad_pcb (optionally with schematic parity). KiCad's verdict is authoritative.",
+      description: "Run KiCad's Design Rules Check on a .kicad_pcb (optionally with schematic parity). KiCad's verdict is authoritative; unrouted connections count as errors. Zones are refilled first when the board has any.",
       parameters: {
         path: { type: "string", required: true, description: "Path to a .kicad_pcb file." },
         severity: { type: "string", enum: ["all", "error", "warning"] },
-        schematic_parity: { type: "boolean" }
+        schematic_parity: { type: "boolean" },
+        refill_zones: { type: "boolean", description: "Refill zones before checking (in memory only). Default: when the board has zones." }
       },
       output: {
         schema: { type: "json" },
@@ -348,6 +418,58 @@ function apply(ctx, config = {}) {
         if (args.operations.length === 0) throw new Error("operations must not be empty");
         return await ctx.kicad.run("edit_schematic", { ...args, path: at(exec, args.path) }, exec.signal);
       }
+    }),
+    defineTool({
+      name: "kicad_read_pcb",
+      description: "Summarize a KiCad board: outline size, copper layers and thickness, design rules and net classes (from the .kicad_pro), every footprint (reference, value, footprint, position in mm, rotation, front/back side, locked, courtyard box, pad nets), zones, nets, and KiCad DRC's count of unrouted connections. Start here before editing a board.",
+      parameters: {
+        path: PCB,
+        include_footprints: { type: "boolean", description: "Include the footprint list (default true)." },
+        include_pads: { type: "boolean", description: "Also list every pad with its absolute position and layers." },
+        include_items: { type: "boolean", description: "Also list tracks, vias, texts and outline shapes with their uuids (for remove_item)." },
+        drc: { type: "boolean", description: "Run KiCad DRC for the unrouted count and verdict (default true)." }
+      },
+      output: {
+        schema: { type: "json" },
+        render: (_args, value) => [{ type: "text", text: formatBoard(value) }]
+      },
+      isConcurrencySafe: () => true,
+      async execute(args, exec) {
+        return await ctx.kicad.run("read_pcb", { ...args, path: at(exec, args.path) }, exec.signal);
+      }
+    }),
+    defineTool({
+      name: "kicad_edit_pcb",
+      description: [
+        "Apply a batch of edits to one .kicad_pcb atomically (all succeed or nothing is written); untouched text stays byte-identical. Design rules and net classes are stored in the board's .kicad_pro, which the same batch updates.",
+        'Millimetres, Y grows downward, rotation in degrees counter-clockwise; a pad is written "REF:PAD".',
+        "Outline: set_board_outline{width,height,corner_radius?,x?,y?} (rectangle; x,y is the top-left corner, default: the old outline's corner or centred on the parts) or set_board_outline{points:[[x,y],...]}; it replaces everything on Edge.Cuts. add_mounting_hole{x,y,drill?(3.2),plated?,footprint?,reference?}.",
+        "Placement: move_footprint{reference,x?,y?,rotation?,side?:front|back} (flipping to the back mirrors the part as KiCad does); move_footprints{references,dx,dy}; lock_footprint{reference,locked?} (locked parts refuse to move).",
+        "Rules: set_design_rules{min_clearance?,min_track_width?,min_via_diameter?,min_via_annular_width?,min_through_hole_diameter?,min_hole_to_hole?,min_hole_clearance?,min_copper_edge_clearance?,min_silk_clearance?,min_text_height?,...}; set_net_class{name,nets?,track_width?,clearance?,via_diameter?,via_drill?} (nets move to that class; tracks and vias on them default to its sizes).",
+        `Copper: add_track{points:[[x,y] | "REF:PAD",...],net?,layer?(F.Cu),width?} (pad endpoints snap to the pad centre; the pad must be on the track's net and layer); add_via{x,y,net,diameter?,drill?}; add_zone{net,layer | layers,outline?("board" | [[x,y],...]),priority?,clearance?,connect_pads?:thermal|solid|none}; add_keepout{outline,layers?,tracks?,vias?,pads?,copperpour?,footprints?} (true = not allowed).`,
+        "Silkscreen: add_text{text,x,y,layer?(F.SilkS),size?,thickness?,rotation?}; set_reference_text{reference,x?,y?,size?,thickness?,rotation?,hide?} (x,y on the board).",
+        "Undo: remove_item{uuid} removes a footprint, track, via, zone, text or outline shape (uuids from kicad_read_pcb include_items).",
+        "Keep one call to at most ~30 operations. Never rewrite a .kicad_pcb by hand. DRC runs automatically afterwards when the KiCad policy is enabled."
+      ].join(" "),
+      parameters: {
+        path: PCB,
+        operations: {
+          type: "array",
+          required: true,
+          items: { type: "object", additionalProperties: true, properties: { op: { type: "string", required: true } } },
+          description: "Ordered edit operations."
+        },
+        dry_run: { type: "boolean", description: "Validate without writing." }
+      },
+      output: {
+        schema: { type: "json" },
+        render: (_args, value) => [{ type: "text", text: formatEdit(value) }],
+        presentationMeta: (_args, value) => ({ changes: value.changes ?? [], written: value.written })
+      },
+      async execute(args, exec) {
+        if (args.operations.length === 0) throw new Error("operations must not be empty");
+        return await ctx.kicad.run("edit_pcb", { ...args, path: at(exec, args.path) }, exec.signal);
+      }
     })
   ];
   for (const tool of tools) ctx.effect(() => ctx.tools.register(tool), `kicad tool ${tool.name}`);
@@ -358,14 +480,6 @@ function renderContent(value) {
   const blocks = [{ type: "text", text: lines.join("\n") }];
   if (value.image) blocks.push(imageBlock(value.image));
   return blocks;
-}
-function formatEdit(value) {
-  const head = value.written ? `Wrote ${value.path} (${value.applied} operations).` : `Dry run on ${value.path}: ${value.applied} operations valid, nothing written.`;
-  const results = value.results?.length ? `
-Results:
-${formatJson(value.results)}` : "";
-  return `${head}
-${value.changes.map((c) => `- ${c}`).join("\n")}${results}`;
 }
 function doctorMeta(report) {
   return {
@@ -410,7 +524,9 @@ export {
   apply,
   checkMeta,
   doctorMeta,
+  formatBoard,
   formatCheck,
+  formatEdit,
   formatJson,
   inject,
   name

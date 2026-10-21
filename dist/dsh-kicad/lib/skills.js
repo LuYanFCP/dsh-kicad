@@ -10,7 +10,7 @@ var MAX_LISTED = 60;
 function formatCheck(report) {
   const label = report.kind.toUpperCase();
   const verdict = report.passed ? "PASSED" : "FAILED";
-  const head = `${label} by KiCad ${report.kicad_version ?? ""}`.trim() + `${report.path ? ` on ${report.path}` : ""}: ${verdict} \u2014 ${report.counts.error} error(s), ${report.counts.warning} warning(s)` + (report.counts.exclusion ? `, ${report.counts.exclusion} excluded` : "");
+  const head = `${label} by KiCad ${report.kicad_version ?? ""}`.trim() + `${report.path ? ` on ${report.path}` : ""}: ${verdict} \u2014 ${report.counts.error} error(s), ${report.counts.warning} warning(s)` + (report.unrouted !== void 0 ? `, ${report.unrouted} unrouted` : "") + (report.counts.exclusion ? `, ${report.counts.exclusion} excluded` : "");
   const active = report.violations.filter((v) => !v.excluded);
   if (active.length === 0)
     return head;

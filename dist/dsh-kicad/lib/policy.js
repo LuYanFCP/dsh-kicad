@@ -9,7 +9,7 @@ var MAX_LISTED = 60;
 function formatCheck(report) {
   const label = report.kind.toUpperCase();
   const verdict = report.passed ? "PASSED" : "FAILED";
-  const head = `${label} by KiCad ${report.kicad_version ?? ""}`.trim() + `${report.path ? ` on ${report.path}` : ""}: ${verdict} \u2014 ${report.counts.error} error(s), ${report.counts.warning} warning(s)` + (report.counts.exclusion ? `, ${report.counts.exclusion} excluded` : "");
+  const head = `${label} by KiCad ${report.kicad_version ?? ""}`.trim() + `${report.path ? ` on ${report.path}` : ""}: ${verdict} \u2014 ${report.counts.error} error(s), ${report.counts.warning} warning(s)` + (report.unrouted !== void 0 ? `, ${report.unrouted} unrouted` : "") + (report.counts.exclusion ? `, ${report.counts.exclusion} excluded` : "");
   const active = report.violations.filter((v) => !v.excluded);
   if (active.length === 0)
     return head;
@@ -41,9 +41,11 @@ var TOOL_ACCESS = {
   kicad_render: "read",
   kicad_export: "write",
   kicad_create_schematic: "write",
-  kicad_edit_schematic: "write"
+  kicad_edit_schematic: "write",
+  kicad_read_pcb: "read",
+  kicad_edit_pcb: "write"
 };
-var DESIGN_WRITE_TOOLS = ["kicad_create_schematic", "kicad_edit_schematic"];
+var DESIGN_WRITE_TOOLS = ["kicad_create_schematic", "kicad_edit_schematic", "kicad_edit_pcb"];
 var PATH_ARGUMENTS = {
   kicad_doctor: [],
   kicad_read_schematic: ["path"],
@@ -58,7 +60,9 @@ var PATH_ARGUMENTS = {
   kicad_render: ["path"],
   kicad_export: ["path", "output"],
   kicad_create_schematic: ["path"],
-  kicad_edit_schematic: ["path"]
+  kicad_edit_schematic: ["path"],
+  kicad_read_pcb: ["path"],
+  kicad_edit_pcb: ["path"]
 };
 
 // packages/kicad-policy/src/dsh.ts
@@ -126,6 +130,7 @@ var ErcMemory = class {
       passed: report.passed,
       errors: report.counts.error,
       warnings: report.counts.warning,
+      ...report.unrouted !== void 0 ? { unrouted: report.unrouted } : {},
       types: Object.keys(report.by_type ?? {}).slice(0, 5)
     });
   }
@@ -173,10 +178,12 @@ function projectContext(cwd, memory) {
   if (sch.length) lines.push(`- schematics: ${sch.map(rel).join(", ")}`);
   const pcb = group(".kicad_pcb");
   if (pcb.length) lines.push(`- boards: ${pcb.map(rel).join(", ")}`);
-  for (const s of sch) {
-    const erc = memory?.get(s);
-    if (erc) {
-      lines.push(`- last ERC of ${rel(s)}: ${erc.passed ? "passed" : "FAILED"} (${erc.errors} errors, ${erc.warnings} warnings${erc.types.length ? `: ${erc.types.join(", ")}` : ""})`);
+  for (const file of [...sch, ...pcb]) {
+    const last = memory?.get(file);
+    if (last) {
+      const kind = file.endsWith(".kicad_pcb") ? "DRC" : "ERC";
+      const unrouted = last.unrouted !== void 0 ? `, ${last.unrouted} unrouted` : "";
+      lines.push(`- last ${kind} of ${rel(file)}: ${last.passed ? "passed" : "FAILED"} (${last.errors} errors, ${last.warnings} warnings${unrouted}${last.types.length ? `: ${last.types.join(", ")}` : ""})`);
     }
   }
   if (files.length >= MAX_FILES) lines.push("- (listing truncated)");
@@ -191,6 +198,7 @@ var Config = default2.object({
   restrictToWorkspace: default2.boolean().default(true).description("Only allow KiCad writes inside the working directory."),
   extraRoots: default2.array(default2.string()).default([]).description("Additional directories KiCad tools may write to."),
   autoErc: default2.boolean().default(true).volatile().description("Run ERC after every schematic edit."),
+  autoDrc: default2.boolean().default(true).volatile().description("Run DRC after every board edit."),
   autoRender: default2.boolean().default(true).volatile().description("Re-render the sidebar SVG after every schematic edit."),
   guidance: default2.boolean().default(true).description("Add KiCad working rules to the system prompt."),
   projectContext: default2.boolean().default(true).description("Tell the model which KiCad project is open.")
@@ -204,10 +212,12 @@ var GUIDANCE = `# KiCad (EDA) work
 - Draw the circuit with wires: connect parts that work together with connect_pins (it routes around parts and other nets). Use power symbols for supply rails and net labels only between blocks or across the page, not for two parts side by side. Place parts so the pins you will wire face each other.
 - Fix mistakes with disconnect_pin / remove_item / move_symbol. Never rebuild or rewrite a schematic file to change its layout.
 - Organise a schematic by function: one titled frame per block (add_block / move_block), parts inside a block wired together, blocks connected only through net labels and power symbols, never through wires that cross a frame.
-- KiCad decides correctness: after edits read the ERC verdict appended to the result (or run kicad_erc / kicad_drc). Do not declare a design correct while KiCad reports errors.
+- Boards: read with kicad_read_pcb (outline, footprints with courtyards and pad nets, rules, unrouted count), then change them with one kicad_edit_pcb batch: outline and mounting holes, placement, rules and net classes, tracks (route pad to pad with "REF:PAD" endpoints), vias, zones, keepouts, silkscreen.
+- KiCad decides correctness: after edits read the ERC/DRC verdict appended to the result (or run kicad_erc / kicad_drc). Do not declare a design correct while KiCad reports errors or unrouted connections.
 - Coordinates are millimetres, Y grows downward, on the 1.27 mm grid.
 - If a kicad_* tool fails because KiCad or Python is missing or too old, run kicad_doctor and give the user its fix. Do not install software yourself; the user installs KiCad (the doctor panel's Install button or /kicad-install).`;
 var isKiCadTool = (name2) => Object.hasOwn(TOOL_ACCESS, name2);
+var AUTO_CHECK = { kicad_edit_schematic: "erc", kicad_edit_pcb: "drc" };
 var GUARDED = new Set(
   Object.keys(TOOL_ACCESS).filter((n) => TOOL_ACCESS[n] === "write" || n === "kicad_render")
 );
@@ -249,32 +259,34 @@ function apply(ctx, config) {
   {
     ctx.on("tools/post-execute", async (exec, result, next) => {
       const decision = await next();
-      if (exec.name !== "kicad_edit_schematic" || result.isError || decision.kind !== "accept") return decision;
+      const check = AUTO_CHECK[exec.name];
+      if (!check || result.isError || decision.kind !== "accept") return decision;
       const args = exec.arguments;
       if (args.dry_run || typeof args.path !== "string") return decision;
       const path = resolveArg(cwdOf(exec), args.path);
-      if (config.autoRender.get()) {
+      if (check === "erc" && config.autoRender.get()) {
         void ctx.kicad.call("render", { path, format: "svg" }).catch(() => void 0);
       }
-      if (!config.autoErc.get()) return decision;
+      if (!(check === "erc" ? config.autoErc : config.autoDrc).get()) return decision;
+      const label = check.toUpperCase();
       let note;
       try {
-        const erc = await ctx.kicad.call("erc", { path }, exec.signal);
-        if (erc.ok && erc.value) {
-          memory.remember(path, erc.value);
-          note = `Automatic ${formatCheck(erc.value)}`;
+        const report = await ctx.kicad.call(check, { path }, exec.signal);
+        if (report.ok && report.value) {
+          memory.remember(path, report.value);
+          note = `Automatic ${formatCheck(report.value)}`;
         } else {
-          note = `Automatic ERC could not run: ${erc.text}`;
+          note = `Automatic ${label} could not run: ${report.text}`;
         }
       } catch (error) {
-        note = `Automatic ERC could not run: ${error.message}`;
+        note = `Automatic ${label} could not run: ${error.message}`;
       }
       const base = "content" in decision && decision.content ? decision.content : result.content;
       return { ...decision, content: [...base, { type: "text", text: note }] };
     });
   }
   ctx.on("tools/result", (exec, result) => {
-    if (exec.name !== "kicad_erc" || result.isError) return;
+    if (exec.name !== "kicad_erc" && exec.name !== "kicad_drc" || result.isError) return;
     const value = result.value;
     if (value?.path) memory.remember(value.path, value);
   });
@@ -296,7 +308,7 @@ function apply(ctx, config) {
   });
 }
 function describeEdit(tool, args) {
-  const file = args.path ? basename(args.path) : "a schematic";
+  const file = args.path ? basename(args.path) : "a design file";
   if (tool === "kicad_create_schematic") {
     return { reason: `create ${args.path}`, displayReason: { en: `Create KiCad schematic ${file}`, zh: `\u521B\u5EFA KiCad \u539F\u7406\u56FE ${file}` } };
   }

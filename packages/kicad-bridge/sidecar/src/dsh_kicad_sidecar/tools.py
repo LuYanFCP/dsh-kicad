@@ -13,6 +13,7 @@ from . import __version__
 from .doctor import format_report, platform_info, run_doctor
 from .kicad_cli import KiCadCli, KiCadCliError, parse_version, MIN_KICAD, svg_to_png
 from .schematic import OPERATIONS, Schematic, SchematicError, new_schematic_text
+from .pcb import OPERATIONS as PCB_OPERATIONS, Board, PcbError
 from .footprints import FootprintLibraries, default_footprint_dirs
 from . import geometry
 from .symbols import LibraryError, SymbolLibraries, default_symbol_dirs
@@ -65,6 +66,31 @@ OPERATION_SCHEMA: dict[str, Any] = {
     "additionalProperties": True,
 }
 
+PCB = {"type": "string", "description": "Path to a .kicad_pcb file."}
+
+PCB_OPERATION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "description": (
+        "One board edit. 'op' selects it; millimetres, Y grows downward, rotation in degrees counter-clockwise. "
+        "Outline: set_board_outline{width,height,corner_radius?,x?,y?} | set_board_outline{points:[[x,y],...]} (replaces Edge.Cuts) · "
+        "add_mounting_hole{x,y,drill?=3.2,plated?,footprint?,reference?}. "
+        "Footprints: move_footprint{reference,x?,y?,rotation?,side?:front|back} · move_footprints{references,dx,dy} · "
+        "lock_footprint{reference,locked?=true} (locked parts refuse to move). "
+        "Rules (stored in the .kicad_pro): set_design_rules{min_clearance?,min_track_width?,min_via_diameter?,min_via_annular_width?,"
+        "min_through_hole_diameter?,min_hole_to_hole?,min_hole_clearance?,min_copper_edge_clearance?,min_silk_clearance?,min_text_height?,...} · "
+        "set_net_class{name,nets?,track_width?,clearance?,via_diameter?,via_drill?}. "
+        "Copper: add_track{points:[[x,y] | 'REF:PAD',...],net?,layer?=F.Cu,width?} (pad endpoints snap to the pad centre and must be on that net and layer) · "
+        "add_via{x,y,net,diameter?,drill?} · add_zone{net,layer|layers,outline?:'board'|[[x,y],...],priority?,clearance?,connect_pads?:thermal|solid|none} · "
+        "add_keepout{outline,layers?,tracks?,vias?,pads?,copperpour?,footprints?}. "
+        "Silkscreen: add_text{text,x,y,layer?=F.SilkS,size?,thickness?,rotation?} · "
+        "set_reference_text{reference,x?,y?,size?,thickness?,rotation?,hide?}. "
+        "remove_item{uuid} (any footprint, track, via, zone, text or outline shape; uuids from read_pcb include_items)."
+    ),
+    "properties": {"op": {"type": "string", "enum": sorted(PCB_OPERATIONS)}},
+    "required": ["op"],
+    "additionalProperties": True,
+}
+
 TOOL_SPECS: list[ToolSpec] = [
     ToolSpec("environment", "Report kicad-cli, symbol libraries, rasterizers and KiCad IPC availability.", _obj({}, [])),
     ToolSpec("doctor", "Check whether this machine can run the KiCad tools (kicad-cli present and KiCad 8+, symbol/footprint libraries, "
@@ -93,10 +119,12 @@ TOOL_SPECS: list[ToolSpec] = [
                    "project_dir": {"type": "string"}}, ["query"])),
     ToolSpec("erc", "Run KiCad's Electrical Rules Check on a schematic and return KiCad's verdict and violations.",
              _obj({"path": SCH, "severity": {"type": "string", "enum": ["all", "error", "warning"], "default": "all"}}, ["path"])),
-    ToolSpec("drc", "Run KiCad's Design Rules Check on a .kicad_pcb and return KiCad's verdict and violations.",
+    ToolSpec("drc", "Run KiCad's Design Rules Check on a .kicad_pcb and return KiCad's verdict, violations and unrouted connection count.",
              _obj({"path": {"type": "string", "description": "Path to a .kicad_pcb file."},
                    "severity": {"type": "string", "enum": ["all", "error", "warning"], "default": "all"},
-                   "schematic_parity": {"type": "boolean", "default": False}}, ["path"])),
+                   "schematic_parity": {"type": "boolean", "default": False},
+                   "refill_zones": {"type": "boolean", "description": "Refill zones first (in memory; the file is not changed). Default: when the board has zones."}},
+                  ["path"])),
     ToolSpec("render", "Render a schematic (every sheet) or board to SVG with kicad-cli, optionally rasterized to PNG.",
              _obj({"path": PATH, "format": {"type": "string", "enum": ["svg", "png"], "default": "svg"},
                    "output_dir": {"type": "string", "description": "Defaults to <project>/.dsh-kicad/render/<name>/."},
@@ -113,6 +141,18 @@ TOOL_SPECS: list[ToolSpec] = [
              _obj({"path": SCH, "paper": {"type": "string", "default": "A4"}}, ["path"]), writes=True),
     ToolSpec("edit_schematic", "Apply a batch of edit operations to one .kicad_sch atomically (all or nothing). Untouched text stays byte-identical.",
              _obj({"path": SCH, "operations": {"type": "array", "items": OPERATION_SCHEMA, "minItems": 1},
+                   "dry_run": {"type": "boolean", "default": False, "description": "Validate and report without writing."}},
+                  ["path", "operations"]), writes=True),
+    ToolSpec("read_pcb", "Summarize a board: outline size, copper layers, stackup, design rules and net classes (from the .kicad_pro), "
+             "footprints (reference, value, footprint, position, rotation, side, locked, courtyard box, pad nets), zones, nets, "
+             "and KiCad DRC's unrouted connection count.",
+             _obj({"path": PCB, "include_footprints": {"type": "boolean", "default": True},
+                   "include_pads": {"type": "boolean", "default": False, "description": "Also list every pad with its absolute position and layers."},
+                   "include_items": {"type": "boolean", "default": False, "description": "Also list tracks, vias, texts and outline shapes with uuids."},
+                   "drc": {"type": "boolean", "default": True, "description": "Run KiCad DRC for the unrouted count and verdict."}}, ["path"])),
+    ToolSpec("edit_pcb", "Apply a batch of edit operations to one .kicad_pcb (and its .kicad_pro for rules and net classes) atomically "
+             "(all or nothing). Untouched text stays byte-identical.",
+             _obj({"path": PCB, "operations": {"type": "array", "items": PCB_OPERATION_SCHEMA, "minItems": 1},
                    "dry_run": {"type": "boolean", "default": False, "description": "Validate and report without writing."}},
                   ["path", "operations"]), writes=True),
     ToolSpec("ipc_status", "Probe a running KiCad GUI through the IPC API (requires the 'ipc' extra and KiCad's API server enabled).", _obj({}, [])),
@@ -163,7 +203,7 @@ class Toolbox:
             raise ToolError(f"unknown tool '{name}'")
         try:
             return handler(args or {})
-        except (SchematicError, LibraryError, KiCadCliError, ValueError, OSError) as exc:
+        except (SchematicError, PcbError, LibraryError, KiCadCliError, ValueError, OSError) as exc:
             raise ToolError(str(exc)) from exc
 
     # ---- tools ---------------------------------------------------------------------
@@ -281,7 +321,47 @@ class Toolbox:
 
     def tool_drc(self, args):
         path = self.resolve(args["path"], ".kicad_pcb")
-        return {"path": path, **self.cli.drc(path, args.get("severity", "all"), bool(args.get("schematic_parity")))}
+        refill = args.get("refill_zones")
+        if refill is None:
+            refill = _has_zones(path)
+        return {"path": path, **self.cli.drc(path, args.get("severity", "all"), bool(args.get("schematic_parity")), bool(refill))}
+
+    def board(self, path: str) -> Board:
+        full = self.resolve(path, ".kicad_pcb")
+        return Board(full, libraries=self.footprints(os.path.dirname(full)))
+
+    def tool_read_pcb(self, args):
+        b = self.board(args["path"])
+        out = b.summary(include_footprints=args.get("include_footprints", True), include_pads=bool(args.get("include_pads")),
+                        include_items=bool(args.get("include_items")))
+        if args.get("drc", True):
+            try:
+                report = self.cli.drc(b.path, "all", refill_zones=_has_zones(b.path))
+                out["drc"] = {"passed": report["passed"], "kicad_version": report.get("kicad_version"),
+                              "errors": report["counts"]["error"], "warnings": report["counts"]["warning"],
+                              "unrouted": report.get("unrouted", 0), "by_type": report["by_type"]}
+            except KiCadCliError as exc:
+                out["drc"] = {"error": str(exc)}
+        return out
+
+    def tool_edit_pcb(self, args):
+        ops = args.get("operations")
+        if not isinstance(ops, list) or not ops:
+            raise ToolError("operations must be a non-empty array")
+        full = self.resolve(args["path"], ".kicad_pcb")
+        with self.lock(full):
+            b = self.board(full)
+            results = []
+            for i, op in enumerate(ops):
+                if not isinstance(op, dict):
+                    raise ToolError(f"operation {i} is not an object")
+                try:
+                    results.append({"op": op.get("op"), "result": b.apply(op)})
+                except PcbError as exc:
+                    raise ToolError(f"operation {i} ({op.get('op')}) failed, nothing was written: {exc}") from exc
+            files = [] if args.get("dry_run") else b.save()
+        return {"path": full, "written": not args.get("dry_run"), "files": files, "applied": len(ops), "changes": b.changes,
+                "results": [r for r in results if r["result"] is not None]}
 
     def tool_render(self, args):
         path = self.resolve(args["path"], (".kicad_sch", ".kicad_pcb"))
@@ -369,6 +449,11 @@ class Toolbox:
             return {"available": True, "kicad_version": version, "open_documents": docs}
         except Exception as exc:
             return {"available": False, "reason": f"no KiCad IPC server reachable: {exc}"}
+
+
+def _has_zones(board: str) -> bool:
+    with open(board, encoding="utf-8") as fh:
+        return re.search(r"^\s*\(zone\b", fh.read(), re.M) is not None
 
 
 def _num_key(number: str):

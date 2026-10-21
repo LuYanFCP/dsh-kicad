@@ -7,18 +7,20 @@ interface Remembered {
   passed: boolean
   errors: number
   warnings: number
+  unrouted?: number
   types: string[]
 }
 
-/** Latest ERC verdict per schematic path, for the prompt context. */
+/** Latest ERC verdict per schematic and DRC verdict per board, for the prompt context. */
 export class ErcMemory {
   private readonly byPath = new Map<string, Remembered>()
 
-  remember(path: string, report: Pick<CheckReport, 'passed' | 'counts' | 'by_type'>): void {
+  remember(path: string, report: Pick<CheckReport, 'passed' | 'counts' | 'by_type' | 'unrouted'>): void {
     this.byPath.set(resolve(path), {
       passed: report.passed,
       errors: report.counts.error,
       warnings: report.counts.warning,
+      ...(report.unrouted !== undefined ? { unrouted: report.unrouted } : {}),
       types: Object.keys(report.by_type ?? {}).slice(0, 5),
     })
   }
@@ -72,10 +74,12 @@ export function projectContext(cwd: string, memory?: ErcMemory): string {
   if (sch.length) lines.push(`- schematics: ${sch.map(rel).join(', ')}`)
   const pcb = group('.kicad_pcb')
   if (pcb.length) lines.push(`- boards: ${pcb.map(rel).join(', ')}`)
-  for (const s of sch) {
-    const erc = memory?.get(s)
-    if (erc) {
-      lines.push(`- last ERC of ${rel(s)}: ${erc.passed ? 'passed' : 'FAILED'} (${erc.errors} errors, ${erc.warnings} warnings${erc.types.length ? `: ${erc.types.join(', ')}` : ''})`)
+  for (const file of [...sch, ...pcb]) {
+    const last = memory?.get(file)
+    if (last) {
+      const kind = file.endsWith('.kicad_pcb') ? 'DRC' : 'ERC'
+      const unrouted = last.unrouted !== undefined ? `, ${last.unrouted} unrouted` : ''
+      lines.push(`- last ${kind} of ${rel(file)}: ${last.passed ? 'passed' : 'FAILED'} (${last.errors} errors, ${last.warnings} warnings${unrouted}${last.types.length ? `: ${last.types.join(', ')}` : ''})`)
     }
   }
   if (files.length >= MAX_FILES) lines.push('- (listing truncated)')
