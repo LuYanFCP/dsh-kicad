@@ -149,3 +149,15 @@ def test_remove_item_label_and_wire(project):
         s.apply({"op": "remove_item", "uuid": "00000000-dead"})
     summary = s.summary(include_wiring=True)
     assert "wiring" in summary and all("uuid" in l for l in summary["labels"])
+
+
+@needs_symbols
+def test_sideways_two_pin_part_gets_readable_fields(project):
+    s = Schematic(project("blank"))
+    s.add_symbol("Device:R", 100.33, 80.01, reference="R1", value="10k", rotation=90)
+    sym = s.find_symbol("R1")
+    ref = sym.node.property("Reference").find("at")
+    val = sym.node.property("Value").find("at")
+    assert float(ref.value(1)) < 80.01 < float(val.value(1))  # above and below the body
+    assert ref.value(2) == "90" and val.value(2) == "90"
+    assert float(ref.value(0)) == float(val.value(0)) == 100.33

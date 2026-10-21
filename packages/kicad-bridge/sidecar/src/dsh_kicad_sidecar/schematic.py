@@ -404,6 +404,8 @@ class Schematic:
         for name, v in values.items():
             if name not in seen:
                 node.append(L("property", S(name), S(v), L("at", x, y, 0), _effects(hide=True)))
+        if int(rotation) % 180 == 90 and not is_power:
+            _autoplace_fields(node, geometry.body_bbox(lib, (x, y, rotation), mirror, unit))
         for pin in geometry.pins_for_unit(geometry.library_pins(lib), unit):
             node.append(L("pin", S(pin.number), L("uuid", S(new_uuid()))))
         node.append(L("instances", L("project", S(self.project_name()),
@@ -419,9 +421,8 @@ class Schematic:
         lat = lib_prop.find("at")
         lx, ly, la = (_f(lat.value(0)), _f(lat.value(1)), _f(lat.value(2))) if lat else (0.0, 0.0, 0.0)
         dx, dy = geometry.transform(lx, ly, at[2], mirror)
+        # Field angles are stored relative to the symbol's orientation, so the library angle carries over.
         angle = la
-        if int(at[2]) % 180 == 90:
-            angle = 0 if int(la) % 180 == 90 else 90
         prop = L("property", S(name), S(value), L("at", round(at[0] + dx, 4), round(at[1] + dy, 4), int(angle)))
         hidden = hide or lib_prop.find("hide") is not None or _effects_hidden(lib_prop)
         for child in lib_prop.lists():
@@ -702,6 +703,25 @@ class Schematic:
             return handler(self, **args)
         except TypeError as exc:
             raise SchematicError(f"bad arguments for {name}: {exc}") from exc
+
+
+def _autoplace_fields(symbol: SList, bbox: tuple[float, float, float, float] | None) -> None:
+    """For a sideways symbol, put Reference above and Value below the body (what KiCad's autoplace does),
+    instead of the library positions that end up on top of each other."""
+    if bbox is None:
+        return
+    x0, y0, x1, y1 = bbox
+    cx = round((x0 + x1) / 2, 4)
+    for name, y in (("Reference", y0 - 1.27), ("Value", y1 + 2.54)):
+        prop = symbol.property(name)
+        if prop is None or prop.find("hide") is not None:
+            continue
+        # Relative to a sideways symbol, 90 reads horizontally (what KiCad writes for rotated resistors).
+        prop.find("at").set_atoms(cx, round(y, 4), 90)
+        eff = prop.find("effects")
+        if eff is not None:
+            for j in list(eff.lists("justify")):
+                eff.remove(j)
 
 
 def _key(x: float, y: float) -> tuple[float, float]:
