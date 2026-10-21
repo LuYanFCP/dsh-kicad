@@ -1,0 +1,1 @@
+{ "meta": { "title": "KiCad 桥接", "description": "管理 KiCad sidecar（kicad-cli 与原理图编辑），以 ctx.kicad 服务提供给其他插件。" } }

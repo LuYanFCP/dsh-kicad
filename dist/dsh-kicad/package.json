@@ -1,0 +1,84 @@
+{
+  "name": "dsh-kicad",
+  "version": "0.1.0",
+  "description": "KiCad for DeepSeek Harness: schematic tools, ERC/DRC, approval policy, skills, commands, sidebar viewer and an EDA agent preset",
+  "license": "MIT",
+  "type": "module",
+  "icon": "./icon.svg",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./presets/*.yml": "./presets/*.yml",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./bridge": "./lib/bridge.js",
+    "./bridge/locale/*.json": "./locale/bridge/*.json",
+    "./bridge/icon": "./icon.svg",
+    "./tools": "./lib/tools.js",
+    "./tools/locale/*.json": "./locale/tools/*.json",
+    "./tools/icon": "./icon.svg",
+    "./policy": "./lib/policy.js",
+    "./policy/locale/*.json": "./locale/policy/*.json",
+    "./policy/icon": "./icon.svg",
+    "./skills": "./lib/skills.js",
+    "./skills/locale/*.json": "./locale/skills/*.json",
+    "./skills/icon": "./icon.svg"
+  },
+  "files": [
+    "lib",
+    "sidecar",
+    "skills",
+    "presets",
+    "locale",
+    "third_party",
+    "icon.svg",
+    "cordis.patch.yml",
+    "LICENSE",
+    "README.md"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-bundle",
+    "kicad",
+    "eda",
+    "schematic",
+    "pcb",
+    "erc"
+  ],
+  "engines": {
+    "dsh": ">=0.2.1-rc.2 <0.3.0-0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.5",
+    "@deepseek-ai/schemastery": "^3.18.5",
+    "@deepseek-ai/dsh-tools": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-llm": "^0.2.1-rc.2"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": [
+        "./cordis.patch.yml",
+        "./presets/eda.patch.yml"
+      ]
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-api-remotes",
+        "@deepseek-ai/dsh-client-ui-sidebar-right",
+        "@deepseek-ai/dsh-client-ui-tool",
+        "@deepseek-ai/dsh-client-ui-plugin-manager"
+      ]
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LuYanFCP/dsh-kicad.git",
+    "directory": "dist/dsh-kicad"
+  },
+  "homepage": "https://github.com/LuYanFCP/dsh-kicad#readme"
+}
