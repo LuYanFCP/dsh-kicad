@@ -1,30 +1,86 @@
 {
   "format": 1,
-  "title": { "en": "dsh-kicad plugins", "zh": "dsh-kicad 插件" },
-  "description": { "en": "KiCad (EDA) plugins for DeepSeek Harness", "zh": "DeepSeek Harness 的 KiCad（EDA）插件" },
+  "title": {
+    "en": "dsh-kicad plugins",
+    "zh": "dsh-kicad 插件"
+  },
+  "description": {
+    "en": "KiCad (EDA) plugins for DeepSeek Harness",
+    "zh": "DeepSeek Harness 的 KiCad（EDA）插件"
+  },
   "metadata": {
-    "categories": { "eda": { "title": { "en": "Electronics design", "zh": "电子设计" } } },
-    "labels": { "kicad": { "title": "KiCad" }, "preview": { "title": { "en": "Preview", "zh": "预览" } } }
+    "categories": {
+      "eda": {
+        "title": {
+          "en": "Electronics design",
+          "zh": "电子设计"
+        }
+      }
+    },
+    "labels": {
+      "kicad": {
+        "title": "KiCad"
+      },
+      "preview": {
+        "title": {
+          "en": "Preview",
+          "zh": "预览"
+        }
+      },
+      "schematic": {
+        "title": {
+          "en": "Schematic",
+          "zh": "原理图"
+        }
+      },
+      "beginner": {
+        "title": {
+          "en": "Beginner friendly",
+          "zh": "新手友好"
+        }
+      }
+    }
   },
   "plugins": [
     {
-      "name": "dsh-kicad-bundle",
-      "title": "KiCad",
+      "name": "dsh-kicad",
+      "title": {
+        "en": "KiCad",
+        "zh": "KiCad 原理图助手"
+      },
       "description": {
-        "en": "Design and check KiCad schematics with the agent: kicad_* tools, approval and automatic ERC, skills, /erc /drc /bom, a schematic viewer and an EDA preset.",
-        "zh": "让 agent 设计与检查 KiCad 原理图：kicad_* 工具、审批与自动 ERC、技能、/erc /drc /bom、原理图查看器和 EDA 预设。"
+        "en": "Design and check KiCad schematics with the agent: describe a board in one sentence (/kicad-design), approve each edit, KiCad ERC after every change, interactive KiCanvas viewer, /erc /drc /bom, EDA preset.",
+        "zh": "让 agent 帮你设计和检查 KiCad 原理图：一句话描述想做的板子（/kicad-design），每次修改先审批、改完自动跑 KiCad ERC，内置 KiCanvas 交互查看器、/erc /drc /bom 和 EDA 预设。"
       },
       "icon": "icons/dsh-kicad.svg",
       "author": "LuYanFCP",
       "homepage": "https://github.com/LuYanFCP/dsh-kicad#readme",
-      "repository": { "url": "https://github.com/LuYanFCP/dsh-kicad", "directory": "packages/kicad-bundle" },
-      "metadata": { "category": "eda", "labels": ["kicad", "preview"] },
+      "repository": {
+        "url": "https://github.com/LuYanFCP/dsh-kicad",
+        "directory": "dist/dsh-kicad"
+      },
+      "metadata": {
+        "category": "eda",
+        "labels": [
+          "kicad",
+          "schematic",
+          "beginner",
+          "preview"
+        ]
+      },
       "versions": [
         {
           "version": "0.1.0",
-          "publishTimestamp": 1792557427,
-          "source": { "type": "npm" },
-          "engines": { "dsh": ">=0.2.1-rc.2 <0.3.0-0" }
+          "publishTimestamp": 1792565325,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/LuYanFCP/dsh-kicad",
+            "commit": "2f77570569a14132dbc61fddee37f3eee782afc3",
+            "path": "dist/dsh-kicad"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.2 <0.3.0-0"
+          }
         }
       ]
     }
