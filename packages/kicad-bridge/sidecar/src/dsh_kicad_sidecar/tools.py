@@ -51,6 +51,11 @@ OPERATION_SCHEMA: dict[str, Any] = {
         "connect_pin_to_net{pin:'REF:PIN',net,kind?:label|global_label|power} · "
         "disconnect_pin{pin:'REF:PIN'} (removes the wires/labels/power symbols/no-connect attached to that pin) · "
         "remove_item{uuid} · remove_label{text,x?,y?} · remove_wire{x,y} (segments ending at x,y). "
+        "Layout: set_page{paper?,title?,date?,rev?,company?,comments?} · "
+        "add_block{title, references:[...] | x,y,width,height, margin?} (dashed frame + bold title around a functional group) · "
+        "move_block{title, dx,dy | x,y} (frame, title, parts inside and their wiring) · "
+        "move_symbols{references,dx,dy} (parts with their wires, labels and power symbols; refuses to tear a wire to a part left behind) · "
+        "add_text{text,x,y,size?,bold?,rotation?} · add_rectangle{x,y,width,height,style?}. "
         "Rotation is counter-clockwise: Device:R/C/L at 0 are vertical with pin 1 on top, at 90 horizontal with pin 1 on the left."
     ),
     "properties": {"op": {"type": "string", "enum": sorted(OPERATIONS)}},
@@ -63,7 +68,8 @@ TOOL_SPECS: list[ToolSpec] = [
     ToolSpec("doctor", "Check whether this machine can run the KiCad tools (kicad-cli present and KiCad 8+, symbol/footprint libraries, "
              "Python 3.10+, optional PNG rasterizer and kicad-python). Every check has a status and a fix; when KiCad is missing "
              "or too old, 'install' lists the ways to install it on this platform.", _obj({}, [])),
-    ToolSpec("read_schematic", "Summarize a schematic: title block, counts, components (reference, value, lib_id, footprint, position), labels, power nets, sub-sheets.",
+    ToolSpec("read_schematic", "Summarize a schematic: page (paper, drawable area), title block, counts, components (reference, value, lib_id, footprint, position), "
+             "labels, power nets, sub-sheets, functional blocks (titled frames with the parts inside) and parts outside every block.",
              _obj({"path": SCH, "include_components": {"type": "boolean", "default": True},
                    "include_wiring": {"type": "boolean", "default": False, "description": "Also list wires, junctions and no-connects with uuids."},
                    "include_subsheets": {"type": "boolean", "default": False, "description": "Also summarize every sub-sheet file."}}, ["path"])),
