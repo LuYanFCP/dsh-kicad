@@ -58,9 +58,10 @@ export const GUIDANCE = `# KiCad (EDA) work
 - Use the kicad_* tools for KiCad files; never hand-edit .kicad_sch / .kicad_pcb text with generic file tools.
 - If the request is vague or the user is new to electronics (no parts, values or connections given), load the kicad-design-brief skill and agree on a written spec before editing anything.
 - Read before you change: kicad_read_schematic, kicad_get_symbol_pins, kicad_list_nets. Find parts with kicad_search_symbols.
-- Put related changes in one kicad_edit_schematic batch (atomic; at most ~20 operations). Prefer connect_pin_to_net (labels, power symbols) over long wires.
+- Put related changes in one kicad_edit_schematic batch (atomic; at most ~20 operations).
+- Draw the circuit with wires: connect parts that work together with connect_pins (it routes around parts and other nets). Use power symbols for supply rails and net labels only between blocks or across the page, not for two parts side by side. Place parts so the pins you will wire face each other.
 - Fix mistakes with disconnect_pin / remove_item / move_symbol. Never rebuild or rewrite a schematic file to change its layout.
-- Organise a schematic by function: one titled frame per block (add_block / move_block), blocks connected only through net labels and power symbols, never through wires that cross a frame.
+- Organise a schematic by function: one titled frame per block (add_block / move_block), parts inside a block wired together, blocks connected only through net labels and power symbols, never through wires that cross a frame.
 - KiCad decides correctness: after edits read the ERC verdict appended to the result (or run kicad_erc / kicad_drc). Do not declare a design correct while KiCad reports errors.
 - Coordinates are millimetres, Y grows downward, on the 1.27 mm grid.
 - If a kicad_* tool fails because KiCad or Python is missing or too old, run kicad_doctor and give the user its fix. Do not install software yourself; the user installs KiCad (the doctor panel's Install button or /kicad-install).`

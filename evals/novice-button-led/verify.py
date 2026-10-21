@@ -78,6 +78,30 @@ for sym in s.symbols():
         boxes[sym.reference] = (min(xs), min(ys), max(xs), max(ys))
 over = [(a, b) for a, b in itertools.combinations(boxes, 2) if not (boxes[a][2] < boxes[b][0] or boxes[b][2] < boxes[a][0] or boxes[a][3] < boxes[b][1] or boxes[b][3] < boxes[a][1])]
 c(f"no overlapping symbols {over or ''}", not over)
+# Drawn like a schematic, not a sheet of labels: most signal nets join at least two part pins by wire.
+key = lambda x, y: (round(x, 2), round(y, 2))  # noqa: E731
+group = {}
+def find(k):
+    while group.setdefault(k, k) != k:
+        k = group[k]
+    return k
+wiring = s.wiring()
+for w in wiring["wires"]:
+    group[find(key(*w["from"]))] = find(key(*w["to"]))
+for j in wiring["junctions"]:  # a junction on a wire's middle joins it
+    for w in wiring["wires"]:
+        (x0, y0), (x1, y1), (jx, jy) = w["from"], w["to"], j["at"]
+        if min(x0, x1) <= jx <= max(x0, x1) and min(y0, y1) <= jy <= max(y0, y1) and (x0 == x1 == jx or y0 == y1 == jy):
+            group[find(key(jx, jy))] = find(key(x0, y0))
+pin_at = {}
+for sym in s.symbols():
+    if not sym.reference.startswith("#"):
+        for q in geometry.placed_pins(s.lib_symbol(sym.lib_id), sym.at, sym.mirror, sym.unit):
+            pin_at[(sym.reference, q["number"])] = key(q["x"], q["y"])
+signal = [nodes for name, nodes in nets.items() if not name.startswith("unconnected") and "GND" not in name.upper()
+          and not name.startswith("+") and len({r for r, _, _ in nodes}) >= 2]
+wired = [nodes for nodes in signal if len({find(pin_at[(r, p)]) for r, p, _ in nodes if (r, p) in pin_at}) < len(nodes)]
+c(f"parts wired together ({len(wired)} of {len(signal)} signal nets drawn with wires)", signal and 2 * len(wired) >= len(signal))
 for name, ok in checks:
     print(("OK   " if ok else "FAIL ") + name)
 print(f"{sum(ok for _, ok in checks)}/{len(checks)} checks passed")

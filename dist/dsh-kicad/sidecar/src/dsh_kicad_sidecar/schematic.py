@@ -11,7 +11,7 @@ import uuid as uuidlib
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from . import geometry
+from . import geometry, routing
 from .sexpr import Atom, Document, SList, L, S, dumps, fmt_num, parse
 from .symbols import SymbolLibraries, clone
 
@@ -45,6 +45,7 @@ TITLE_BLOCK_HEIGHT = 45.72  # keep the bottom strip free for the title block
 BLOCK_TITLE_SIZE = 2.54
 BLOCK_HEADER = 5.08  # room for a block's title above its contents
 GLOBAL_LABEL_SHAPES = ("input", "output", "bidirectional", "tri_state", "passive")
+DETOUR = 25.4  # mm of extra wire beyond the pins' distance before connect_pins suggests labels
 
 
 def _f(value: str | None, default: float = 0.0) -> float:
@@ -549,41 +550,48 @@ class Schematic:
         p = self.pin(reference, pin)
         self.add_no_connect(p["x"], p["y"])
 
-    def connect_pins(self, a: tuple[str, str], b: tuple[str, str]) -> list[dict]:
-        """Draw an orthogonal wire from pin ``a`` to pin ``b`` (via a stub out of each pin)."""
+    def connect_pins(self, a: tuple[str, str], b: tuple[str, str]) -> dict:
+        """Draw a wire from pin ``a`` to pin ``b`` around parts, labels and other nets' wiring (see routing)."""
         pa, pb = self.pin(*a), self.pin(*b)
-        stub = geometry.GRID * 2
-        ax, ay = pa["x"] + pa["outward"][0] * stub, pa["y"] + pa["outward"][1] * stub
-        bx, by = pb["x"] + pb["outward"][0] * stub, pb["y"] + pb["outward"][1] * stub
-        if pa["outward"][0] != 0:  # horizontal exit: go horizontally first
-            mid = [(bx, ay)] if pb["outward"][0] == 0 else [((ax + bx) / 2, ay), ((ax + bx) / 2, by)]
-        else:
-            mid = [(ax, by)] if pb["outward"][1] == 0 else [(ax, (ay + by) / 2), (bx, (ay + by) / 2)]
-        pts = [(pa["x"], pa["y"]), (ax, ay), *mid, (bx, by), (pb["x"], pb["y"])]
-        pts = [(geometry.snap(x), geometry.snap(y)) for x, y in pts]
-        compact = [pts[0]]
-        for p in pts[1:]:
-            if p != compact[-1]:
-                compact.append(p)
-        # Drop collinear interior points.
-        simplified = [compact[0]]
-        for i in range(1, len(compact) - 1):
-            (x0, y0), (x1, y1), (x2, y2) = simplified[-1], compact[i], compact[i + 1]
-            if (x0 == x1 == x2) or (y0 == y1 == y2):
-                continue
-            simplified.append(compact[i])
-        simplified.append(compact[-1])
-        made = self.add_wire([list(p) for p in simplified])
-        self.changes[-1] = f"wired {a[0]}:{a[1]} to {b[0]}:{b[1]}"
-        return made
+        name = f"{a[0]}:{a[1]} to {b[0]}:{b[1]}"
+        try:
+            found = routing.route(self, pa, pb)
+        except routing.RouteError as exc:
+            raise SchematicError(
+                f"cannot wire {name}: {exc}. Move the parts so these pins face each other with free space between them, "
+                "or connect both pins to the same net label (connect_pin_to_net) instead") from exc
+        if found.connected:
+            self.changes.append(f"{name} are already wired together")
+            return {"already_connected": True}
+        self.add_wire([list(p) for p in found.points])
+        for x, y in found.junctions:
+            self._insert_item(L("junction", L("at", x, y), L("diameter", 0), L("color", 0, 0, 0, 0), L("uuid", S(new_uuid()))))
+        joined = f", joining existing wiring at {', '.join(f'({x}, {y})' for x, y in found.joined)}" if found.joined else ""
+        self.changes[-1] = f"wired {name}{joined}"
+        out: dict[str, Any] = {"points": [list(p) for p in found.points]}
+        if found.junctions:
+            out["junctions"] = [list(p) for p in found.junctions]
+        length = sum(abs(x1 - x0) + abs(y1 - y0) for (x0, y0), (x1, y1) in zip(found.points, found.points[1:]))
+        direct = abs(pb["x"] - pa["x"]) + abs(pb["y"] - pa["y"])
+        corners = len(found.points) - 2
+        if length - direct > DETOUR or corners > 4:
+            out["note"] = (f"the wire takes {round(length, 2)} mm with {corners} corners for pins {round(direct, 2)} mm apart: "
+                           "the pins face away from each other or parts are in the way. For a cleaner sheet, move, rotate or "
+                           "mirror a part so the pins face each other, or join them with net labels (connect_pin_to_net)")
+        return out
 
     def connect_pin_to_net(self, reference: str, pin: str, net: str, kind: str = "label", stub: float = 2.54) -> dict:
-        """Attach ``net`` to a pin with a short wire stub ending in a label (or a power symbol)."""
+        """Attach ``net`` to a pin with a short wire stub ending in a label (or a power symbol). When a wire
+        already leaves the pin, the stub branches off a free point of that wiring instead of covering it."""
         p = self.pin(reference, pin)
-        ex = geometry.snap(p["x"] + p["outward"][0] * stub)
-        ey = geometry.snap(p["y"] + p["outward"][1] * stub)
-        self.add_wire([[p["x"], p["y"]], [ex, ey]])
-        ox, oy = p["outward"]
+        ground = kind == "power" and re.search(r"GND|VSS|^-", net.split(":")[-1].upper()) is not None
+        prefer = None if kind != "power" else (0, 1) if ground else (0, -1)
+        site = routing.stub_site(self, p, prefer, length=max(1, round(stub / geometry.GRID)))
+        (sx, sy), (ox, oy), junction = site if site else ((p["x"], p["y"]), tuple(p["outward"]), False)
+        ex, ey = geometry.snap(sx + ox * stub), geometry.snap(sy + oy * stub)
+        self.add_wire([[sx, sy], [ex, ey]])
+        if junction:
+            self._insert_item(L("junction", L("at", sx, sy), L("diameter", 0), L("color", 0, 0, 0, 0), L("uuid", S(new_uuid()))))
         if kind == "power":
             lib_id = net if ":" in net else f"power:{net}"
             lib = self.ensure_lib_symbol(lib_id)
@@ -595,7 +603,10 @@ class Schematic:
             rotation = {(1, 0): 0, (0, -1): 90, (-1, 0): 180, (0, 1): 270}.get((ox, oy), 0)
             self.add_label(net, ex, ey, kind=kind, rotation=rotation)
         self.changes[-1] = f"connected {reference}:{pin} to net {net}"
-        return {"pin": [p["x"], p["y"]], "end": [ex, ey]}
+        out = {"pin": [p["x"], p["y"]], "end": [ex, ey]}
+        if (sx, sy) != (p["x"], p["y"]):
+            out["from"] = [sx, sy]  # branched off the wire already on the pin
+        return out
 
     # ---- removal -------------------------------------------------------------------
     def wiring(self) -> dict[str, list[dict]]:
