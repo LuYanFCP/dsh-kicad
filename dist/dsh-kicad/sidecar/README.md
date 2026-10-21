@@ -16,7 +16,7 @@ python -m dsh_kicad_sidecar --call read_schematic --args '{"path":"a.kicad_sch"}
 uvx --from . dsh-kicad-sidecar --root /path/to/project                   # same, through uv
 ```
 
-Tools: `environment`, `read_schematic`, `list_components`, `get_symbol_pins`,
+Tools: `environment`, `doctor` (environment check with fixes and install commands), `read_schematic`, `list_components`, `get_symbol_pins`,
 `list_nets`, `search_symbols`, `erc`, `drc`, `render`, `export_netlist`, `export_bom`,
 `create_schematic`, `edit_schematic`, `ipc_status`. Each returns its value as
 `structuredContent` plus a JSON text block; domain failures are `isError` results.

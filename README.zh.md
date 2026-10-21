@@ -10,12 +10,12 @@
 
 | 能力 | 说明 |
 |---|---|
-| **工具**（`kicad_*`） | `read_schematic`、`list_components`、`get_symbol_pins`、`list_nets`（KiCad 网表）、`search_symbols`（已安装符号库）、`erc`、`drc`、`render`（SVG；模型支持图片时附带 PNG 图片）、`export`（网表/BOM）、`create_schematic`，以及原子批量编辑 `edit_schematic`（增删移动元件、设置值/封装/属性、导线、标签、电源符号、结点、不连接标记、引脚到引脚与引脚到网络的连接）。未修改的文件文本逐字节保持不变。 |
+| **工具**（`kicad_*`） | `doctor`（检查本机是否就绪：kicad-cli 与 KiCad 8+、库、Python，附修复方法和安装命令）、`read_schematic`、`list_components`、`get_symbol_pins`、`list_nets`（KiCad 网表）、`search_symbols`（已安装符号库）、`erc`、`drc`、`render`（SVG；模型支持图片时附带 PNG 图片）、`export`（网表/BOM）、`create_schematic`，以及原子批量编辑 `edit_schematic`（增删移动元件、设置值/封装/属性、导线、标签、电源符号、结点、不连接标记、引脚到引脚与引脚到网络的连接）。未修改的文件文本逐字节保持不变。 |
 | **策略** | 设计修改走 dsh 审批（`ask`）；写操作被单调 guard 限制在会话工作目录内；每次成功修改后自动运行 KiCad ERC 并把结论附加到工具结果；系统提示中注入稳定的 KiCad 工作规范，以及动态的“当前目录中的 KiCad 工程 + 最近一次 ERC”上下文。 |
 | **技能** | `kicad-agent-workflow`、`kicad-erc-triage`、`kicad-schematic-design`。 |
-| **命令** | `/erc`、`/drc`、`/bom`（不经过模型，作用于工程根设计）、`/kicad-render`。 |
+| **命令** | `/erc`、`/drc`、`/bom`（不经过模型，作用于工程根设计）、`/kicad-render`、`/kicad-doctor`（环境检查）、`/kicad-install`（安装 KiCad，见下文）。 |
 | **Agent 预设** | `eda`：与 standard 类似的工具集 + 电子设计人设。KiCad 工具为全局注册，任何预设都可使用。 |
-| **Web 界面** | 右侧边栏 `*.kicad_sch` / `*.kicad_pcb` 查看器，两种模式：**交互**——内嵌 [KiCanvas](https://github.com/theacodes/kicanvas)（层次图纸、查看元件/封装/网络、图层开关、KiCad 或 Witch Hazel 主题、文件变化时自动刷新）；**SVG**——kicad-cli 渲染（平移缩放、多图纸、渲染按钮，也是交互模式失败时的自动回退）；ERC/DRC 与原理图修改的对话卡片；sidecar（kicad-cli 路径、Python）与策略（审批、自动 ERC、自动渲染）的设置页。 |
+| **Web 界面** | 右侧边栏 `*.kicad_sch` / `*.kicad_pcb` 查看器，两种模式：**交互**——内嵌 [KiCanvas](https://github.com/theacodes/kicanvas)（层次图纸、查看元件/封装/网络、图层开关、KiCad 或 Witch Hazel 主题、文件变化时自动刷新）；**SVG**——kicad-cli 渲染（平移缩放、多图纸、渲染按钮，也是交互模式失败时的自动回退）；ERC/DRC、原理图修改与环境检查的对话卡片；sidecar（kicad-cli 路径、Python，以及 KiCad 环境检查和 **安装 KiCad**）与策略（审批、自动 ERC、自动渲染）的设置页。KiCad 缺失或版本过低时，查看器和失败的工具卡片会显示带 **安装 KiCad** 按钮的提示。 |
 | **独立 MCP server** | Python sidecar 通过 stdio 说 MCP 协议，Claude Code 或 RL 环境可以不经 dsh 直接复用同一套工具。 |
 | **KiCad 端（可选）** | IPC 插件，工具栏按钮 “Open in DSH”。 |
 
@@ -47,6 +47,28 @@ market/                 插件市场索引示例
 - `PATH` 上的 Python `>=3.10`（`python3`；Windows 为 `python`），核心无需任何 Python 包
 - KiCad 8+ 与 `kicad-cli`（已在 10.0.7 测试）。查找顺序：设置项、`$KICAD_CLI`、`PATH`、macOS/Windows 安装目录、Flatpak `org.kicad.KiCad`
 - 可选：`rsvg-convert`、ImageMagick 或 `png` extra（PNG 渲染）；`ipc` extra（IPC 通道）
+
+### 检查环境与安装 KiCad
+
+**Plugins → KiCad → KiCad bridge** 页面显示环境检查：每一项（kicad-cli、KiCad 版本 ≥ 8、符号库与封装库、Python ≥ 3.10、可选的 PNG 光栅化工具和 kicad-python）都有状态和修复方法。对话里用 `/kicad-doctor` 查看同样的结果，模型可调用 `kicad_doctor`；因缺少 KiCad 而失败的工具会在错误信息里给出安装命令。
+
+KiCad 缺失或版本过低时，该页面（以及查看器里的提示）会列出本机可用的安装方式：
+
+| 平台 | 方式 | 能否由 dsh 执行 |
+|---|---|---|
+| Fedora | `sudo dnf install -y kicad` | 否：需要 root，提供 **复制命令** |
+| Ubuntu 及衍生版 | KiCad PPA：`sudo add-apt-repository -y ppa:kicad/kicad-10.0-releases && sudo apt-get update && sudo apt-get install -y kicad` | 否（root） |
+| Debian | `sudo apt-get install -y kicad` | 否（root） |
+| Arch | `sudo pacman -S --needed kicad kicad-library` | 否（root） |
+| openSUSE | `sudo zypper install kicad` | 否（root） |
+| 装有 flatpak 的任意 Linux | `flatpak remote-add --user … flathub` + `flatpak install --user flathub org.kicad.KiCad` | 可以，按用户安装、无需 root（约 1.5 GB） |
+| macOS | `brew install --cask kicad` | 可以（需已安装 Homebrew） |
+| Windows | `winget install --id KiCad.KiCad -e` | 可以（需有 winget，Windows 可能弹出授权） |
+| 所有平台 | kicad.org 安装包 | 链接 |
+
+点击 **安装…** 并确认显示的完整命令之前，不会执行任何操作。dsh 从不执行 `sudo`：需要 root 的方式只展示命令，请在终端中自行执行后点 **重新检查**。安装过程显示日志、可随时停止；结束后 bridge 会重启 sidecar 并重新检查，新的 kicad-cli（包括通过 `flatpak run --command=kicad-cli org.kicad.KiCad` 运行的 Flatpak 版）无需重启 dsh 即可使用。对话中：`/kicad-install` 列出安装方式，`/kicad-install flatpak --yes` 执行其中一种，`/kicad-install status` 查看进度。
+
+设置页本身没有会话，检查会借用你最近的会话执行，因此请先打开或新建一个会话。
 
 ## 安装
 
@@ -138,6 +160,8 @@ python packages/kicad-bridge/sidecar/tests/make_fixtures.py   # 用编辑器本�
 - 审批需要交互式审批通道；没有审批通道的 headless 运行会拒绝设计修改，除非设置 `approval: allow`。
 - 交互查看器是 KiCanvas，由 `scripts/vendor-kicanvas.mjs` 按固定 commit 打包进插件（离线、图标、主题等补丁见 `packages/client-ui-kicad/vendor/kicanvas/README.md`）。它能解析 KiCad 10 文件，但会忽略尚不认识的新字段；SVG 模式是 kicad-cli 的准确渲染。需要 WebGL2。
 - IPC 通道目前只有状态探测和 KiCad 端启动按钮，未实现通过 IPC 实时编辑（KiCad IPC API 以 PCB 为主）。
+- Flatpak 方式以 `flatpak run --filesystem=host --filesystem=/tmp --command=kicad-cli org.kicad.KiCad` 运行 kicad-cli；只用替身 `flatpak` 测试过，未在真实的 Flatpak KiCad 上验证。apt/pacman/zypper/brew/winget 的安装命令只在 Fedora 上验证过展示逻辑。
+- 从设置页发起的检查会在被借用会话的日志里留下 `/kicad-doctor` 记录（dsh 会记录每条命令）。
 
 ## 许可证
 
