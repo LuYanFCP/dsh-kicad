@@ -50,6 +50,7 @@ export const Config: z<Config> = z.object({
 export const GUIDANCE = `# KiCad (EDA) work
 
 - Use the kicad_* tools for KiCad files; never hand-edit .kicad_sch / .kicad_pcb text with generic file tools.
+- If the request is vague or the user is new to electronics (no parts, values or connections given), load the kicad-design-brief skill and agree on a written spec before editing anything.
 - Read before you change: kicad_read_schematic, kicad_get_symbol_pins, kicad_list_nets. Find parts with kicad_search_symbols.
 - Put related changes in one kicad_edit_schematic batch (atomic; at most ~20 operations). Prefer connect_pin_to_net (labels, power symbols) over long wires.
 - Fix mistakes with disconnect_pin / remove_item / move_symbol. Never rebuild or rewrite a schematic file to change its layout.
