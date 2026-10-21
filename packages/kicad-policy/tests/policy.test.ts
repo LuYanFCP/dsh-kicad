@@ -34,6 +34,9 @@ describe('dsh-kicad-policy', () => {
     const edit = await runTool(ctx, 'kicad_edit_schematic', { path, operations: [{ op: 'set_value', reference: 'R1', value: '1k' }] })
     expect(edit.isError).toBe(true)
     expect(readFileSync(path, 'utf8')).toBe(before)
+    // Outside the workspace the edit is denied before any approval prompt.
+    const outside = await runTool(ctx, 'kicad_edit_schematic', { path: '/etc/x.kicad_sch', operations: [{ op: 'set_value', reference: 'R1', value: '1k' }] })
+    expect(text(outside)).toMatch(/may only write inside the project directory/)
     // Dry runs need no approval.
     const dry = await runTool(ctx, 'kicad_edit_schematic', { path, dry_run: true, operations: [{ op: 'set_value', reference: 'R1', value: '1k' }] })
     expect(dry.isError).toBeFalsy()
