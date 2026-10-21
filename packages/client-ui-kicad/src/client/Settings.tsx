@@ -92,7 +92,7 @@ const bridgeSummary = (v: Record<string, unknown>, tr: (k: KiCadLocaleKey, v?: R
 export function createBridgeSettings(remote: ClientRemote) {
   // Re-mount the panel after a save so a new kicadCli / python is checked right away.
   return createSettingsCard(BRIDGE_FIELDS, bridgeSummary, props => (
-    <DoctorPanel key={props.form?.state.revision ?? 0} remote={remote} t={props.t} />
+    <DoctorPanel key={props.form?.state.revision ?? 0} remote={remote} t={props.t} fresh />
   ))
 }
 

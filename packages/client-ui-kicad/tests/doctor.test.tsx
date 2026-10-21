@@ -119,6 +119,10 @@ describe('surfaces', () => {
     const { container } = render(<Settings view="page" form={form} />)
     await waitFor(() => expect(container.querySelector('[data-kicad-doctor-status="missing"]')).toBeTruthy())
     expect(container.querySelector('[data-kicad-settings] [data-kicad-doctor]')).toBeTruthy()
+    // Opening the page again checks again (e.g. after the kicad-cli path was changed).
+    cleanup()
+    render(<Settings view="page" form={form} />)
+    await waitFor(() => expect(host.lines.filter(([, l]) => l === '/kicad-doctor --json')).toHaveLength(2))
   })
 
   it('viewer notice stays silent when KiCad is ready and offers the installer when it is not', async () => {
