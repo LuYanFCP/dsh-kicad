@@ -16,6 +16,8 @@ export interface WorkspaceDirectoryListing {
   truncated?: boolean
 }
 export interface CommandExecution { result: { kind: 'success', text?: string } | { kind: 'error', text: string } }
+/** One row of `remote.session.list` (dsh-api-session-controller SessionSummary, fields this plugin reads). */
+export interface SessionSummary { sessionId: string, updatedAt: number, agentAvailable: boolean, blank?: boolean, origin?: 'subagent', cwd?: string }
 
 export interface ClientRemote {
   workspaceFiles: {
@@ -24,6 +26,10 @@ export interface ClientRemote {
   }
   commands: {
     execute(sessionId: string, line: string, attachments: unknown[]): Promise<RemoteResult<CommandExecution | undefined>>
+  }
+  /** Session Controller; used only to find a session for machine-wide commands from session-less pages. */
+  session?: {
+    list(request: { cursor?: string }): Promise<RemoteResult<{ items: readonly SessionSummary[] }>>
   }
 }
 
@@ -86,11 +92,14 @@ export interface ToolViewProps {
     meta?: unknown
   }
   cwd?: string
+  /** Present when the slot owner supplies it; the KiCad commands are machine-wide, so any session works. */
+  sessionId?: string
   openFile?: (path: string, options?: { line?: number }) => void
   t?: (key: string, vars?: Record<string, string | number>) => string
 }
 
 /** Props of a `plugins.row.config` page. */
+// The page has no session: the bridge page borrows one through `remote.session` for /kicad-doctor.
 export interface ConfigViewProps {
   view: 'summary' | 'page'
   form?: {

@@ -5,6 +5,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode, type WheelEvent } from 'react'
 import { orderPages, parseFileAddress, renderDir, sessionFileAddress } from './address.ts'
+import { KICAD_MISSING, KiCadNotice } from './Doctor.tsx'
 import { InteractiveView } from './InteractiveView.tsx'
 import type { ClientRemote, TabBodyProps } from './dsh.ts'
 import { translate, type KiCadLocaleKey } from './locales.ts'
@@ -72,6 +73,7 @@ export function createViewer(remote: ClientRemote) {
             </select>
           </label>
         </div>
+        <KiCadNotice remote={remote} sessionId={file.sessionId} t={props.t} />
         <InteractiveView remote={remote} sessionId={file.sessionId} designPath={file.path} version={sourceVersion} theme={theme} tr={tr} onFailed={setFallback} />
       </div>
     )
@@ -93,6 +95,7 @@ function createSvgView(remote: ClientRemote) {
     const [svgUrl, setSvgUrl] = useState<string | undefined>(undefined)
     const [error, setError] = useState<string | undefined>(undefined)
     const [rendering, setRendering] = useState(false)
+    const [kicadFailed, setKicadFailed] = useState(false)
     const [view, setView] = useState<View>({ scale: 1, x: 0, y: 0 })
     const stageRef = useRef<HTMLDivElement>(null)
     const imgRef = useRef<HTMLImageElement>(null)
@@ -182,7 +185,11 @@ function createSvgView(remote: ClientRemote) {
       try {
         const result = await remote.commands.execute(sessionId, `/kicad-render ${designPath}`, [])
         if (!result.ok) setError(tr('viewer.renderFailed', { message: result.error.message }))
-        else if (result.value?.result.kind === 'error') setError(tr('viewer.renderFailed', { message: result.value.result.text }))
+        else if (result.value?.result.kind === 'error') {
+          setError(tr('viewer.renderFailed', { message: result.value.result.text }))
+          // Re-check so the notice (with the installer) appears right away.
+          if (KICAD_MISSING.test(result.value.result.text)) setKicadFailed(true)
+        }
         else setListing(n => n + 1)
       } catch (cause) {
         setError(tr('viewer.renderFailed', { message: String(cause) }))
@@ -216,6 +223,7 @@ function createSvgView(remote: ClientRemote) {
           <button type="button" className="dshk-btn" aria-label={tr('viewer.zoomIn')} onClick={() => zoom(1.25)}>+</button>
           <button type="button" className="dshk-btn" onClick={fit}>{tr('viewer.fit')}</button>
         </div>
+        <KiCadNotice remote={remote} sessionId={sessionId} t={props.t} force={kicadFailed} />
         {props.notice && <div className="dshk-warn" data-kicad-state="fallback">{props.notice}</div>}
         {stale && <div className="dshk-warn" data-kicad-state="stale">{tr('viewer.stale')}</div>}
         {error && <div className="dshk-error" data-kicad-state="error">{error}</div>}

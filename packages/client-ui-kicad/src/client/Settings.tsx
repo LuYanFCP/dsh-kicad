@@ -4,7 +4,8 @@
  * through the page owner's `form`; the Host validates and persists them.
  */
 import { useEffect, useState, type ReactNode } from 'react'
-import type { ConfigViewProps } from './dsh.ts'
+import { DoctorPanel } from './Doctor.tsx'
+import type { ClientRemote, ConfigViewProps } from './dsh.ts'
 import { translate, type KiCadLocaleKey } from './locales.ts'
 import { CSS } from './styles.ts'
 
@@ -32,7 +33,11 @@ export function toOps(fields: Field[], draft: Record<string, unknown>, current: 
   return ops
 }
 
-export function createSettingsCard(fields: Field[], summary: (value: Record<string, unknown>, tr: (k: KiCadLocaleKey, v?: Record<string, string | number>) => string) => string) {
+export function createSettingsCard(
+  fields: Field[],
+  summary: (value: Record<string, unknown>, tr: (k: KiCadLocaleKey, v?: Record<string, string | number>) => string) => string,
+  extra?: (props: ConfigViewProps) => ReactNode,
+) {
   return function KiCadSettings(props: ConfigViewProps): ReactNode {
     const tr = (key: KiCadLocaleKey, vars?: Record<string, string | number>): string => translate(props.t, key, vars)
     const value = props.form?.state.value ?? {}
@@ -74,12 +79,24 @@ export function createSettingsCard(fields: Field[], summary: (value: Record<stri
           {status === 'saved' && <span className="dshk-hint">{tr('settings.saved')}</span>}
           {status === 'rejected' && <span className="dshk-error">{tr('settings.rejected')}</span>}
         </div>
+        {extra?.(props)}
       </div>
     )
   }
 }
 
-export const BridgeSettings = createSettingsCard(BRIDGE_FIELDS, (v, tr) => tr('settings.summaryBridge', { cli: String(v.kicadCli || tr('common.default')) }))
+const bridgeSummary = (v: Record<string, unknown>, tr: (k: KiCadLocaleKey, v?: Record<string, string | number>) => string): string =>
+  tr('settings.summaryBridge', { cli: String(v.kicadCli || tr('common.default')) })
+
+/** Bridge page: the sidecar fields plus the KiCad environment check and installer. */
+export function createBridgeSettings(remote: ClientRemote) {
+  // Re-mount the panel after a save so a new kicadCli / python is checked right away.
+  return createSettingsCard(BRIDGE_FIELDS, bridgeSummary, props => (
+    <DoctorPanel key={props.form?.state.revision ?? 0} remote={remote} t={props.t} />
+  ))
+}
+
+export const BridgeSettings = createSettingsCard(BRIDGE_FIELDS, bridgeSummary)
 export const PolicySettings = createSettingsCard(POLICY_FIELDS, (v, tr) => tr('settings.summaryPolicy', {
   approval: v.approval === 'allow' ? tr('common.off') : tr('common.on'),
   erc: v.autoErc === false ? tr('common.off') : tr('common.on'),
