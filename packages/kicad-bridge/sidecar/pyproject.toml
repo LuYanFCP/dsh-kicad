@@ -1,0 +1,29 @@
+[project]
+name = "dsh-kicad-sidecar"
+version = "0.1.0"
+description = "KiCad sidecar for DeepSeek Harness: kicad-cli + .kicad_sch S-expression editing over MCP-style JSON-RPC (stdio)"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+# Rasterize SVG renders to PNG in-process (otherwise rsvg-convert / ImageMagick is used when present).
+png = ["cairosvg>=2.7"]
+# Live channel to a running KiCad GUI through the IPC API.
+ipc = ["kicad-python>=0.4"]
+dev = ["pytest>=8"]
+
+[project.scripts]
+dsh-kicad-sidecar = "dsh_kicad_sidecar.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dsh_kicad_sidecar"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

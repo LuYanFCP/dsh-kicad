@@ -1,0 +1,10 @@
+node_modules/
+lib/
+*.tsbuildinfo
+__pycache__/
+.pytest_cache/
+.venv/
+*.egg-info/
+.dsh-kicad/
+/tmp/
+coverage/
