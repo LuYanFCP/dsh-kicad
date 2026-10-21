@@ -7,7 +7,7 @@ import { createCommands } from './commands.ts'
 import type { Context } from './dsh.ts'
 import { createSkillProvider } from './skills.ts'
 
-export { createCommands, formatBom, targetFile } from './commands.ts'
+export { createCommands, designRequest, formatBom, targetFile } from './commands.ts'
 export { createSkillProvider, parseSkill, PROVIDER, SKILLS_DIR } from './skills.ts'
 
 export const name = 'dsh-kicad-skills'

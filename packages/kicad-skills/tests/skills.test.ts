@@ -12,7 +12,7 @@ describe('kicad skills', () => {
   it('registers packaged skills with the dsh skill registry', async () => {
     const ctx = await bootKiCad([SkillRegistry], [skills, { commands: false }])
     const names = (await ctx.skills.list()).map(s => s.name).filter(n => n.startsWith('kicad-'))
-    expect(names).toEqual(['kicad-agent-workflow', 'kicad-erc-triage', 'kicad-schematic-design'])
+    expect(names).toEqual(['kicad-agent-workflow', 'kicad-design-brief', 'kicad-erc-triage', 'kicad-schematic-design'])
     const body = await ctx.skills.get('kicad-erc-triage')
     expect(body?.content).toContain('power_pin_not_driven')
     expect(body?.content.startsWith('---')).toBe(false)
@@ -49,5 +49,28 @@ describe('kicad commands', () => {
 
   it('formats an empty BOM', () => {
     expect(skills.formatBom(['Refs'], [])).toBe('BOM is empty.')
+  })
+})
+
+describe('/kicad-design', () => {
+  it('queues the idea with the brief-first workflow, in the user language', async () => {
+    const ctx = await bootKiCad()
+    const command = skills.createCommands(ctx).find(c => c.name === 'kicad-design')!
+    const sent: Array<{ content: Array<{ text: string }>, source: { kind: string } }> = []
+    const agent = { followup: (m: never) => sent.push(m), session: undefined }
+    const zh = await command.handler({ ...invocation('一个按键控制 LED 的 USB 小板'), agent } as never)
+    expect(zh.kind).toBe('success')
+    expect(sent[0]!.source.kind).toBe('user')
+    expect(sent[0]!.content[0]!.text).toMatch(/^我想设计：一个按键控制 LED 的 USB 小板[\s\S]*kicad-design-brief[\s\S]*design-brief\.md/)
+    await command.handler({ ...invocation('a USB board with a button and an LED'), agent } as never)
+    expect(sent[1]!.content[0]!.text).toMatch(/^I want to design: a USB board/)
+    const empty = await command.handler({ ...invocation('  '), agent } as never)
+    expect(empty.kind).toBe('error')
+  })
+
+  it('ships the design-brief skill under the pruning threshold', async () => {
+    const provider = skills.createSkillProvider()
+    const names = (await provider.list({}) as Array<{ name: string }>).map(c => c.name)
+    expect(names).toContain('kicad-design-brief')
   })
 })

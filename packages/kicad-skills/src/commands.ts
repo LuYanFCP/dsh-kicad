@@ -2,7 +2,7 @@
 import { readdirSync } from 'node:fs'
 import { isAbsolute, join, resolve } from 'node:path'
 import { formatCheck, type CheckReport } from 'dsh-tool-kicad'
-import { agentCwd, type CommandDefinition, type CommandInvocation, type CommandResult, type Context } from './dsh.ts'
+import { agentCwd, followup, type CommandDefinition, type CommandInvocation, type CommandResult, type Context } from './dsh.ts'
 
 /** The design file a command targets: the argument, else the project's root schematic / board. */
 export function targetFile(cwd: string, rawInput: string, ext: '.kicad_sch' | '.kicad_pcb'): string {
@@ -56,6 +56,17 @@ export function createCommands(ctx: Context): CommandDefinition[] {
       }),
     },
     {
+      name: 'kicad-design',
+      description: 'Describe the board you want in one sentence; the agent asks a few questions, writes a full spec, then designs it',
+      input: { hint: 'e.g. a USB-powered board where a button turns an LED on' },
+      handler: wrap(async (inv) => {
+        const idea = inv.rawInput.trim()
+        if (!idea) throw new Error('Write what you want after the command, e.g. /kicad-design a USB-powered board where a button turns an LED on')
+        followup(inv.agent, designRequest(idea))
+        return /[\u3400-\u9fff]/.test(idea) ? '已交给 agent：先帮你补全需求、确认后再画原理图。' : 'Sent to the agent: it will complete the requirements with you, then draw the schematic.'
+      }),
+    },
+    {
       name: 'kicad-render',
       description: 'Re-render a KiCad schematic or board to SVG for the sidebar viewer',
       input: { hint: 'path/to/file.kicad_sch' },
@@ -75,4 +86,12 @@ export function formatBom(columns: string[], rows: Array<Record<string, string>>
   const rule = `| ${columns.map(() => '---').join(' | ')} |`
   const body = rows.map(r => `| ${columns.map(c => (r[c] ?? '').replace(/\|/g, '\\|')).join(' | ')} |`)
   return [header, rule, ...body].join('\n')
+}
+
+/** The follow-up message /kicad-design sends: the user's idea plus the brief-first workflow. */
+export function designRequest(idea: string): string {
+  if (/[\u3400-\u9fff]/.test(idea)) {
+    return `我想设计：${idea}\n\n我不是硬件专家。请先使用 kicad-design-brief 技能：把需求补全成完整的编号设计规格（元件、数值、封装和每一条连接），只问我真正需要我决定的 3–4 个问题并给出推荐选项，把规格保存为 design-brief.md 给我确认；我确认后再画原理图，并确保 KiCad ERC 0 error。`
+  }
+  return `I want to design: ${idea}\n\nI am not a hardware expert. First use the kicad-design-brief skill: complete this into a numbered design spec (parts, values, footprints and every connection), ask me only the 3–4 questions I really need to decide, with recommended options, save the spec as design-brief.md for my confirmation, and draw the schematic only after I confirm, with KiCad ERC at 0 errors.`
 }
