@@ -38,7 +38,8 @@ export const CSS = `
 .dshk-check{display:flex;align-items:center;gap:8px}
 .dshk-hint{color:var(--dsw-alias-label-tertiary);font-size:12px}
 .dshk-sev-ok{color:var(--dsw-alias-state-success-primary)}
-.dshk-doctor{display:flex;flex-direction:column;gap:6px;padding:6px 0}
+.dshk-doctor{display:flex;flex-direction:column;gap:6px;padding:6px 0;color:var(--dsw-alias-label-primary)}
+.dshk-notice-open{padding:4px 10px;border-bottom:1px solid var(--dsw-alias-border-l2);max-height:60%;overflow:auto}
 .dshk-doctor .dshk-list{border-top:0;padding:0 2px}
 .dshk-install{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--dsw-alias-border-l1);padding-top:6px}
 .dshk-option{display:flex;flex-direction:column;gap:4px;border:1px solid var(--dsw-alias-border-l1);border-radius:6px;padding:6px 8px}

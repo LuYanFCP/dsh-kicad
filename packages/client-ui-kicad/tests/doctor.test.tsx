@@ -135,6 +135,18 @@ describe('surfaces', () => {
     expect(container.querySelector('[data-kicad-option="flatpak"]')).toBeTruthy()
   })
 
+  it('viewer notice reports when KiCad becomes ready after an install', async () => {
+    const host = fakeHost(missing)
+    const onReady = vi.fn()
+    const { container } = render(<KiCadNotice remote={host.remote} sessionId="s3" onReady={onReady} />)
+    await waitFor(() => expect(container.querySelector('[data-kicad-action="open-doctor"]')).toBeTruthy())
+    fireEvent.click(container.querySelector('[data-kicad-action="open-doctor"]')!)
+    fireEvent.click(container.querySelector('[data-kicad-option="flatpak"] [data-kicad-action="install"]')!)
+    await act(async () => { fireEvent.click(container.querySelector('[data-kicad-action="confirm-install"]')!) })
+    await waitFor(() => expect(onReady).toHaveBeenCalledTimes(1), { timeout: 5000 })
+    expect(container.querySelector('[data-kicad-notice="ok"]')?.className).toBe('dshk-notice-open')
+  })
+
   const failed = (text: string): ToolViewProps => ({
     toolName: 'kicad_erc', callId: 'c1', phase: 'result',
     block: { call: { name: 'kicad_erc', argsRaw: '{"path":"rc.kicad_sch"}' }, content: [{ type: 'text', text }], isError: true },

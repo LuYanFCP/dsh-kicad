@@ -11034,7 +11034,8 @@ var CSS = `
 .dshk-check{display:flex;align-items:center;gap:8px}
 .dshk-hint{color:var(--dsw-alias-label-tertiary);font-size:12px}
 .dshk-sev-ok{color:var(--dsw-alias-state-success-primary)}
-.dshk-doctor{display:flex;flex-direction:column;gap:6px;padding:6px 0}
+.dshk-doctor{display:flex;flex-direction:column;gap:6px;padding:6px 0;color:var(--dsw-alias-label-primary)}
+.dshk-notice-open{padding:4px 10px;border-bottom:1px solid var(--dsw-alias-border-l2);max-height:60%;overflow:auto}
 .dshk-doctor .dshk-list{border-top:0;padding:0 2px}
 .dshk-install{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--dsw-alias-border-l1);padding-top:6px}
 .dshk-option{display:flex;flex-direction:column;gap:4px;border:1px solid var(--dsw-alias-border-l1);border-radius:6px;padding:6px 8px}
@@ -11283,14 +11284,18 @@ function KiCadNotice(props) {
       live = false;
     };
   }, [props.sessionId, props.force]);
+  const update = (next) => {
+    if (next.status === "ok" && report?.status !== "ok") props.onReady?.();
+    setReport(next);
+  };
   if (!report || report.status === "ok" && !open) return null;
-  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dshk-warn", "data-kicad-notice": report.status, children: [
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: open ? "dshk-notice-open" : "dshk-warn", "data-kicad-notice": report.status, children: [
     !open && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dshk-check", children: [
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: report.summary }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dshk-spacer" }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dshk-btn", onClick: () => setOpen(true), "data-kicad-action": "open-doctor", children: report.install.length ? tr2("install.openButton") : tr2("doctor.open") })
     ] }),
-    open && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DoctorPanel, { remote: props.remote, sessionId: props.sessionId, t: props.t, initial: report, onReport: setReport })
+    open && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DoctorPanel, { remote: props.remote, sessionId: props.sessionId, t: props.t, initial: report, onReport: update })
   ] });
 }
 
@@ -11844,7 +11849,11 @@ function createSvgView(remote) {
         /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("button", { type: "button", className: "dshk-btn", "aria-label": tr2("viewer.zoomIn"), onClick: () => zoom(1.25), children: "+" }),
         /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("button", { type: "button", className: "dshk-btn", onClick: fit, children: tr2("viewer.fit") })
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(KiCadNotice, { remote, sessionId, t: props.t, force: kicadFailed }),
+      /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(KiCadNotice, { remote, sessionId, t: props.t, force: kicadFailed, onReady: () => {
+        if (!kicadFailed) return;
+        setKicadFailed(false);
+        void render();
+      } }),
       props.notice && /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("div", { className: "dshk-warn", "data-kicad-state": "fallback", children: props.notice }),
       stale && /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("div", { className: "dshk-warn", "data-kicad-state": "stale", children: tr2("viewer.stale") }),
       error && /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("div", { className: "dshk-error", "data-kicad-state": "error", children: error }),
