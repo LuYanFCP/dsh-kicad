@@ -4,12 +4,13 @@
  *   outranks the plain-text document preview),
  * - conversation rows for kicad_doctor / kicad_erc / kicad_drc / kicad_edit_schematic
  *   (with an "Install KiCad" path when a call failed because KiCad is missing),
+ * - command rows for /kicad-doctor, /kicad-install, /kicad-render (background checks hidden),
  * - Plugin Manager pages for the bundle's bridge and policy rows; the bridge page
  *   also shows the KiCad environment check and installer.
  */
 import type { ComponentType } from 'react'
 import { basename, isDesignFile, parseFileAddress } from './address.ts'
-import { CheckCard, CreateCard, createDoctorCard, EditCard, withKiCadHint } from './Cards.tsx'
+import { CheckCard, CommandRow, CreateCard, createDoctorCard, EditCard, KICAD_COMMANDS, withKiCadHint } from './Cards.tsx'
 import type { ClientContext } from './dsh.ts'
 import { en, NS, zh } from './locales.ts'
 import { createBridgeSettings, PolicySettings } from './Settings.tsx'
@@ -52,6 +53,11 @@ export function apply(ctx: ClientContext): void {
     ctx.effect(() => ctx.slots.inject('tool.call.toolview', () => ctx.slots.register(
       { name: 'tool.call.toolview', key: tool, locale: NS }, view as ComponentType<never>,
     )), `kicad: ${tool} row`)
+  }
+  for (const command of KICAD_COMMANDS) {
+    ctx.effect(() => ctx.slots.inject('conversation.chat.commandview', () => ctx.slots.register(
+      { name: 'conversation.chat.commandview', key: command, locale: NS }, CommandRow as ComponentType<never>,
+    )), `kicad: /${command} row`)
   }
   const BridgeSettings = createBridgeSettings(ctx.remote)
   for (const bundle of BUNDLES) {

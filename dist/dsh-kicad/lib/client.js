@@ -10870,6 +10870,9 @@ var en = {
   "card.create": "New schematic",
   "card.creating": "Creating {file}\u2026",
   "card.created": "{file} created",
+  "card.rendered": "Rendered {file} ({count} page(s))",
+  "card.commandRunning": "running\u2026",
+  "card.commandFailed": "failed",
   "card.editing": "Editing {file}\u2026",
   "card.changes": "{count} changes",
   "card.autoErc": "Automatic ERC",
@@ -10958,6 +10961,9 @@ var zh = {
   "card.create": "\u65B0\u5EFA\u539F\u7406\u56FE",
   "card.creating": "\u6B63\u5728\u521B\u5EFA {file}\u2026",
   "card.created": "\u5DF2\u521B\u5EFA {file}",
+  "card.rendered": "\u5DF2\u6E32\u67D3 {file}\uFF08{count} \u9875\uFF09",
+  "card.commandRunning": "\u8FD0\u884C\u4E2D\u2026",
+  "card.commandFailed": "\u5931\u8D25",
   "card.editing": "\u6B63\u5728\u4FEE\u6539 {file}\u2026",
   "card.changes": "{count} \u9879\u6539\u52A8",
   "card.autoErc": "\u81EA\u52A8 ERC",
@@ -11549,6 +11555,35 @@ function CreateCard(props) {
     ] })
   ] });
 }
+var KICAD_COMMANDS = ["kicad-doctor", "kicad-install", "kicad-render"];
+function CommandRow(props) {
+  const tr2 = (key, vars) => translate(props.t, key, vars);
+  const [open, setOpen] = (0, import_react3.useState)(false);
+  const { name, args, outcome } = props.node;
+  if (/(^|\s)--json(\s|$)/.test(args ?? "")) return null;
+  let text = outcome?.text ?? "";
+  if (name === "kicad-render" && outcome?.kind === "success") {
+    try {
+      const out = JSON.parse(text);
+      text = tr2("card.rendered", { file: basename(out.path ?? ""), count: out.svg?.length ?? 0 });
+    } catch {
+    }
+  }
+  const status = outcome === null ? tr2("card.commandRunning") : outcome.kind === "error" ? tr2("card.commandFailed") : "";
+  return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dshk-card", "data-kicad-card": "command", "data-kicad-command": name ?? "", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("style", { children: CSS }),
+    /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("button", { type: "button", className: "dshk-card-head", "aria-expanded": open, onClick: () => setOpen((o4) => !o4), disabled: !text, children: [
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("strong", { children: [
+        "/",
+        name
+      ] }),
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dshk-muted dshk-code", children: (args ?? "").trim() }),
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dshk-spacer" }),
+      status && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: outcome?.kind === "error" ? "dshk-badge dshk-fail" : "dshk-muted", children: status })
+    ] }),
+    open && text && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("pre", { className: "dshk-list dshk-code", style: { whiteSpace: "pre-wrap" }, children: text })
+  ] });
+}
 
 // src/client/Settings.tsx
 var import_react4 = require("react");
@@ -12064,6 +12099,12 @@ function apply(ctx) {
       { name: "tool.call.toolview", key: tool, locale: NS },
       view
     )), `kicad: ${tool} row`);
+  }
+  for (const command of KICAD_COMMANDS) {
+    ctx.effect(() => ctx.slots.inject("conversation.chat.commandview", () => ctx.slots.register(
+      { name: "conversation.chat.commandview", key: command, locale: NS },
+      CommandRow
+    )), `kicad: /${command} row`);
   }
   const BridgeSettings2 = createBridgeSettings(ctx.remote);
   for (const bundle of BUNDLES) {
