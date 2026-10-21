@@ -8,3 +8,5 @@ __pycache__/
 .dsh-kicad/
 /tmp/
 coverage/
+*.kicad_prl
+fp-info-cache
