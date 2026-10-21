@@ -10,10 +10,10 @@
 
 | 能力 | 说明 |
 |---|---|
-| **工具**（`kicad_*`） | `doctor`（检查本机是否就绪：kicad-cli 与 KiCad 8+、库、Python，附修复方法和安装命令）、`read_schematic`、`list_components`、`get_symbol_pins`、`list_nets`（KiCad 网表）、`search_symbols`（已安装符号库）、`erc`、`drc`、`render`（SVG；模型支持图片时附带 PNG 图片）、`export`（网表/BOM）、`create_schematic`，以及原子批量编辑 `edit_schematic`（增删移动元件、设置值/封装/属性、导线、标签、电源符号、结点、不连接标记、绕开元件和其他网络自动布线的引脚到引脚导线、引脚到网络的连接，以及按功能分区布局：带标题的功能块框、连同导线一起移动元件或整个功能块、图纸尺寸与标题栏）；电路板有 `read_pcb`（外框、层、设计规则与网络类、带 courtyard 和焊盘网络的封装、覆铜区、DRC 给出的未布线数）和原子批量编辑 `edit_pcb`（板框与安装孔、移动/翻面/锁定封装、写入 `.kicad_pro` 的设计规则与网络类、以焊盘为端点的走线、过孔、覆铜区、禁布区、丝印文字与位号、按 uuid 删除）。未修改的文件文本逐字节保持不变。 |
-| **策略** | 设计修改走 dsh 审批（`ask`）；写操作被单调 guard 限制在会话工作目录内；每次成功修改后自动运行 KiCad ERC（原理图）或 DRC（电路板，先重新填充覆铜）并把结论附加到工具结果；系统提示中注入稳定的 KiCad 工作规范，以及动态的“当前目录中的 KiCad 工程 + 最近一次 ERC/DRC”上下文。 |
+| **工具**（`kicad_*`） | `doctor`（检查本机是否就绪：kicad-cli 与 KiCad 8+、库、Python，附修复方法和安装命令）、`read_schematic`、`list_components`、`get_symbol_pins`、`list_nets`（KiCad 网表）、`search_symbols`（已安装符号库）、`erc`、`drc`、`render`（SVG；模型支持图片时附带 PNG 图片）、`export`（网表/BOM）、`export_fab`（Gerber/钻孔/坐标/BOM 压缩包及 3D 预览，KiCad 判定电路板就绪前拒绝导出，见[制板输出](#制板输出)）、`fab_preset`（JLCPCB/PCBWay 设计规则）、`create_schematic`，以及原子批量编辑 `edit_schematic`（增删移动元件、设置值/封装/属性、导线、标签、电源符号、结点、不连接标记、绕开元件和其他网络自动布线的引脚到引脚导线、引脚到网络的连接，以及按功能分区布局：带标题的功能块框、连同导线一起移动元件或整个功能块、图纸尺寸与标题栏）；电路板有 `read_pcb`（外框、层、设计规则与网络类、带 courtyard 和焊盘网络的封装、覆铜区、DRC 给出的未布线数）和原子批量编辑 `edit_pcb`（板框与安装孔、移动/翻面/锁定封装、写入 `.kicad_pro` 的设计规则与网络类、以焊盘为端点的走线、过孔、覆铜区、禁布区、丝印文字与位号、按 uuid 删除）。未修改的文件文本逐字节保持不变。 |
+| **策略** | 设计修改走 dsh 审批（`ask`）；写操作被单调 guard 限制在会话工作目录内；每次成功修改后自动运行 KiCad ERC（原理图）或 DRC（电路板修改或应用板厂预设后，先重新填充覆铜）并把结论附加到工具结果；系统提示中注入稳定的 KiCad 工作规范，以及动态的“当前目录中的 KiCad 工程 + 最近一次 ERC/DRC”上下文。 |
 | **技能** | `kicad-agent-workflow`、`kicad-erc-triage`、`kicad-drc-triage`、`kicad-schematic-design`。 |
-| **命令** | `/erc`、`/drc`、`/bom`（不经过模型，作用于工程根设计）、`/kicad-render`、`/kicad-doctor`（环境检查）、`/kicad-install`（安装 KiCad，见下文）。 |
+| **命令** | `/erc`、`/drc`、`/bom`（不经过模型，作用于工程根设计）、`/kicad-fab`（制板压缩包）、`/kicad-render`、`/kicad-doctor`（环境检查）、`/kicad-install`（安装 KiCad，见下文）。 |
 | **Agent 预设** | `eda`：与 standard 类似的工具集 + 电子设计人设。KiCad 工具为全局注册，任何预设都可使用。 |
 | **Web 界面** | 右侧边栏 `*.kicad_sch` / `*.kicad_pcb` 查看器，两种模式：**交互**——内嵌 [KiCanvas](https://github.com/theacodes/kicanvas)（层次图纸、查看元件/封装/网络、图层开关、KiCad 或 Witch Hazel 主题、文件变化时自动刷新）；**SVG**——kicad-cli 渲染（平移缩放、多图纸、渲染按钮，PCB 文件变化时自动重新渲染，也是交互模式失败时的自动回退）；ERC/DRC、原理图修改与环境检查的对话卡片；sidecar（kicad-cli 路径、Python，以及 KiCad 环境检查和 **安装 KiCad**）与策略（审批、自动 ERC、自动渲染）的设置页。KiCad 缺失或版本过低时，查看器和失败的工具卡片会显示带 **安装 KiCad** 按钮的提示。 |
 | **独立 MCP server** | Python sidecar 通过 stdio 说 MCP 协议，Claude Code 或 RL 环境可以不经 dsh 直接复用同一套工具。 |
@@ -25,10 +25,10 @@
 dsh-kicad-bundle  (cordis.patch.yml：全局行 + presets/eda.patch.yml)
 ├─ dsh-kicad-bridge     Host  ctx.kicad 服务；通过 ctx.subprocess 管理 Python sidecar，以 MCP 通信
 │    └─ sidecar/        Python ≥3.10，核心仅用标准库：无损 .kicad_sch S 表达式编辑、符号库、引脚几何、
-│                       kicad-cli（ERC/DRC/网表/BOM/SVG）；可选 extra：png（cairosvg）、ipc（kicad-python）
+│                       kicad-cli（ERC/DRC/网表/BOM/SVG）、制板输出；可选 extra：png（cairosvg）、ipc（kicad-python）
 ├─ dsh-tool-kicad       Host  kicad_* 工具（defineTool），路径相对会话工作目录解析
 ├─ dsh-kicad-policy     Host  tools.guard + tools/pre-execute（ask/deny）+ tools/post-execute（自动 ERC/DRC）+ 提示词 section/context
-├─ dsh-kicad-skills     Host  技能 provider + /erc /drc /bom /kicad-render
+├─ dsh-kicad-skills     Host  技能 provider + /erc /drc /bom /kicad-fab /kicad-render
 └─ dsh-client-ui-kicad  Client sidebarRightTabs 类型 + tool.call.toolview 行 + plugins.row.config 设置页
 kicad-plugin/           KiCad IPC 插件（"Open in DSH"）
 market/                 插件市场索引示例
@@ -111,6 +111,14 @@ dsh plugin --profile web add "git+https://github.com/LuYanFCP/dsh-kicad.git#<com
 4. `/erc`、`/drc`、`/bom` 不经过模型直接运行。
 5. 设置位于 **Plugins → KiCad → KiCad bridge / KiCad policy**。
 
+### 制板输出
+
+`/kicad-fab [board.kicad_pcb] [--preset jlcpcb|pcbway] [--force] [--step] [--ipc2581] [--odb]`（agent 使用 `kicad_export_fab`）先由 KiCad 判定电路板：存在 DRC 错误、未布通的连接、原理图一致性（parity）问题（原理图与电路板在同一目录时检查），或在指定预设时违反该板厂的工艺限制，都会拒绝导出，且不写任何文件。`--force` 强制导出，结果和 `fab-manifest.json` 会注明这一点。
+
+输出位于 `<工程>/fab/<预设或 kicad>/`：铜层、阻焊、钢网、丝印与 Edge.Cuts 的 Gerber 及 Gerber job 文件；Excellon 钻孔文件及 Gerber X2 钻孔图；`assembly/` 中的坐标文件和 BOM（`--preset jlcpcb` 时另有 JLC 格式的 BOM/CPL）；`preview/` 中的正反面 3D PNG；以及包含除预览外全部文件的 `<板名>-<预设或 fab>.zip`。
+
+`kicad_fab_preset` 把板厂的工艺限制（最小线宽、间距、钻孔、焊环、孔间距、铜到板边距离）设为工程设计规则，让 `kicad_drc` 按板厂能力检查：板级最小值写入 `.kicad_pro`，自定义规则写入 `.kicad_dru` 中的受管理区块（你自己的规则保持不变）。数值来自各板厂公布的工艺能力（[`presets/`](packages/kicad-bridge/sidecar/src/dsh_kicad_sidecar/presets)），最终以板厂审单为准。
+
 ### 独立 MCP server（Claude Code、RL 环境）
 
 ```sh
@@ -158,7 +166,8 @@ python packages/kicad-bridge/sidecar/tests/make_fixtures.py   # 用编辑器本�
 
 ## 已知限制
 
-- 以原理图为主。PCB 只支持检查与渲染（`kicad_drc`、`kicad_render`），不支持编辑电路板。
+- 以原理图为主。电路板支持读取、编辑、检查、渲染与制板输出（`kicad_read_pcb`、`kicad_edit_pcb`、`kicad_drc`、`kicad_render`、`kicad_export_fab`），尚不支持从原理图同步到电路板，也没有自动布线。
+- 板厂预设数值读取自 JLCPCB 与 PCBWay 的工艺能力页面（2026-10-21），之后可能变化。JLC 的 CPL 保留 KiCad 的旋转角度，JLCPCB 预览中可能需要逐个修正。
 - 编辑覆盖元件、属性、导线、标签、电源符号、结点与不连接标记；不支持创建层次图纸、总线与图形元素。
 - 新放置在子图纸中的元件只向上查找一层根图纸来确定 instance 路径；更深的层次可能需要 KiCad 重新标注。
 - 只有当模型路由声明支持图片输入且挂载了附件存储时，图片才会传给模型；否则渲染工具只返回 SVG 路径。

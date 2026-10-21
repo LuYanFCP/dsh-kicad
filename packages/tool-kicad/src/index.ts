@@ -4,16 +4,16 @@
  * Policy (approval, path guard, auto-ERC) lives in dsh-kicad-policy.
  */
 import { readFile } from 'node:fs/promises'
-import { basename } from 'node:path'
+import { basename, join } from 'node:path'
 import {
   attachments, defineTool, imageBlock, imageCapable, resolveIn, sessionCwd,
   type Block, type Context, type ImageRef, type ToolDefinition, type ToolExecution,
 } from './dsh.ts'
 import type { DoctorReport } from 'dsh-kicad-bridge'
-import { formatBoard, formatCheck, formatEdit, formatJson, type BoardSummary, type CheckReport, type EditValue } from './format.ts'
+import { formatBoard, formatCheck, formatEdit, formatFab, formatFabGate, formatJson, formatPreset, type BoardSummary, type CheckReport, type EditValue, type FabResult, type PresetResult } from './format.ts'
 
-export { formatBoard, formatCheck, formatEdit, formatJson }
-export type { BoardSummary, CheckReport, EditValue }
+export { formatBoard, formatCheck, formatEdit, formatFab, formatFabGate, formatJson, formatPreset }
+export type { BoardSummary, CheckReport, EditValue, FabResult, PresetResult }
 
 export const name = 'dsh-tool-kicad'
 export const inject = ['tools', 'kicad']
@@ -32,6 +32,8 @@ export const TOOL_ACCESS = {
   kicad_drc: 'read',
   kicad_render: 'read',
   kicad_export: 'write',
+  kicad_export_fab: 'write',
+  kicad_fab_preset: 'write',
   kicad_create_schematic: 'write',
   kicad_edit_schematic: 'write',
   kicad_read_pcb: 'read',
@@ -41,7 +43,7 @@ export const TOOL_ACCESS = {
 export type KiCadToolName = keyof typeof TOOL_ACCESS
 
 /** Tools that change design files and therefore go through approval and ERC. */
-export const DESIGN_WRITE_TOOLS: readonly KiCadToolName[] = ['kicad_create_schematic', 'kicad_edit_schematic', 'kicad_edit_pcb']
+export const DESIGN_WRITE_TOOLS: readonly KiCadToolName[] = ['kicad_create_schematic', 'kicad_edit_schematic', 'kicad_edit_pcb', 'kicad_fab_preset']
 
 /** Argument names holding file paths, per tool (for the policy's path guard). */
 export const PATH_ARGUMENTS: Record<KiCadToolName, readonly string[]> = {
@@ -57,11 +59,18 @@ export const PATH_ARGUMENTS: Record<KiCadToolName, readonly string[]> = {
   kicad_drc: ['path'],
   kicad_render: ['path'],
   kicad_export: ['path', 'output'],
+  kicad_export_fab: ['pcb', 'output_dir'],
+  kicad_fab_preset: ['path'],
   kicad_create_schematic: ['path'],
   kicad_edit_schematic: ['path'],
   kicad_read_pcb: ['path'],
   kicad_edit_pcb: ['path'],
 }
+
+/** Fab house presets shipped with the sidecar (`presets/<name>.json` + `.kicad_dru`). */
+export const FAB_PRESETS = ['jlcpcb', 'pcbway'] as const
+/** Optional formats `kicad_export_fab` adds to the zip. */
+export const FAB_EXTRAS = ['ipc2581', 'odb', 'step'] as const
 
 const SCH = { type: 'string', required: true, description: 'Path to a .kicad_sch file (relative to the working directory or absolute).' } as const
 const PCB = { type: 'string', required: true, description: 'Path to a .kicad_pcb file (relative to the working directory or absolute).' } as const
@@ -271,6 +280,56 @@ export function apply(ctx: Context, config: Config = {}): void {
       },
     }),
     defineTool({
+      name: 'kicad_export_fab',
+      description: [
+        'Produce the files to order a board: Gerbers (copper, mask, paste, silkscreen, Edge.Cuts), Excellon drill + map, position CSV and BOM, zipped,',
+        'plus front/back 3D previews; with preset jlcpcb also JLC BOM/CPL. Default output <project>/fab/<preset or kicad>/.',
+        'KiCad gates it first: the export is refused (nothing written) while DRC has errors, connections are unrouted, schematic parity disagrees,',
+        "or the board breaks the preset fab's limits. Fix what the gate lists and export again. Use force only when the user explicitly asks to export anyway;",
+        'the result then says the gate was overridden.',
+      ].join(' '),
+      parameters: {
+        pcb: { type: 'string', required: true, description: 'Path to the .kicad_pcb.' },
+        preset: { type: 'string', enum: [...FAB_PRESETS], description: "Fab house: checks the board against its limits and uses its output options." },
+        output_dir: { type: 'string', description: 'Output directory (default <project>/fab/<preset or kicad>/).' },
+        force: { type: 'boolean', description: 'Export even though the gate fails (recorded in the result).' },
+        extras: { type: 'array', items: { type: 'string', enum: [...FAB_EXTRAS] }, description: 'Additional formats for the zip.' },
+        preview: { type: 'boolean', description: 'Render front and back 3D PNGs (default true).' },
+      },
+      output: {
+        schema: { type: 'json' },
+        render: (_args, value) => fabContent(value as unknown as FabValue),
+        presentationMeta: (_args, value) => fabMeta(value as unknown as FabValue) as never,
+      },
+      async execute(args, exec) {
+        const value = await ctx.kicad.run<FabValue>('export_fab', {
+          ...args, pcb: at(exec, args.pcb), ...(args.output_dir ? { output_dir: at(exec, args.output_dir) } : {}),
+        }, exec.signal)
+        const top = value.exported ? value.preview?.[0] : undefined
+        if (top && attachRenders && attachments(ctx) !== undefined && await imageCapable(ctx, exec)) {
+          const file = join(value.output_dir, top)
+          value.image = await attachments(ctx)!.saveImage({ data: new Uint8Array(await readFile(file)), mediaType: 'image/png', name: basename(file) })
+        }
+        return value as never
+      },
+    }),
+    defineTool({
+      name: 'kicad_fab_preset',
+      description: "Adopt a fab house's limits (JLCPCB or PCBWay: minimum track, clearance, drill, annular ring, hole spacing, copper to edge) as the project's design rules, so kicad_drc checks what that fab can make: board setup minimums in the .kicad_pro, its custom rules in a managed block of the .kicad_dru (other rules are kept), netclass sizes raised to the minimums. dry_run lists the changes without writing.",
+      parameters: {
+        path: { type: 'string', required: true, description: "The project's .kicad_pcb or .kicad_pro." },
+        preset: { type: 'string', required: true, enum: [...FAB_PRESETS] },
+        dry_run: { type: 'boolean', description: 'List the changes without writing.' },
+      },
+      output: {
+        schema: { type: 'json' },
+        render: (_args, value) => [{ type: 'text', text: formatPreset(value as unknown as PresetResult) }],
+      },
+      async execute(args, exec) {
+        return await ctx.kicad.run('fab_preset', { ...args, path: at(exec, args.path) }, exec.signal) as never
+      },
+    }),
+    defineTool({
       name: 'kicad_create_schematic',
       description: 'Create a blank KiCad 10 schematic (plus a minimal .kicad_pro when the directory has none).',
       parameters: { path: SCH, paper: { type: 'string', description: 'Paper size (default A4).' } },
@@ -378,6 +437,33 @@ interface RenderValue {
   png?: string[]
   image?: ImageRef
   note?: string
+}
+
+interface FabValue extends FabResult {
+  image?: ImageRef
+}
+
+function fabContent(value: FabValue): Block[] {
+  const blocks: Block[] = [{ type: 'text', text: formatFab(value) }]
+  if (value.image) blocks.push(imageBlock(value.image))
+  return blocks
+}
+
+/** Bounded, replayable data for a fab export card. */
+export function fabMeta(r: FabResult): Record<string, unknown> {
+  return {
+    kind: 'fab',
+    exported: r.exported,
+    refused: r.refused,
+    forced: r.forced,
+    preset: r.preset,
+    output_dir: r.output_dir,
+    zip: r.zip ?? null,
+    gate: { passed: r.gate.passed, blocking: r.gate.blocking, drc: r.gate.drc, unrouted: r.gate.unrouted, parity: { checked: r.gate.parity.checked, issues: r.gate.parity.issues } },
+    layers: r.layers ?? [],
+    files: (r.files ?? []).length,
+    preview: r.preview ?? [],
+  }
 }
 
 function renderContent(value: RenderValue): Block[] {

@@ -1,7 +1,8 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import * as toolKiCad from '../src/index.ts'
-import { bootKiCad, disposeAll, fixtureBoard, fixtureProject, hasKiCadCli, runTool, text } from '../../../test/harness.ts'
+import { bootKiCad, demoProject, disposeAll, fixtureBoard, fixtureProject, hasKiCadCli, runTool, text, unrouteOneTrack } from '../../../test/harness.ts'
 
 afterEach(disposeAll)
 
@@ -126,6 +127,80 @@ describe('dsh-tool-kicad', () => {
     const ctx = await bootKiCad([toolKiCad])
     const result = await runTool(ctx, 'kicad_search_symbols', { query: 'resistor', library: 'Device', limit: 5 })
     expect(text(result)).toContain('Device:R')
+  })
+})
+
+describe('kicad_export_fab and kicad_fab_preset', () => {
+  const demo = hasKiCadCli() ? demoProject('pic_programmer') : undefined
+
+  it('ships the presets the sidecar has', async () => {
+    const ctx = await bootKiCad([toolKiCad])
+    const listed = await ctx.kicad.run<{ presets: Array<{ name: string }> }>('fab_preset', {})
+    expect(listed.presets.map(p => p.name)).toEqual([...toolKiCad.FAB_PRESETS])
+  })
+
+  it.runIf(demo)('exports a routed board and refuses one with an unrouted connection', async () => {
+    const ctx = await bootKiCad([toolKiCad])
+    const pcb = join(demo!, 'pic_programmer.kicad_pcb')
+    const done = await runTool(ctx, 'kicad_export_fab', { pcb, preset: 'jlcpcb', preview: false })
+    expect(done.isError).toBeFalsy()
+    const out = text(done)
+    expect(out).toMatch(/^Fab files exported for .*pic_programmer\.kicad_pcb \(JLCPCB standard 1-2 layer, 1 oz\)\./)
+    expect(out).toMatch(/Gate: PASSED by KiCad .* — 0 DRC errors .*0 unrouted, schematic parity clean, within JLCPCB/)
+    for (const layer of ['F.Cu', 'B.Cu', 'F.Mask', 'B.Mask', 'F.SilkS', 'B.SilkS', 'F.Paste', 'B.Paste', 'Edge.Cuts']) expect(out).toContain(` — ${layer}\n`)
+    expect(out).toMatch(/pic_programmer-PTH\.drl — drill, 244 hole\(s\)/)
+    expect(out).toContain('assembly/pic_programmer-cpl-jlc.csv — cpl')
+    const meta = done.meta as { kind: string, exported: boolean, zip: string, gate: { passed: boolean }, layers: string[] }
+    expect(meta).toMatchObject({ kind: 'fab', exported: true, gate: { passed: true } })
+    expect(existsSync(meta.zip)).toBe(true)
+    expect(meta.layers).toHaveLength(9)
+
+    unrouteOneTrack(pcb)
+    const refused = await runTool(ctx, 'kicad_export_fab', { pcb, output_dir: join(demo!, 'fab-refused') })
+    expect(refused.isError).toBeFalsy()
+    expect(text(refused)).toMatch(/^Fab export REFUSED for .*nothing was written\.\n- 1 unrouted connection\(s\)\nDetails:\n- \[error\] unconnected_items: Missing connection/)
+    expect(text(refused)).toContain('pass force: true')
+    expect(refused.meta).toMatchObject({ kind: 'fab', exported: false, refused: true, gate: { passed: false, unrouted: 1 } })
+    expect(existsSync(join(demo!, 'fab-refused'))).toBe(false)
+  })
+
+  it.runIf(demo)('previews a preset as a dry run, then applies it', async () => {
+    const ctx = await bootKiCad([toolKiCad])
+    const pro = join(demo!, 'pic_programmer.kicad_pro')
+    const before = readFileSync(pro, 'utf8')
+    const dry = await runTool(ctx, 'kicad_fab_preset', { path: join(demo!, 'pic_programmer.kicad_pcb'), preset: 'pcbway', dry_run: true })
+    expect(text(dry)).toMatch(/^Dry run: applying PCBWay standard PCB, 1 oz to .*pic_programmer\.kicad_pro would change:\n- board rule min_clearance: 0\.0 -> 0\.1/)
+    expect(readFileSync(pro, 'utf8')).toBe(before)
+    const applied = await runTool(ctx, 'kicad_fab_preset', { path: pro, preset: 'pcbway' })
+    expect(text(applied)).toMatch(/^Applied PCBWay/)
+    expect(JSON.parse(readFileSync(pro, 'utf8')).board.design_settings.rules.min_via_annular_width).toBe(0.15)
+    expect(readFileSync(join(demo!, 'pic_programmer.kicad_dru'), 'utf8')).toContain('PCBWay: pad hole to pad hole')
+    expect(text(await runTool(ctx, 'kicad_fab_preset', { path: pro, preset: 'pcbway' }))).toMatch(/already uses the PCBWay standard PCB, 1 oz rules/)
+  })
+})
+
+describe('formatFab', () => {
+  const gate = { passed: true, blocking: [], kicad_version: '10.0.7', drc: { errors: 0, warnings: 2, by_type: {} }, unrouted: 0, parity: { checked: false, issues: 0, note: 'no schematic next to the board, so parity was not checked' }, violations: [] }
+  it('says when the gate was overridden', () => {
+    const out = toolKiCad.formatFab({
+      pcb: '/p/b.kicad_pcb', preset: null, output_dir: '/p/fab/kicad', exported: true, refused: false, forced: true, zip: '/p/fab/kicad/b-fab.zip',
+      gate: { ...gate, passed: false, blocking: ['2 DRC error(s): clearance x2'] },
+      board: { width_mm: 50, height_mm: 30, copper_layers: 2, thickness_mm: 1.6 },
+      files: [{ path: 'b-F_Cu.gtl', kind: 'gerber', bytes: 1, layer: 'F.Cu' }, { path: 'b.drl', kind: 'drill', bytes: 1, holes: 12, tools: 3 }],
+      warnings: ['FORCED: exported although the fab gate failed (2 DRC error(s): clearance x2).'],
+    })
+    expect(out).toBe([
+      'Fab files exported WITH force for /p/b.kicad_pcb (generic KiCad output). The gate failed: this board is not ready to order.',
+      'Gate: FAILED — 2 DRC error(s): clearance x2',
+      'Zip: /p/fab/kicad/b-fab.zip',
+      'Board: 50 × 30 mm, 2 copper layer(s), 1.6 mm thick',
+      'Files in /p/fab/kicad:',
+      '- b-F_Cu.gtl — F.Cu',
+      '- b.drl — drill, 12 hole(s), 3 tool(s)',
+      'Warnings:',
+      '- FORCED: exported although the fab gate failed (2 DRC error(s): clearance x2).',
+    ].join('\n'))
+    expect(toolKiCad.formatFabGate(gate)).toBe('PASSED by KiCad 10.0.7 — 0 DRC errors (2 warning(s)), 0 unrouted, schematic parity not checked (no schematic next to the board, so parity was not checked)')
   })
 })
 

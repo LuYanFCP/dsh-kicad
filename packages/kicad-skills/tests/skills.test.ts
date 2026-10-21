@@ -1,9 +1,9 @@
-import { readFileSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 import SkillRegistry from '@deepseek-ai/dsh-skill'
 import { afterEach, describe, expect, it } from 'vitest'
 import * as skills from '../src/index.ts'
-import { bootKiCad, disposeAll, fixtureProject, hasKiCadCli } from '../../../test/harness.ts'
+import { bootKiCad, demoProject, disposeAll, fixtureProject, hasKiCadCli, unrouteOneTrack } from '../../../test/harness.ts'
 
 afterEach(disposeAll)
 
@@ -83,6 +83,45 @@ describe('kicad commands', () => {
 
   it('formats an empty BOM', () => {
     expect(skills.formatBom(['Refs'], [])).toBe('BOM is empty.')
+  })
+})
+
+describe('/kicad-fab', () => {
+  it('parses the board, preset, force and extra formats', () => {
+    expect(skills.fabArgs('')).toEqual({ path: '', force: false, extras: [], json: false })
+    expect(skills.fabArgs('hw/b.kicad_pcb --preset jlcpcb --force --step --odb --json'))
+      .toEqual({ path: 'hw/b.kicad_pcb', preset: 'jlcpcb', force: true, extras: ['step', 'odb'], json: true })
+    expect(skills.fabArgs('--preset=pcbway').preset).toBe('pcbway')
+    expect(() => skills.fabArgs('--preset')).toThrow(/needs a fab house/)
+    expect(() => skills.fabArgs('--gerber')).toThrow(/unknown option --gerber/)
+    expect(() => skills.fabArgs('a.kicad_pcb b.kicad_pcb')).toThrow(/expected one board/)
+  })
+
+  const demo = hasKiCadCli() ? demoProject('pic_programmer') : undefined
+  it.runIf(demo)('exports the project board, refuses it once a connection is unrouted, and stays in the working directory', async () => {
+    const real = await bootKiCad()
+    const ctx = { get: (name: string) => (name === 'workingDirectory' ? { get: () => demo } : undefined), kicad: real.kicad } as never
+    const command = skills.createCommands(ctx).find(c => c.name === 'kicad-fab')!
+    const run = async (raw: string) => await command.handler({ ...invocation(raw), agent: { session: {} } } as never) as { kind: string, text: string }
+
+    const done = await run('--preset jlcpcb')
+    expect(done.kind).toBe('success')
+    expect(done.text).toMatch(/^Fab files exported for .*pic_programmer\.kicad_pcb \(JLCPCB/)
+    const zip = join(demo!, 'fab/jlcpcb/pic_programmer-jlcpcb.zip')
+    expect(existsSync(zip)).toBe(true)
+    expect(readFileSync(zip).subarray(0, 2).toString()).toBe('PK')
+
+    unrouteOneTrack(join(demo!, 'pic_programmer.kicad_pcb'))
+    const refused = await run('')
+    expect(refused.kind).toBe('success')
+    expect(refused.text).toMatch(/^Fab export REFUSED .*\n- 1 unrouted connection\(s\)/)
+    expect(existsSync(join(demo!, 'fab/kicad'))).toBe(false)
+    const forced = JSON.parse((await run('--force --json')).text)
+    expect(forced).toMatchObject({ exported: true, forced: true, gate: { passed: false } })
+    expect(forced.warnings[0]).toMatch(/^FORCED/)
+
+    expect((await run('/etc/board.kicad_pcb')).text).toMatch(/must be inside the working directory/)
+    expect((await run('--preset oshpark')).text).toMatch(/unknown fab preset 'oshpark'/)
   })
 })
 

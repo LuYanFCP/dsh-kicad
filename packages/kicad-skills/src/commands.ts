@@ -1,8 +1,8 @@
-/** /erc, /drc, /bom and /kicad-render: direct UI commands that never involve the model. */
-import { readdirSync } from 'node:fs'
-import { isAbsolute, join, resolve } from 'node:path'
+/** /erc, /drc, /bom, /kicad-fab and /kicad-render: direct UI commands that never involve the model. */
+import { readdirSync, realpathSync } from 'node:fs'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { DoctorReport, InstallJob, InstallOption } from 'dsh-kicad-bridge'
-import { formatCheck, type CheckReport } from 'dsh-tool-kicad'
+import { FAB_EXTRAS, formatCheck, formatFab, type CheckReport, type FabResult } from 'dsh-tool-kicad'
 import { agentCwd, followup, type CommandDefinition, type CommandInvocation, type CommandResult, type Context } from './dsh.ts'
 
 /** The design file a command targets: the argument, else the project's root schematic / board. */
@@ -72,6 +72,12 @@ export function createCommands(ctx: Context): CommandDefinition[] {
       }),
     },
     {
+      name: 'kicad-fab',
+      description: 'Export the project board for ordering: Gerber, drill, position and BOM files in one zip, once KiCad finds it ready',
+      input: { hint: '[path/to/board.kicad_pcb] [--preset jlcpcb|pcbway] [--force] [--step] [--ipc2581] [--odb]' },
+      handler: wrap(async (inv, cwd) => fabCommand(ctx, cwd, inv.rawInput, inv.signal)),
+    },
+    {
       name: 'kicad-design',
       description: 'Describe the board you want in one sentence; the agent asks a few questions, writes a full spec, then designs it',
       input: { hint: 'e.g. a USB-powered board where a button turns an LED on' },
@@ -100,6 +106,57 @@ export function createCommands(ctx: Context): CommandDefinition[] {
 export function flags(raw: string): { json: boolean, yes: boolean, words: string[] } {
   const words = raw.trim().split(/\s+/).filter(Boolean)
   return { json: words.includes('--json'), yes: words.includes('--yes') || words.includes('-y'), words: words.filter(w => !w.startsWith('-')) }
+}
+
+export interface FabArgs {
+  path: string
+  preset?: string
+  force: boolean
+  extras: string[]
+  json: boolean
+}
+
+/** `/kicad-fab [board] [--preset <name>] [--force] [--step|--ipc2581|--odb] [--json]`. */
+export function fabArgs(raw: string): FabArgs {
+  const words = raw.trim().split(/\s+/).filter(Boolean)
+  const out: FabArgs = { path: '', force: false, extras: [], json: false }
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i]!
+    const preset = /^--preset(?:=(.*))?$/.exec(word)
+    if (preset) {
+      out.preset = preset[1] ?? words[++i]
+      if (!out.preset) throw new Error('--preset needs a fab house, e.g. --preset jlcpcb')
+    } else if (word === '--force') {
+      out.force = true
+    } else if (word === '--json') {
+      out.json = true
+    } else if (word.startsWith('--') && (FAB_EXTRAS as readonly string[]).includes(word.slice(2))) {
+      out.extras.push(word.slice(2))
+    } else if (word.startsWith('-')) {
+      throw new Error(`unknown option ${word}; use --preset <name>, --force, ${FAB_EXTRAS.map(e => `--${e}`).join(', ')}`)
+    } else if (!out.path) {
+      out.path = word
+    } else {
+      throw new Error(`expected one board, got "${out.path}" and "${word}"`)
+    }
+  }
+  return out
+}
+
+/** `/kicad-fab`: KiCad's gate, then the fab zip, for a board inside the working directory. */
+export async function fabCommand(ctx: Context, cwd: string, raw: string, signal?: AbortSignal): Promise<string> {
+  const args = fabArgs(raw)
+  const pcb = targetFile(cwd, args.path, '.kicad_pcb')
+  // Real paths, so a symlinked folder cannot point the export outside the working directory.
+  const real = (path: string): string => { try { return realpathSync(path) } catch { return resolve(path) } }
+  const rel = relative(real(cwd), real(pcb))
+  if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    throw new Error(`/kicad-fab writes next to the board, so the board must be inside the working directory (${cwd}); got ${pcb}`)
+  }
+  const result = await ctx.kicad.run<FabResult>('export_fab', {
+    pcb, force: args.force, extras: args.extras, ...(args.preset ? { preset: args.preset } : {}),
+  }, signal)
+  return args.json ? JSON.stringify(result) : formatFab(result)
 }
 
 /** `/kicad-install`: plan (default) · `<method> --yes` · `status` · `cancel`; `--json` for UIs. */

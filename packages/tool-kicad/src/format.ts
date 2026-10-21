@@ -18,6 +18,8 @@ export interface CheckReport {
   by_type: Record<string, number>
   /** DRC only: missing connections (each also counts as an error). */
   unrouted?: number
+  /** DRC with schematic parity only: why the comparison could not run (no parity issues are reported then). */
+  schematic_parity_error?: string
   violations: CheckViolation[]
 }
 
@@ -78,12 +80,10 @@ export function formatCheck(report: CheckReport): string {
     + `${report.path ? ` on ${report.path}` : ''}: ${verdict} — ${report.counts.error} error(s), ${report.counts.warning} warning(s)`
     + (report.unrouted !== undefined ? `, ${report.unrouted} unrouted` : '')
     + (report.counts.exclusion ? `, ${report.counts.exclusion} excluded` : '')
+    + (report.schematic_parity_error ? `\nSchematic parity was NOT checked: ${report.schematic_parity_error}` : '')
   const active = report.violations.filter(v => !v.excluded)
   if (active.length === 0) return head
-  const lines = active.slice(0, MAX_LISTED).map((v) => {
-    const where = v.items.map(i => `${i.description ?? ''}${i.pos ? ` @ (${round(i.pos.x)}, ${round(i.pos.y)})` : ''}`).filter(Boolean).join('; ')
-    return `- [${v.severity}] ${v.type}: ${v.description}${where ? ` — ${where}` : ''}${v.sheet && v.sheet !== '/' ? ` [sheet ${v.sheet}]` : ''}`
-  })
+  const lines = active.slice(0, MAX_LISTED).map(violationLine)
   if (active.length > MAX_LISTED) lines.push(`… ${active.length - MAX_LISTED} more`)
   return `${head}\n${lines.join('\n')}`
 }
@@ -149,6 +149,103 @@ export function formatBoard(b: BoardSummary): string {
   }
   lines.push(`Nets (${b.counts.nets}): ${b.nets.join(', ')}`)
   return lines.join('\n')
+}
+
+function violationLine(v: CheckViolation): string {
+  const where = v.items.map(i => `${i.description ?? ''}${i.pos ? ` @ (${round(i.pos.x)}, ${round(i.pos.y)})` : ''}`).filter(Boolean).join('; ')
+  return `- [${v.severity}] ${v.type}: ${v.description}${where ? ` — ${where}` : ''}${v.sheet && v.sheet !== '/' ? ` [sheet ${v.sheet}]` : ''}`
+}
+
+export interface FabGate {
+  passed: boolean
+  blocking: string[]
+  kicad_version?: string
+  drc: { errors: number, warnings: number, by_type: Record<string, number> }
+  unrouted: number
+  parity: { checked: boolean, issues: number, schematic?: string | null, note?: string }
+  preset?: { name: string, label: string, errors: number, by_type: Record<string, number> }
+  violations: CheckViolation[]
+}
+
+export interface FabFile {
+  path: string
+  kind: string
+  bytes: number
+  layer?: string | null
+  function?: string | null
+  holes?: number
+  tools?: number
+}
+
+/** The `export_fab` result: refused (nothing written) or exported (possibly forced past a failed gate). */
+export interface FabResult {
+  pcb: string
+  preset: string | null
+  preset_label?: string
+  output_dir: string
+  exported: boolean
+  refused: boolean
+  forced: boolean
+  gate: FabGate
+  zip?: string
+  board?: { width_mm?: number, height_mm?: number, copper_layers?: number, thickness_mm?: number } | null
+  layers?: string[]
+  files?: FabFile[]
+  preview?: string[]
+  warnings?: string[]
+  notes?: string[]
+}
+
+export function formatFabGate(gate: FabGate): string {
+  if (!gate.passed) return `FAILED — ${gate.blocking.join('; ')}`
+  const parity = gate.parity.checked ? 'schematic parity clean' : `schematic parity not checked (${gate.parity.note ?? 'no schematic'})`
+  const preset = gate.preset ? `, within ${gate.preset.label} limits` : ''
+  return `PASSED by KiCad ${gate.kicad_version ?? ''}`.trimEnd() + ` — 0 DRC errors (${gate.drc.warnings} warning(s)), 0 unrouted, ${parity}${preset}`
+}
+
+export function formatFab(r: FabResult): string {
+  const fab = r.preset_label ?? 'generic KiCad output'
+  if (!r.exported) {
+    const listed = r.gate.violations.slice(0, MAX_LISTED).map(violationLine)
+    return [
+      `Fab export REFUSED for ${r.pcb} (${fab}): the board is not ready to order, so nothing was written.`,
+      ...r.gate.blocking.map(b => `- ${b}`),
+      ...(listed.length ? ['Details:', ...listed] : []),
+      'Fix these and export again (kicad_drc shows the full report), or pass force: true to export anyway; the result will record the override.',
+    ].join('\n')
+  }
+  const head = r.forced
+    ? `Fab files exported WITH force for ${r.pcb} (${fab}). The gate failed: this board is not ready to order.`
+    : `Fab files exported for ${r.pcb} (${fab}).`
+  const lines = [head, `Gate: ${formatFabGate(r.gate)}`, `Zip: ${r.zip}`]
+  const b = r.board
+  if (b?.width_mm) lines.push(`Board: ${b.width_mm} × ${b.height_mm} mm, ${b.copper_layers} copper layer(s), ${b.thickness_mm} mm thick`)
+  lines.push(`Files in ${r.output_dir}:`)
+  for (const f of r.files ?? []) {
+    const what = f.layer ? f.layer : f.kind === 'drill' ? `drill, ${f.holes} hole(s), ${f.tools} tool(s)` : f.kind
+    lines.push(`- ${f.path} — ${what}`)
+  }
+  if (r.preview?.length) lines.push(`3D preview: ${r.preview.join(', ')}`)
+  if (r.warnings?.length) lines.push('Warnings:', ...r.warnings.map(w => `- ${w}`))
+  if (r.notes?.length) lines.push(`Notes (${fab}):`, ...r.notes.map(n => `- ${n}`))
+  return lines.join('\n')
+}
+
+export interface PresetResult {
+  preset: string
+  label: string
+  project: string
+  dru: string
+  written: boolean
+  dry_run: boolean
+  changes: string[]
+  notes: string[]
+}
+
+export function formatPreset(r: PresetResult): string {
+  if (r.changes.length === 0) return `${r.project} already uses the ${r.label} rules; nothing changed.`
+  const head = r.dry_run ? `Dry run: applying ${r.label} to ${r.project} would change:` : `Applied ${r.label} to ${r.project}:`
+  return [head, ...r.changes.map(c => `- ${c}`), ...(r.written ? ['kicad_drc now checks the board against these rules.'] : [])].join('\n')
 }
 
 export function formatJson(value: unknown): string {

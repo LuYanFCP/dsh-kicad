@@ -1,6 +1,6 @@
 // packages/kicad-skills/src/commands.ts
-import { readdirSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { readdirSync, realpathSync } from "node:fs";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 // packages/tool-kicad/lib/dsh.js
 import { defineTool } from "@deepseek-ai/dsh-tools";
@@ -10,22 +10,63 @@ var MAX_LISTED = 60;
 function formatCheck(report) {
   const label = report.kind.toUpperCase();
   const verdict = report.passed ? "PASSED" : "FAILED";
-  const head = `${label} by KiCad ${report.kicad_version ?? ""}`.trim() + `${report.path ? ` on ${report.path}` : ""}: ${verdict} \u2014 ${report.counts.error} error(s), ${report.counts.warning} warning(s)` + (report.unrouted !== void 0 ? `, ${report.unrouted} unrouted` : "") + (report.counts.exclusion ? `, ${report.counts.exclusion} excluded` : "");
+  const head = `${label} by KiCad ${report.kicad_version ?? ""}`.trim() + `${report.path ? ` on ${report.path}` : ""}: ${verdict} \u2014 ${report.counts.error} error(s), ${report.counts.warning} warning(s)` + (report.unrouted !== void 0 ? `, ${report.unrouted} unrouted` : "") + (report.counts.exclusion ? `, ${report.counts.exclusion} excluded` : "") + (report.schematic_parity_error ? `
+Schematic parity was NOT checked: ${report.schematic_parity_error}` : "");
   const active = report.violations.filter((v) => !v.excluded);
   if (active.length === 0)
     return head;
-  const lines = active.slice(0, MAX_LISTED).map((v) => {
-    const where = v.items.map((i) => `${i.description ?? ""}${i.pos ? ` @ (${round(i.pos.x)}, ${round(i.pos.y)})` : ""}`).filter(Boolean).join("; ");
-    return `- [${v.severity}] ${v.type}: ${v.description}${where ? ` \u2014 ${where}` : ""}${v.sheet && v.sheet !== "/" ? ` [sheet ${v.sheet}]` : ""}`;
-  });
+  const lines = active.slice(0, MAX_LISTED).map(violationLine);
   if (active.length > MAX_LISTED)
     lines.push(`\u2026 ${active.length - MAX_LISTED} more`);
   return `${head}
 ${lines.join("\n")}`;
 }
+function violationLine(v) {
+  const where = v.items.map((i) => `${i.description ?? ""}${i.pos ? ` @ (${round(i.pos.x)}, ${round(i.pos.y)})` : ""}`).filter(Boolean).join("; ");
+  return `- [${v.severity}] ${v.type}: ${v.description}${where ? ` \u2014 ${where}` : ""}${v.sheet && v.sheet !== "/" ? ` [sheet ${v.sheet}]` : ""}`;
+}
+function formatFabGate(gate) {
+  if (!gate.passed)
+    return `FAILED \u2014 ${gate.blocking.join("; ")}`;
+  const parity = gate.parity.checked ? "schematic parity clean" : `schematic parity not checked (${gate.parity.note ?? "no schematic"})`;
+  const preset = gate.preset ? `, within ${gate.preset.label} limits` : "";
+  return `PASSED by KiCad ${gate.kicad_version ?? ""}`.trimEnd() + ` \u2014 0 DRC errors (${gate.drc.warnings} warning(s)), 0 unrouted, ${parity}${preset}`;
+}
+function formatFab(r) {
+  const fab = r.preset_label ?? "generic KiCad output";
+  if (!r.exported) {
+    const listed = r.gate.violations.slice(0, MAX_LISTED).map(violationLine);
+    return [
+      `Fab export REFUSED for ${r.pcb} (${fab}): the board is not ready to order, so nothing was written.`,
+      ...r.gate.blocking.map((b2) => `- ${b2}`),
+      ...listed.length ? ["Details:", ...listed] : [],
+      "Fix these and export again (kicad_drc shows the full report), or pass force: true to export anyway; the result will record the override."
+    ].join("\n");
+  }
+  const head = r.forced ? `Fab files exported WITH force for ${r.pcb} (${fab}). The gate failed: this board is not ready to order.` : `Fab files exported for ${r.pcb} (${fab}).`;
+  const lines = [head, `Gate: ${formatFabGate(r.gate)}`, `Zip: ${r.zip}`];
+  const b = r.board;
+  if (b?.width_mm)
+    lines.push(`Board: ${b.width_mm} \xD7 ${b.height_mm} mm, ${b.copper_layers} copper layer(s), ${b.thickness_mm} mm thick`);
+  lines.push(`Files in ${r.output_dir}:`);
+  for (const f of r.files ?? []) {
+    const what = f.layer ? f.layer : f.kind === "drill" ? `drill, ${f.holes} hole(s), ${f.tools} tool(s)` : f.kind;
+    lines.push(`- ${f.path} \u2014 ${what}`);
+  }
+  if (r.preview?.length)
+    lines.push(`3D preview: ${r.preview.join(", ")}`);
+  if (r.warnings?.length)
+    lines.push("Warnings:", ...r.warnings.map((w) => `- ${w}`));
+  if (r.notes?.length)
+    lines.push(`Notes (${fab}):`, ...r.notes.map((n) => `- ${n}`));
+  return lines.join("\n");
+}
 function round(n) {
   return Math.round(n * 100) / 100;
 }
+
+// packages/tool-kicad/lib/index.js
+var FAB_EXTRAS = ["ipc2581", "odb", "step"];
 
 // packages/kicad-skills/src/dsh.ts
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
@@ -113,6 +154,12 @@ function createCommands(ctx) {
       })
     },
     {
+      name: "kicad-fab",
+      description: "Export the project board for ordering: Gerber, drill, position and BOM files in one zip, once KiCad finds it ready",
+      input: { hint: "[path/to/board.kicad_pcb] [--preset jlcpcb|pcbway] [--force] [--step] [--ipc2581] [--odb]" },
+      handler: wrap(async (inv, cwd) => fabCommand(ctx, cwd, inv.rawInput, inv.signal))
+    },
+    {
       name: "kicad-design",
       description: "Describe the board you want in one sentence; the agent asks a few questions, writes a full spec, then designs it",
       input: { hint: "e.g. a USB-powered board where a button turns an LED on" },
@@ -139,6 +186,53 @@ function createCommands(ctx) {
 function flags(raw) {
   const words = raw.trim().split(/\s+/).filter(Boolean);
   return { json: words.includes("--json"), yes: words.includes("--yes") || words.includes("-y"), words: words.filter((w) => !w.startsWith("-")) };
+}
+function fabArgs(raw) {
+  const words = raw.trim().split(/\s+/).filter(Boolean);
+  const out = { path: "", force: false, extras: [], json: false };
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i];
+    const preset = /^--preset(?:=(.*))?$/.exec(word);
+    if (preset) {
+      out.preset = preset[1] ?? words[++i];
+      if (!out.preset) throw new Error("--preset needs a fab house, e.g. --preset jlcpcb");
+    } else if (word === "--force") {
+      out.force = true;
+    } else if (word === "--json") {
+      out.json = true;
+    } else if (word.startsWith("--") && FAB_EXTRAS.includes(word.slice(2))) {
+      out.extras.push(word.slice(2));
+    } else if (word.startsWith("-")) {
+      throw new Error(`unknown option ${word}; use --preset <name>, --force, ${FAB_EXTRAS.map((e) => `--${e}`).join(", ")}`);
+    } else if (!out.path) {
+      out.path = word;
+    } else {
+      throw new Error(`expected one board, got "${out.path}" and "${word}"`);
+    }
+  }
+  return out;
+}
+async function fabCommand(ctx, cwd, raw, signal) {
+  const args = fabArgs(raw);
+  const pcb = targetFile(cwd, args.path, ".kicad_pcb");
+  const real = (path) => {
+    try {
+      return realpathSync(path);
+    } catch {
+      return resolve(path);
+    }
+  };
+  const rel = relative(real(cwd), real(pcb));
+  if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    throw new Error(`/kicad-fab writes next to the board, so the board must be inside the working directory (${cwd}); got ${pcb}`);
+  }
+  const result = await ctx.kicad.run("export_fab", {
+    pcb,
+    force: args.force,
+    extras: args.extras,
+    ...args.preset ? { preset: args.preset } : {}
+  }, signal);
+  return args.json ? JSON.stringify(result) : formatFab(result);
 }
 async function installCommand(ctx, raw, signal) {
   const { json, yes, words } = flags(raw);
@@ -228,7 +322,7 @@ I am not a hardware expert. First use the kicad-design-brief skill: complete thi
 // packages/kicad-skills/src/skills.ts
 import { readdirSync as readdirSync2, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { join as join2, sep } from "node:path";
+import { join as join2, sep as sep2 } from "node:path";
 import { fileURLToPath } from "node:url";
 var PROVIDER = "dsh-kicad";
 var SKILLS_DIR = fileURLToPath(new URL("../skills/", import.meta.url));
@@ -255,7 +349,7 @@ function createSkillProvider(dir = SKILLS_DIR) {
       source: "bundled",
       rank: BUNDLED_RANK,
       path,
-      resourceBase: { kind: "directory", path: join2(dir, entry.name).split(sep).join("/") },
+      resourceBase: { kind: "directory", path: join2(dir, entry.name).split(sep2).join("/") },
       locator: path
     };
   });
@@ -293,6 +387,8 @@ export {
   createCommands,
   createSkillProvider,
   designRequest,
+  fabArgs,
+  fabCommand,
   flags,
   formatBom,
   formatDoctor,

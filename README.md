@@ -10,10 +10,10 @@ KiCad for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (d
 
 | Surface | What it does |
 |---|---|
-| **Tools** (`kicad_*`) | `doctor` (is this machine ready: kicad-cli and KiCad 8+, libraries, Python, with fixes and install commands), `read_schematic`, `list_components`, `get_symbol_pins`, `list_nets` (KiCad netlist), `search_symbols` (installed libraries), `erc`, `drc`, `render` (SVG, PNG attached as an image for image-capable models), `export` (netlist/BOM), `create_schematic`, and `edit_schematic` — an atomic batch of edits (add/move/remove symbols, set values/footprints/properties, wires, labels, power symbols, junctions, no-connects, pin-to-pin wires routed around parts and other nets, pin-to-net connections, plus layout by function: titled block frames, moving a part or a whole block together with its wiring, page size and title block); for boards `read_pcb` (outline, layers, rules and net classes, footprints with courtyards and pad nets, zones, DRC's unrouted count) and `edit_pcb` — an atomic batch (board outline and mounting holes, moving, flipping and locking footprints, design rules and net classes in the `.kicad_pro`, tracks with pad-to-pad endpoints, vias, zones, keepouts, silkscreen text and reference designators, removal by uuid). Untouched file text stays byte-identical. |
-| **Policy** | Design edits go through dsh approval (`ask`); writes are confined to the session's working directory (a monotonic guard); after every successful edit KiCad ERC (schematic) or DRC (board, zones refilled) runs and its verdict is appended to the tool result; the system prompt gets stable KiCad working rules and a dynamic "KiCad project in this directory + last ERC/DRC" context. |
+| **Tools** (`kicad_*`) | `doctor` (is this machine ready: kicad-cli and KiCad 8+, libraries, Python, with fixes and install commands), `read_schematic`, `list_components`, `get_symbol_pins`, `list_nets` (KiCad netlist), `search_symbols` (installed libraries), `erc`, `drc`, `render` (SVG, PNG attached as an image for image-capable models), `export` (netlist/BOM), `export_fab` (Gerber/drill/position/BOM zip with 3D previews, refused until KiCad finds the board ready, see [Fab output](#fab-output)), `fab_preset` (JLCPCB/PCBWay design rules), `create_schematic`, and `edit_schematic` — an atomic batch of edits (add/move/remove symbols, set values/footprints/properties, wires, labels, power symbols, junctions, no-connects, pin-to-pin wires routed around parts and other nets, pin-to-net connections, plus layout by function: titled block frames, moving a part or a whole block together with its wiring, page size and title block); for boards `read_pcb` (outline, layers, rules and net classes, footprints with courtyards and pad nets, zones, DRC's unrouted count) and `edit_pcb` — an atomic batch (board outline and mounting holes, moving, flipping and locking footprints, design rules and net classes in the `.kicad_pro`, tracks with pad-to-pad endpoints, vias, zones, keepouts, silkscreen text and reference designators, removal by uuid). Untouched file text stays byte-identical. |
+| **Policy** | Design edits go through dsh approval (`ask`); writes are confined to the session's working directory (a monotonic guard); after every successful edit KiCad ERC (schematic) or DRC (board edit or fab preset, zones refilled) runs and its verdict is appended to the tool result; the system prompt gets stable KiCad working rules and a dynamic "KiCad project in this directory + last ERC/DRC" context. |
 | **Skills** | `kicad-agent-workflow`, `kicad-erc-triage`, `kicad-drc-triage`, `kicad-schematic-design`. |
-| **Commands** | `/erc`, `/drc`, `/bom` (model-free, run on the project's root design), `/kicad-render`, `/kicad-doctor` (environment check), `/kicad-install` (install KiCad, see below). |
+| **Commands** | `/erc`, `/drc`, `/bom` (model-free, run on the project's root design), `/kicad-fab` (fab zip), `/kicad-render`, `/kicad-doctor` (environment check), `/kicad-install` (install KiCad, see below). |
 | **Agent preset** | `eda` — a standard-like tool set with an electronics-design persona. The KiCad tools are global, so every preset can use them. |
 | **Web UI** | Right-sidebar viewer for `*.kicad_sch` / `*.kicad_pcb` with two modes: **Interactive** — the embedded [KiCanvas](https://github.com/theacodes/kicanvas) viewer (hierarchical sheets, symbol/footprint/net inspection, layer toggles, KiCad or Witch Hazel theme, reloads when the file changes) — and **SVG** (kicad-cli render, pan/zoom, multi-sheet, Render button, re-renders a board by itself when it changes; also the automatic fallback); conversation cards for ERC/DRC, schematic edits and the environment check; settings pages for the sidecar (kicad-cli path, Python, plus the KiCad environment check and **Install KiCad**) and the policy (approval, auto-ERC, auto-render). The viewer and failed tool cards show a notice with **Install KiCad** when KiCad is missing or too old. |
 | **Standalone MCP server** | The Python sidecar speaks MCP over stdio, so Claude Code or an RL environment can use the same tools without dsh. |
@@ -25,10 +25,10 @@ KiCad for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (d
 dsh-kicad-bundle  (cordis.patch.yml: global rows + presets/eda.patch.yml)
 ├─ dsh-kicad-bridge     Host  ctx.kicad service; runs the Python sidecar through ctx.subprocess, speaks MCP to it
 │    └─ sidecar/        Python ≥3.10, stdlib-only core: lossless .kicad_sch S-expression editing, symbol libraries,
-│                       pin geometry, kicad-cli (ERC/DRC/netlist/BOM/SVG); optional extras: png (cairosvg), ipc (kicad-python)
+│                       pin geometry, kicad-cli (ERC/DRC/netlist/BOM/SVG), fab output; optional extras: png (cairosvg), ipc (kicad-python)
 ├─ dsh-tool-kicad       Host  kicad_* tools (defineTool), paths resolved against the session working directory
 ├─ dsh-kicad-policy     Host  tools.guard + tools/pre-execute (ask/deny) + tools/post-execute (auto ERC/DRC) + prompt section/context
-├─ dsh-kicad-skills     Host  skill provider + /erc /drc /bom /kicad-render
+├─ dsh-kicad-skills     Host  skill provider + /erc /drc /bom /kicad-fab /kicad-render
 └─ dsh-client-ui-kicad  Client sidebarRightTabs type + tool.call.toolview rows + plugins.row.config pages
 kicad-plugin/           KiCad IPC plugin ("Open in DSH")
 market/                 plugin-market index example
@@ -111,6 +111,14 @@ To publish a new version: `pnpm run dist`, commit, then add a version to `market
 4. `/erc`, `/drc`, `/bom` work without the model.
 5. **Plugins → KiCad → KiCad bridge / KiCad policy** hold the settings.
 
+### Fab output
+
+`/kicad-fab [board.kicad_pcb] [--preset jlcpcb|pcbway] [--force] [--step] [--ipc2581] [--odb]` (the agent's `kicad_export_fab`) lets KiCad judge the board first. DRC errors, unrouted connections, schematic parity issues (when the schematic sits next to the board) and, with a preset, errors against that fab's limits refuse the export, and nothing is written. `--force` exports anyway; the result and `fab-manifest.json` say so.
+
+Output goes to `<project>/fab/<preset or kicad>/`: Gerbers for copper, mask, paste, silkscreen and Edge.Cuts with the Gerber job file; Excellon drill files with a Gerber X2 drill map; `assembly/` with the position CSV and BOM (plus JLC BOM/CPL with `--preset jlcpcb`); `preview/` with front and back 3D PNGs; and `<board>-<preset or fab>.zip` with everything except the previews.
+
+`kicad_fab_preset` makes a fab's limits (minimum track, clearance, drill, annular ring, hole spacing, copper to edge) the project's design rules, so `kicad_drc` checks what the fab can make: board setup minimums go into the `.kicad_pro`, custom rules into a managed block of the `.kicad_dru` (your own rules stay). The values come from each fab's published capabilities ([`presets/`](packages/kicad-bridge/sidecar/src/dsh_kicad_sidecar/presets)); the fab's own review has the last word.
+
 ### Standalone MCP server (Claude Code, RL environments)
 
 ```sh
@@ -158,7 +166,8 @@ The Client is compiled by [`scripts/build-client.mjs`](scripts/build-client.mjs)
 
 ## Known limitations
 
-- Schematic first. PCB support is check/render only (`kicad_drc`, `kicad_render`); there is no board editing.
+- Schematic first. Boards can be read, edited, checked, rendered and exported for fabrication (`kicad_read_pcb`, `kicad_edit_pcb`, `kicad_drc`, `kicad_render`, `kicad_export_fab`); there is no schematic-to-board sync or autorouting yet.
+- Fab presets were read from JLCPCB's and PCBWay's capability pages on 2026-10-21 and may drift. The JLC CPL keeps KiCad's rotations; JLCPCB's preview may need per-part rotation fixes.
 - Edits cover symbols, properties, wires, labels, power symbols, junctions and no-connects; hierarchical sheet creation, buses and graphic items are not edited.
 - New sub-sheet symbols get their instance path from the root sheet one level up; deeper hierarchies may need KiCad's annotation.
 - Images reach the model only when the model route declares image input and an attachment store is mounted; otherwise the render tool returns SVG paths.

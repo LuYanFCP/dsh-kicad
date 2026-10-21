@@ -1,6 +1,6 @@
 // packages/tool-kicad/src/index.ts
 import { readFile } from "node:fs/promises";
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 
 // packages/tool-kicad/src/dsh.ts
 import { isAbsolute, resolve } from "node:path";
@@ -46,13 +46,11 @@ var MAX_LISTED = 60;
 function formatCheck(report) {
   const label = report.kind.toUpperCase();
   const verdict = report.passed ? "PASSED" : "FAILED";
-  const head = `${label} by KiCad ${report.kicad_version ?? ""}`.trim() + `${report.path ? ` on ${report.path}` : ""}: ${verdict} \u2014 ${report.counts.error} error(s), ${report.counts.warning} warning(s)` + (report.unrouted !== void 0 ? `, ${report.unrouted} unrouted` : "") + (report.counts.exclusion ? `, ${report.counts.exclusion} excluded` : "");
+  const head = `${label} by KiCad ${report.kicad_version ?? ""}`.trim() + `${report.path ? ` on ${report.path}` : ""}: ${verdict} \u2014 ${report.counts.error} error(s), ${report.counts.warning} warning(s)` + (report.unrouted !== void 0 ? `, ${report.unrouted} unrouted` : "") + (report.counts.exclusion ? `, ${report.counts.exclusion} excluded` : "") + (report.schematic_parity_error ? `
+Schematic parity was NOT checked: ${report.schematic_parity_error}` : "");
   const active = report.violations.filter((v) => !v.excluded);
   if (active.length === 0) return head;
-  const lines = active.slice(0, MAX_LISTED).map((v) => {
-    const where = v.items.map((i) => `${i.description ?? ""}${i.pos ? ` @ (${round(i.pos.x)}, ${round(i.pos.y)})` : ""}`).filter(Boolean).join("; ");
-    return `- [${v.severity}] ${v.type}: ${v.description}${where ? ` \u2014 ${where}` : ""}${v.sheet && v.sheet !== "/" ? ` [sheet ${v.sheet}]` : ""}`;
-  });
+  const lines = active.slice(0, MAX_LISTED).map(violationLine);
   if (active.length > MAX_LISTED) lines.push(`\u2026 ${active.length - MAX_LISTED} more`);
   return `${head}
 ${lines.join("\n")}`;
@@ -121,6 +119,46 @@ function formatBoard(b) {
   lines.push(`Nets (${b.counts.nets}): ${b.nets.join(", ")}`);
   return lines.join("\n");
 }
+function violationLine(v) {
+  const where = v.items.map((i) => `${i.description ?? ""}${i.pos ? ` @ (${round(i.pos.x)}, ${round(i.pos.y)})` : ""}`).filter(Boolean).join("; ");
+  return `- [${v.severity}] ${v.type}: ${v.description}${where ? ` \u2014 ${where}` : ""}${v.sheet && v.sheet !== "/" ? ` [sheet ${v.sheet}]` : ""}`;
+}
+function formatFabGate(gate) {
+  if (!gate.passed) return `FAILED \u2014 ${gate.blocking.join("; ")}`;
+  const parity = gate.parity.checked ? "schematic parity clean" : `schematic parity not checked (${gate.parity.note ?? "no schematic"})`;
+  const preset = gate.preset ? `, within ${gate.preset.label} limits` : "";
+  return `PASSED by KiCad ${gate.kicad_version ?? ""}`.trimEnd() + ` \u2014 0 DRC errors (${gate.drc.warnings} warning(s)), 0 unrouted, ${parity}${preset}`;
+}
+function formatFab(r) {
+  const fab = r.preset_label ?? "generic KiCad output";
+  if (!r.exported) {
+    const listed = r.gate.violations.slice(0, MAX_LISTED).map(violationLine);
+    return [
+      `Fab export REFUSED for ${r.pcb} (${fab}): the board is not ready to order, so nothing was written.`,
+      ...r.gate.blocking.map((b2) => `- ${b2}`),
+      ...listed.length ? ["Details:", ...listed] : [],
+      "Fix these and export again (kicad_drc shows the full report), or pass force: true to export anyway; the result will record the override."
+    ].join("\n");
+  }
+  const head = r.forced ? `Fab files exported WITH force for ${r.pcb} (${fab}). The gate failed: this board is not ready to order.` : `Fab files exported for ${r.pcb} (${fab}).`;
+  const lines = [head, `Gate: ${formatFabGate(r.gate)}`, `Zip: ${r.zip}`];
+  const b = r.board;
+  if (b?.width_mm) lines.push(`Board: ${b.width_mm} \xD7 ${b.height_mm} mm, ${b.copper_layers} copper layer(s), ${b.thickness_mm} mm thick`);
+  lines.push(`Files in ${r.output_dir}:`);
+  for (const f of r.files ?? []) {
+    const what = f.layer ? f.layer : f.kind === "drill" ? `drill, ${f.holes} hole(s), ${f.tools} tool(s)` : f.kind;
+    lines.push(`- ${f.path} \u2014 ${what}`);
+  }
+  if (r.preview?.length) lines.push(`3D preview: ${r.preview.join(", ")}`);
+  if (r.warnings?.length) lines.push("Warnings:", ...r.warnings.map((w) => `- ${w}`));
+  if (r.notes?.length) lines.push(`Notes (${fab}):`, ...r.notes.map((n) => `- ${n}`));
+  return lines.join("\n");
+}
+function formatPreset(r) {
+  if (r.changes.length === 0) return `${r.project} already uses the ${r.label} rules; nothing changed.`;
+  const head = r.dry_run ? `Dry run: applying ${r.label} to ${r.project} would change:` : `Applied ${r.label} to ${r.project}:`;
+  return [head, ...r.changes.map((c) => `- ${c}`), ...r.written ? ["kicad_drc now checks the board against these rules."] : []].join("\n");
+}
 function formatJson(value) {
   return JSON.stringify(value, null, 1);
 }
@@ -144,12 +182,14 @@ var TOOL_ACCESS = {
   kicad_drc: "read",
   kicad_render: "read",
   kicad_export: "write",
+  kicad_export_fab: "write",
+  kicad_fab_preset: "write",
   kicad_create_schematic: "write",
   kicad_edit_schematic: "write",
   kicad_read_pcb: "read",
   kicad_edit_pcb: "write"
 };
-var DESIGN_WRITE_TOOLS = ["kicad_create_schematic", "kicad_edit_schematic", "kicad_edit_pcb"];
+var DESIGN_WRITE_TOOLS = ["kicad_create_schematic", "kicad_edit_schematic", "kicad_edit_pcb", "kicad_fab_preset"];
 var PATH_ARGUMENTS = {
   kicad_doctor: [],
   kicad_read_schematic: ["path"],
@@ -163,11 +203,15 @@ var PATH_ARGUMENTS = {
   kicad_drc: ["path"],
   kicad_render: ["path"],
   kicad_export: ["path", "output"],
+  kicad_export_fab: ["pcb", "output_dir"],
+  kicad_fab_preset: ["path"],
   kicad_create_schematic: ["path"],
   kicad_edit_schematic: ["path"],
   kicad_read_pcb: ["path"],
   kicad_edit_pcb: ["path"]
 };
+var FAB_PRESETS = ["jlcpcb", "pcbway"];
+var FAB_EXTRAS = ["ipc2581", "odb", "step"];
 var SCH = { type: "string", required: true, description: "Path to a .kicad_sch file (relative to the working directory or absolute)." };
 var PCB = { type: "string", required: true, description: "Path to a .kicad_pcb file (relative to the working directory or absolute)." };
 var JSON_OUT = { schema: { type: "json" }, render: (_args, value) => [{ type: "text", text: formatJson(value) }] };
@@ -374,6 +418,58 @@ function apply(ctx, config = {}) {
       }
     }),
     defineTool({
+      name: "kicad_export_fab",
+      description: [
+        "Produce the files to order a board: Gerbers (copper, mask, paste, silkscreen, Edge.Cuts), Excellon drill + map, position CSV and BOM, zipped,",
+        "plus front/back 3D previews; with preset jlcpcb also JLC BOM/CPL. Default output <project>/fab/<preset or kicad>/.",
+        "KiCad gates it first: the export is refused (nothing written) while DRC has errors, connections are unrouted, schematic parity disagrees,",
+        "or the board breaks the preset fab's limits. Fix what the gate lists and export again. Use force only when the user explicitly asks to export anyway;",
+        "the result then says the gate was overridden."
+      ].join(" "),
+      parameters: {
+        pcb: { type: "string", required: true, description: "Path to the .kicad_pcb." },
+        preset: { type: "string", enum: [...FAB_PRESETS], description: "Fab house: checks the board against its limits and uses its output options." },
+        output_dir: { type: "string", description: "Output directory (default <project>/fab/<preset or kicad>/)." },
+        force: { type: "boolean", description: "Export even though the gate fails (recorded in the result)." },
+        extras: { type: "array", items: { type: "string", enum: [...FAB_EXTRAS] }, description: "Additional formats for the zip." },
+        preview: { type: "boolean", description: "Render front and back 3D PNGs (default true)." }
+      },
+      output: {
+        schema: { type: "json" },
+        render: (_args, value) => fabContent(value),
+        presentationMeta: (_args, value) => fabMeta(value)
+      },
+      async execute(args, exec) {
+        const value = await ctx.kicad.run("export_fab", {
+          ...args,
+          pcb: at(exec, args.pcb),
+          ...args.output_dir ? { output_dir: at(exec, args.output_dir) } : {}
+        }, exec.signal);
+        const top = value.exported ? value.preview?.[0] : void 0;
+        if (top && attachRenders && attachments(ctx) !== void 0 && await imageCapable(ctx, exec)) {
+          const file = join(value.output_dir, top);
+          value.image = await attachments(ctx).saveImage({ data: new Uint8Array(await readFile(file)), mediaType: "image/png", name: basename(file) });
+        }
+        return value;
+      }
+    }),
+    defineTool({
+      name: "kicad_fab_preset",
+      description: "Adopt a fab house's limits (JLCPCB or PCBWay: minimum track, clearance, drill, annular ring, hole spacing, copper to edge) as the project's design rules, so kicad_drc checks what that fab can make: board setup minimums in the .kicad_pro, its custom rules in a managed block of the .kicad_dru (other rules are kept), netclass sizes raised to the minimums. dry_run lists the changes without writing.",
+      parameters: {
+        path: { type: "string", required: true, description: "The project's .kicad_pcb or .kicad_pro." },
+        preset: { type: "string", required: true, enum: [...FAB_PRESETS] },
+        dry_run: { type: "boolean", description: "List the changes without writing." }
+      },
+      output: {
+        schema: { type: "json" },
+        render: (_args, value) => [{ type: "text", text: formatPreset(value) }]
+      },
+      async execute(args, exec) {
+        return await ctx.kicad.run("fab_preset", { ...args, path: at(exec, args.path) }, exec.signal);
+      }
+    }),
+    defineTool({
       name: "kicad_create_schematic",
       description: "Create a blank KiCad 10 schematic (plus a minimal .kicad_pro when the directory has none).",
       parameters: { path: SCH, paper: { type: "string", description: "Paper size (default A4)." } },
@@ -474,6 +570,26 @@ function apply(ctx, config = {}) {
   ];
   for (const tool of tools) ctx.effect(() => ctx.tools.register(tool), `kicad tool ${tool.name}`);
 }
+function fabContent(value) {
+  const blocks = [{ type: "text", text: formatFab(value) }];
+  if (value.image) blocks.push(imageBlock(value.image));
+  return blocks;
+}
+function fabMeta(r) {
+  return {
+    kind: "fab",
+    exported: r.exported,
+    refused: r.refused,
+    forced: r.forced,
+    preset: r.preset,
+    output_dir: r.output_dir,
+    zip: r.zip ?? null,
+    gate: { passed: r.gate.passed, blocking: r.gate.blocking, drc: r.gate.drc, unrouted: r.gate.unrouted, parity: { checked: r.gate.parity.checked, issues: r.gate.parity.issues } },
+    layers: r.layers ?? [],
+    files: (r.files ?? []).length,
+    preview: r.preview ?? []
+  };
+}
 function renderContent(value) {
   const lines = [`Rendered ${value.path}`, ...value.svg.map((p) => `svg: ${p}`), ...(value.png ?? []).map((p) => `png: ${p}`)];
   if (value.note) lines.push(value.note);
@@ -519,15 +635,21 @@ function checkMeta(report) {
 }
 export {
   DESIGN_WRITE_TOOLS,
+  FAB_EXTRAS,
+  FAB_PRESETS,
   PATH_ARGUMENTS,
   TOOL_ACCESS,
   apply,
   checkMeta,
   doctorMeta,
+  fabMeta,
   formatBoard,
   formatCheck,
   formatEdit,
+  formatFab,
+  formatFabGate,
   formatJson,
+  formatPreset,
   inject,
   name
 };

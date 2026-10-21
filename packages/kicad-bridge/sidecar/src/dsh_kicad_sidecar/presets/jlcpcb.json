@@ -1,0 +1,26 @@
+{
+  "name": "jlcpcb",
+  "label": "JLCPCB standard 1-2 layer, 1 oz",
+  "source": "https://jlcpcb.com/capabilities/PCB-capabilities (read 2026-10-21)",
+  "notes": [
+    "Limits of JLCPCB's standard process; JLCPCB also runs its own DFM check on upload.",
+    "Holes from 0.15 mm are possible at extra cost; 0.3 mm is the minimum without it.",
+    "Copper to edge: JLCPCB lists 0.2 mm for routed edges; 0.3 mm leaves room for the +/-0.2 mm outline tolerance.",
+    "Assembly: upload assembly/*-bom-jlc.csv and *-cpl-jlc.csv in the SMT step and check part rotations in JLCPCB's preview."
+  ],
+  "rules": {
+    "min_clearance": 0.1,
+    "min_track_width": 0.1,
+    "min_through_hole_diameter": 0.3,
+    "min_via_diameter": 0.45,
+    "min_via_annular_width": 0.075,
+    "min_hole_to_hole": 0.25,
+    "min_copper_edge_clearance": 0.3,
+    "min_text_height": 1.0,
+    "min_text_thickness": 0.15
+  },
+  "outputs": {
+    "drill": { "separate_th": true, "map_format": "gerberx2" },
+    "assembly": "jlc"
+  }
+}
