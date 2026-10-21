@@ -289,7 +289,7 @@ class Toolbox:
 
                 for kind in ("DOCTYPE_SCHEMATIC", "DOCTYPE_PCB"):
                     for d in kicad.get_open_documents(getattr(DocumentType, kind)):
-                        docs.append({"type": kind, "path": getattr(d, "board_filename", "") or str(d)})
+                        docs.append({"type": kind, "project": d.project.path, "board": d.board_filename})
             except Exception as exc:  # pragma: no cover - depends on a live KiCad
                 docs.append({"error": str(exc)})
             return {"available": True, "kicad_version": version, "open_documents": docs}
