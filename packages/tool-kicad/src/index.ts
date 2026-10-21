@@ -24,6 +24,8 @@ export const TOOL_ACCESS = {
   kicad_get_symbol_pins: 'read',
   kicad_list_nets: 'read',
   kicad_search_symbols: 'read',
+  kicad_library_symbol: 'read',
+  kicad_search_footprints: 'read',
   kicad_erc: 'read',
   kicad_drc: 'read',
   kicad_render: 'read',
@@ -44,6 +46,8 @@ export const PATH_ARGUMENTS: Record<KiCadToolName, readonly string[]> = {
   kicad_get_symbol_pins: ['path'],
   kicad_list_nets: ['path'],
   kicad_search_symbols: [],
+  kicad_library_symbol: [],
+  kicad_search_footprints: [],
   kicad_erc: ['path'],
   kicad_drc: ['path'],
   kicad_render: ['path'],
@@ -122,6 +126,31 @@ export function apply(ctx: Context, config: Config = {}): void {
       isConcurrencySafe: () => true,
       async execute(args, exec) {
         return await ctx.kicad.run('search_symbols', { ...args, project_dir: sessionCwd(ctx, exec) }, exec.signal) as never
+      },
+    }),
+    defineTool({
+      name: 'kicad_library_symbol',
+      description: 'Inspect a library symbol before placing it: every pin (number, name, electrical type, unit), description, default footprint and footprint filters. Use this instead of reading .kicad_sym files.',
+      parameters: { lib_id: { type: 'string', required: true, description: 'e.g. MCU_Microchip_ATtiny:ATtiny85-20S' } },
+      output: JSON_OUT,
+      isConcurrencySafe: () => true,
+      async execute(args, exec) {
+        return await ctx.kicad.run('library_symbol', { ...args, project_dir: sessionCwd(ctx, exec) }, exec.signal) as never
+      },
+    }),
+    defineTool({
+      name: 'kicad_search_footprints',
+      description: 'Find footprints in the installed KiCad libraries by name terms ("R 0603", "SOT-223", "USB_C 6P", "PinHeader 2x03"), or confirm an exact Library:Name and list its pads. Use this instead of listing .pretty directories.',
+      parameters: {
+        query: { type: 'string', required: true, description: 'Name terms (all must match, * allowed) or an exact Library:Name.' },
+        library: { type: 'string', description: 'Restrict to one library, e.g. Resistor_SMD.' },
+        pads: { type: 'boolean', description: 'Include pad names in every result.' },
+        limit: { type: 'integer', description: 'Maximum results (default 20).' },
+      },
+      output: JSON_OUT,
+      isConcurrencySafe: () => true,
+      async execute(args, exec) {
+        return await ctx.kicad.run('search_footprints', { ...args, project_dir: sessionCwd(ctx, exec) }, exec.signal) as never
       },
     }),
     defineTool({
