@@ -111,6 +111,10 @@ To publish a new version: `pnpm run dist`, commit, then add a version to `market
 4. `/erc`, `/drc`, `/bom` work without the model.
 5. **Plugins → KiCad → KiCad bridge / KiCad policy** hold the settings.
 
+### Board placement
+
+After `kicad_update_pcb` creates a board, one `kicad_edit_pcb` operation, `auto_place`, lays it out from the schematic's functional blocks (the `add_block` frames; without them its sheets, else net connectivity): each block stays together, connectors sit on the board edge facing out (a footprint's "PCB Edge" mark lands on the edge), decoupling capacitors go next to their IC's power pins and crystals next to their IC, power parts get extra room, and the outline is sized to fit (a drawn outline is kept and filled instead). `place_block` lays out one block in a given spot or rectangle. `kicad_read_pcb` then reports courtyard overlaps, footprints outside the outline and the total ratsnest length, and `kicad_render` with `view: "3d"` shows the result. On the usb-attiny85 board it gives no courtyard overlap, everything inside the outline, the USB-C on the edge, and a ratsnest of 214 mm against 345 mm for random placement ([details](docs/pcb-architecture.md#placement-12)).
+
 ### Fab output
 
 `/kicad-fab [board.kicad_pcb] [--preset jlcpcb|pcbway] [--force] [--step] [--ipc2581] [--odb]` (the agent's `kicad_export_fab`) lets KiCad judge the board first. DRC errors, unrouted connections, schematic parity issues (when the schematic sits next to the board) and, with a preset, errors against that fab's limits refuse the export, and nothing is written. `--force` exports anyway; the result and `fab-manifest.json` say so.

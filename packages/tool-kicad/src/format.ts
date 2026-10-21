@@ -91,6 +91,8 @@ export interface BoardSummary {
     outline: Array<{ kind: string, uuid: string }>
   }
   drc?: { passed: boolean, kicad_version?: string, errors: number, warnings: number, unrouted: number, by_type: Record<string, number> } | { error: string }
+  /** What the placement checks find (KiCad's DRC does not report footprints outside the outline). */
+  placement?: { courtyard_overlaps: Array<[string, string]>, outside_outline: string[], overhang: Record<string, { side: string, mm: number }>, reference_over_pads: string[], ratsnest_mm: number }
 }
 
 const MAX_LISTED = 60
@@ -173,6 +175,16 @@ export function formatBoard(b: BoardSummary): string {
   } else if (b.drc) {
     const types = Object.entries(b.drc.by_type).filter(([t]) => t !== 'unconnected_items').map(([t, n]) => `${t}×${n}`)
     lines.push(`DRC by KiCad ${b.drc.kicad_version ?? ''}: ${b.drc.unrouted} unrouted connection(s), ${b.drc.errors - b.drc.unrouted} other error(s), ${b.drc.warnings} warning(s)${types.length ? ` (${types.join(', ')})` : ''}`)
+  }
+  if (b.placement) {
+    const p = b.placement
+    const issues = [
+      p.courtyard_overlaps.length ? `courtyards overlap: ${p.courtyard_overlaps.map(([a, c]) => `${a}/${c}`).join(', ')}` : '',
+      p.outside_outline.length ? `outside the outline: ${p.outside_outline.join(', ')}` : '',
+      p.reference_over_pads.length ? `reference over pads: ${p.reference_over_pads.join(', ')}` : '',
+    ].filter(Boolean)
+    const edge = Object.entries(p.overhang).map(([ref, o]) => `${ref} on the ${o.side} edge`)
+    lines.push(`Placement: ratsnest ${p.ratsnest_mm} mm; ${issues.length ? issues.join('; ') : 'no courtyard overlaps, every footprint inside the outline'}${edge.length ? `; ${edge.join(', ')}` : ''}`)
   }
   if (b.footprints) {
     lines.push(`Footprints (${b.footprints.length}): reference value footprint @ position rotation side`)

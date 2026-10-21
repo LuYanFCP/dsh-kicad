@@ -16,6 +16,7 @@ from .kicad_cli import KiCadCli, KiCadCliError, has_zones, parse_version, MIN_KI
 from .schematic import OPERATIONS, Schematic, SchematicError, new_schematic_text
 from .pcb import OPERATIONS as PCB_OPERATIONS, Board, PcbError
 from .pcb_sync import update_pcb
+from .placement import OPERATIONS as PLACE_OPERATIONS, apply as apply_placement, check_placement
 from .footprints import FootprintLibraries, default_footprint_dirs
 from . import geometry
 from .symbols import LibraryError, SymbolLibraries, default_symbol_dirs
@@ -86,9 +87,14 @@ PCB_OPERATION_SCHEMA: dict[str, Any] = {
         "add_keepout{outline,layers?,tracks?,vias?,pads?,copperpour?,footprints?}. "
         "Silkscreen: add_text{text,x,y,layer?=F.SilkS,size?,thickness?,rotation?} · "
         "set_reference_text{reference,x?,y?,size?,thickness?,rotation?,hide?}. "
-        "remove_item{uuid} (any footprint, track, via, zone, text or outline shape; uuids from read_pcb include_items)."
+        "remove_item{uuid} (any footprint, track, via, zone, text or outline shape; uuids from read_pcb include_items). "
+        "Placement: auto_place{groups?:[{title,references}],references?,outline?:fit|keep,gap?=1,group_gap?=2.5,margin?=1} "
+        "(lays out every unlocked footprint, or only references, from the schematic's functional blocks: connectors on the "
+        "edge facing out, decoupling capacitors at their IC's power pins, crystals at their IC; fit sizes the outline to the "
+        "parts, keep places inside the current one) · place_block{title | references, x, y, width?, height?, face?:"
+        "left|right|top|bottom} (one block laid out with its top-left corner at x,y, or inside that rectangle)."
     ),
-    "properties": {"op": {"type": "string", "enum": sorted(PCB_OPERATIONS)}},
+    "properties": {"op": {"type": "string", "enum": sorted({*PCB_OPERATIONS, *PLACE_OPERATIONS})}},
     "required": ["op"],
     "additionalProperties": True,
 }
@@ -127,8 +133,11 @@ TOOL_SPECS: list[ToolSpec] = [
                    "schematic_parity": {"type": "boolean", "default": False},
                    "refill_zones": {"type": "boolean", "description": "Refill zones first (in memory; the file is not changed). Default: when the board has zones."}},
                   ["path"])),
-    ToolSpec("render", "Render a schematic (every sheet) or board to SVG with kicad-cli, optionally rasterized to PNG.",
+    ToolSpec("render", "Render a schematic (every sheet) or board to SVG with kicad-cli, optionally rasterized to PNG; "
+             "view 3d renders a board's 3D view (kicad-cli pcb render) to PNG.",
              _obj({"path": PATH, "format": {"type": "string", "enum": ["svg", "png"], "default": "svg"},
+                   "view": {"type": "string", "enum": ["2d", "3d"], "default": "2d", "description": "Boards only: 3d is KiCad's 3D view as PNG."},
+                   "side": {"type": "string", "enum": ["top", "bottom"], "default": "top", "description": "Board side of the 3D view."},
                    "output_dir": {"type": "string", "description": "Defaults to <project>/.dsh-kicad/render/<name>/."},
                    "pages": {"type": "string", "description": "Comma-separated page numbers (schematic only)."},
                    "width": {"type": "integer", "default": 2000, "description": "PNG width in pixels."}}, ["path"]), writes=True),
@@ -147,6 +156,7 @@ TOOL_SPECS: list[ToolSpec] = [
                   ["path", "operations"]), writes=True),
     ToolSpec("read_pcb", "Summarize a board: outline size, copper layers, stackup, design rules and net classes (from the .kicad_pro), "
              "footprints (reference, value, footprint, position, rotation, side, locked, courtyard box, pad nets), zones, nets, "
+             "placement checks (courtyard overlaps, footprints outside the outline, reference text over pads, ratsnest length) "
              "and KiCad DRC's unrouted connection count.",
              _obj({"path": PCB, "include_footprints": {"type": "boolean", "default": True},
                    "include_pads": {"type": "boolean", "default": False, "description": "Also list every pad with its absolute position and layers."},
@@ -366,6 +376,7 @@ class Toolbox:
         b = self.board(args["path"])
         out = b.summary(include_footprints=args.get("include_footprints", True), include_pads=bool(args.get("include_pads")),
                         include_items=bool(args.get("include_items")))
+        out["placement"] = check_placement(b)
         if args.get("drc", True):
             try:
                 report = self.cli.drc(b.path, "all", refill_zones=has_zones(b.path))
@@ -388,7 +399,8 @@ class Toolbox:
                 if not isinstance(op, dict):
                     raise ToolError(f"operation {i} is not an object")
                 try:
-                    results.append({"op": op.get("op"), "result": b.apply(op)})
+                    placing = op.get("op") in PLACE_OPERATIONS  # these read the schematic's blocks next to the board
+                    results.append({"op": op.get("op"), "result": apply_placement(b, op) if placing else b.apply(op)})
                 except PcbError as exc:
                     raise ToolError(f"operation {i} ({op.get('op')}) failed, nothing was written: {exc}") from exc
             files = [] if args.get("dry_run") else b.save()
@@ -418,6 +430,17 @@ class Toolbox:
         out_dir = self.resolve(args["output_dir"], must_exist=False) if args.get("output_dir") else \
             os.path.join(os.path.dirname(path), ".dsh-kicad", "render", stem)
         os.makedirs(out_dir, exist_ok=True)
+        if args.get("view") == "3d":
+            if not path.endswith(".kicad_pcb"):
+                raise ToolError("view 3d needs a .kicad_pcb")
+            side = args.get("side", "top")
+            if side not in ("top", "bottom"):
+                raise ToolError("side must be top or bottom")
+            width = int(args.get("width", 2000))
+            png = os.path.join(out_dir, f"{stem}-3d-{side}.png")
+            self.cli.run("pcb", "render", "-o", png, "--side", side, "-w", str(width), "-h", str(max(1, width * 3 // 4)), path,
+                         cwd=os.path.dirname(path))
+            return {"path": path, "output_dir": out_dir, "svg": [], "png": [png], "view": "3d"}
         if path.endswith(".kicad_sch"):
             svgs = self.cli.export_sch_svg(path, out_dir, pages=args.get("pages"))
         else:
