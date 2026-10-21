@@ -102,6 +102,18 @@ importers:
         specifier: workspace:^
         version: link:../tool-kicad
 
+  packages/kicad-skills:
+    dependencies:
+      '@deepseek-ai/cordis':
+        specifier: ^4.0.5
+        version: 4.0.5
+      dsh-kicad-bridge:
+        specifier: workspace:^
+        version: link:../kicad-bridge
+      dsh-tool-kicad:
+        specifier: workspace:^
+        version: link:../tool-kicad
+
   packages/tool-kicad:
     dependencies:
       '@deepseek-ai/cordis':
