@@ -173,6 +173,24 @@ def test_flatpak_kicad(bare):
 
 
 @posix
+def test_new_flatpak_wins_over_an_old_kicad_on_path(bare):
+    script(bare / "kicad-cli", 'echo 7.0.11')
+    script(bare / "flatpak", 'case "$1" in info) exit 0;; run) echo 10.0.7;; esac')
+    argv, source, _ = locate_kicad_cli()
+    assert source == "flatpak" and argv[0] == str(bare / "flatpak")
+    # Without a newer one, the old kicad-cli is still used (and reported as outdated).
+    (bare / "flatpak").unlink()
+    assert locate_kicad_cli()[:2] == ([str(bare / "kicad-cli")], "path")
+
+
+@posix
+def test_outdated_setting_says_to_update_it(bare, tmp_path):
+    old = script(tmp_path / "kicad7", "echo 7.0.11")
+    report = run_doctor(KiCadCli(old), FEDORA, which_of())
+    assert report["status"] == "outdated" and "clear or update the kicadCli setting" in checks(report)["kicad_version"]["fix"]
+
+
+@posix
 def test_install_is_picked_up_without_restart(bare):
     cli = KiCadCli()
     assert run_doctor(cli, FEDORA, which_of())["status"] == "missing"
