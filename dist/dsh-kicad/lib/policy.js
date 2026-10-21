@@ -28,6 +28,7 @@ function round(n) {
 
 // packages/tool-kicad/lib/index.js
 var TOOL_ACCESS = {
+  kicad_doctor: "read",
   kicad_read_schematic: "read",
   kicad_list_components: "read",
   kicad_get_symbol_pins: "read",
@@ -44,6 +45,7 @@ var TOOL_ACCESS = {
 };
 var DESIGN_WRITE_TOOLS = ["kicad_create_schematic", "kicad_edit_schematic"];
 var PATH_ARGUMENTS = {
+  kicad_doctor: [],
   kicad_read_schematic: ["path"],
   kicad_list_components: ["path"],
   kicad_get_symbol_pins: ["path"],
@@ -187,7 +189,8 @@ var GUIDANCE = `# KiCad (EDA) work
 - Put related changes in one kicad_edit_schematic batch (atomic; at most ~20 operations). Prefer connect_pin_to_net (labels, power symbols) over long wires.
 - Fix mistakes with disconnect_pin / remove_item / move_symbol. Never rebuild or rewrite a schematic file to change its layout.
 - KiCad decides correctness: after edits read the ERC verdict appended to the result (or run kicad_erc / kicad_drc). Do not declare a design correct while KiCad reports errors.
-- Coordinates are millimetres, Y grows downward, on the 1.27 mm grid.`;
+- Coordinates are millimetres, Y grows downward, on the 1.27 mm grid.
+- If a kicad_* tool fails because KiCad or Python is missing or too old, run kicad_doctor and give the user its fix. Do not install software yourself; the user installs KiCad (the doctor panel's Install button or /kicad-install).`;
 var isKiCadTool = (name2) => Object.hasOwn(TOOL_ACCESS, name2);
 var GUARDED = new Set(
   Object.keys(TOOL_ACCESS).filter((n) => TOOL_ACCESS[n] === "write" || n === "kicad_render")

@@ -10,12 +10,12 @@ KiCad for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (d
 
 | Surface | What it does |
 |---|---|
-| **Tools** (`kicad_*`) | `read_schematic`, `list_components`, `get_symbol_pins`, `list_nets` (KiCad netlist), `search_symbols` (installed libraries), `erc`, `drc`, `render` (SVG, PNG attached as an image for image-capable models), `export` (netlist/BOM), `create_schematic`, and `edit_schematic` — an atomic batch of edits (add/move/remove symbols, set values/footprints/properties, wires, labels, power symbols, junctions, no-connects, pin-to-pin and pin-to-net connections). Untouched file text stays byte-identical. |
+| **Tools** (`kicad_*`) | `doctor` (is this machine ready: kicad-cli and KiCad 8+, libraries, Python, with fixes and install commands), `read_schematic`, `list_components`, `get_symbol_pins`, `list_nets` (KiCad netlist), `search_symbols` (installed libraries), `erc`, `drc`, `render` (SVG, PNG attached as an image for image-capable models), `export` (netlist/BOM), `create_schematic`, and `edit_schematic` — an atomic batch of edits (add/move/remove symbols, set values/footprints/properties, wires, labels, power symbols, junctions, no-connects, pin-to-pin and pin-to-net connections). Untouched file text stays byte-identical. |
 | **Policy** | Design edits go through dsh approval (`ask`); writes are confined to the session's working directory (a monotonic guard); after every successful edit KiCad ERC runs and its verdict is appended to the tool result; the system prompt gets stable KiCad working rules and a dynamic "KiCad project in this directory + last ERC" context. |
 | **Skills** | `kicad-agent-workflow`, `kicad-erc-triage`, `kicad-schematic-design`. |
-| **Commands** | `/erc`, `/drc`, `/bom` (model-free, run on the project's root design), `/kicad-render`. |
+| **Commands** | `/erc`, `/drc`, `/bom` (model-free, run on the project's root design), `/kicad-render`, `/kicad-doctor` (environment check), `/kicad-install` (install KiCad, see below). |
 | **Agent preset** | `eda` — a standard-like tool set with an electronics-design persona. The KiCad tools are global, so every preset can use them. |
-| **Web UI** | Right-sidebar viewer for `*.kicad_sch` / `*.kicad_pcb` with two modes: **Interactive** — the embedded [KiCanvas](https://github.com/theacodes/kicanvas) viewer (hierarchical sheets, symbol/footprint/net inspection, layer toggles, KiCad or Witch Hazel theme, reloads when the file changes) — and **SVG** (kicad-cli render, pan/zoom, multi-sheet, Render button; also the automatic fallback); conversation cards for ERC/DRC and schematic edits; settings pages for the sidecar (kicad-cli path, Python) and the policy (approval, auto-ERC, auto-render). |
+| **Web UI** | Right-sidebar viewer for `*.kicad_sch` / `*.kicad_pcb` with two modes: **Interactive** — the embedded [KiCanvas](https://github.com/theacodes/kicanvas) viewer (hierarchical sheets, symbol/footprint/net inspection, layer toggles, KiCad or Witch Hazel theme, reloads when the file changes) — and **SVG** (kicad-cli render, pan/zoom, multi-sheet, Render button; also the automatic fallback); conversation cards for ERC/DRC, schematic edits and the environment check; settings pages for the sidecar (kicad-cli path, Python, plus the KiCad environment check and **Install KiCad**) and the policy (approval, auto-ERC, auto-render). The viewer and failed tool cards show a notice with **Install KiCad** when KiCad is missing or too old. |
 | **Standalone MCP server** | The Python sidecar speaks MCP over stdio, so Claude Code or an RL environment can use the same tools without dsh. |
 | **KiCad side (optional)** | An IPC plugin with an "Open in DSH" toolbar action. |
 
@@ -47,6 +47,28 @@ Design decisions:
 - Python `>=3.10` on `PATH` (`python3`; `python` on Windows) — no Python packages needed for the core
 - KiCad 8+ with `kicad-cli` (tested with 10.0.7). Found via the setting, `$KICAD_CLI`, `PATH`, macOS/Windows install dirs, or Flatpak `org.kicad.KiCad`
 - Optional: `rsvg-convert`, ImageMagick or the `png` extra for PNG renders; the `ipc` extra for the IPC channel
+
+### Check your setup and install KiCad
+
+**Plugins → KiCad → KiCad bridge** shows the environment check: each item (kicad-cli, KiCad version ≥ 8, symbol and footprint libraries, Python ≥ 3.10, optional PNG rasterizer and kicad-python) with its status and how to fix it. `/kicad-doctor` prints the same in a conversation, and the model has `kicad_doctor`; a tool that fails because KiCad is missing names the install command.
+
+When KiCad is missing or too old, the page (and the viewer's notice) lists the ways to install it on this machine:
+
+| Platform | Option | Runs from dsh? |
+|---|---|---|
+| Fedora | `sudo dnf install -y kicad` | no: needs root, shown with **Copy command** |
+| Ubuntu and derivatives | KiCad PPA: `sudo add-apt-repository -y ppa:kicad/kicad-10.0-releases && sudo apt-get update && sudo apt-get install -y kicad` | no (root) |
+| Debian | `sudo apt-get install -y kicad` | no (root) |
+| Arch | `sudo pacman -S --needed kicad kicad-library` | no (root) |
+| openSUSE | `sudo zypper install kicad` | no (root) |
+| any Linux with flatpak | `flatpak remote-add --user … flathub` + `flatpak install --user flathub org.kicad.KiCad` | yes, per user, no root (about 1.5 GB) |
+| macOS | `brew install --cask kicad` | yes, if Homebrew is installed |
+| Windows | `winget install --id KiCad.KiCad -e` | yes, if winget is available (Windows may ask for permission) |
+| everywhere | installer from kicad.org | link |
+
+Nothing runs until you click **Install…** and confirm the exact command. dsh never runs `sudo`: root-only options are shown for you to run in a terminal, then **Check again**. A running install shows its log and can be stopped; when it finishes the bridge restarts its sidecar and checks again, so the new kicad-cli (including the Flatpak one, via `flatpak run --command=kicad-cli org.kicad.KiCad`) is used without restarting dsh. From a conversation: `/kicad-install` lists the options, `/kicad-install flatpak --yes` runs one, `/kicad-install status` follows it.
+
+The settings page has no session of its own: it runs these checks through your most recent session, so open or start one first.
 
 ## Install
 
@@ -138,6 +160,8 @@ The Client is compiled by [`scripts/build-client.mjs`](scripts/build-client.mjs)
 - Approval needs an interactive approval channel; headless runs without one deny design edits unless `approval: allow`.
 - The interactive viewer is KiCanvas, vendored at a pinned commit by `scripts/vendor-kicanvas.mjs` (see `packages/client-ui-kicad/vendor/kicanvas/README.md` for the offline/icon/theme patches). It parses KiCad 10 files but ignores tokens it does not know yet; the SVG mode is the kicad-cli ground truth. It needs WebGL2.
 - The IPC channel is a status probe plus the KiCad-side launcher; live editing through IPC is not implemented (KiCad's IPC API is PCB-centric).
+- The Flatpak path runs kicad-cli as `flatpak run --filesystem=host --filesystem=/tmp --command=kicad-cli org.kicad.KiCad`; this was tested with a stand-in `flatpak`, not a real Flatpak KiCad. The install commands for apt/pacman/zypper/brew/winget are documented but were only exercised on Fedora.
+- Checks started from the settings page append `/kicad-doctor` entries to the log of the session they borrow (dsh logs every command).
 
 ## License
 

@@ -1,6 +1,7 @@
 /** /erc, /drc, /bom and /kicad-render: direct UI commands that never involve the model. */
 import { readdirSync } from 'node:fs'
 import { isAbsolute, join, resolve } from 'node:path'
+import type { DoctorReport, InstallJob, InstallOption } from 'dsh-kicad-bridge'
 import { formatCheck, type CheckReport } from 'dsh-tool-kicad'
 import { agentCwd, followup, type CommandDefinition, type CommandInvocation, type CommandResult, type Context } from './dsh.ts'
 
@@ -33,6 +34,21 @@ export function createCommands(ctx: Context): CommandDefinition[] {
     return formatCheck(report)
   })
   return [
+    {
+      name: 'kicad-doctor',
+      description: 'Check whether KiCad (kicad-cli 8+), its libraries and Python are ready, and how to fix what is missing',
+      input: { hint: '[--json]' },
+      handler: wrap(async (inv) => {
+        const report = await ctx.kicad.doctor(inv.signal)
+        return flags(inv.rawInput).json ? JSON.stringify(report) : formatDoctor(report)
+      }),
+    },
+    {
+      name: 'kicad-install',
+      description: 'Install KiCad: list the ways for this machine, or run one you confirm (never with sudo)',
+      input: { hint: '[<method> --yes | status | cancel] [--json]' },
+      handler: wrap(async (inv) => installCommand(ctx, inv.rawInput, inv.signal)),
+    },
     {
       name: 'erc',
       description: 'Run KiCad ERC on the project schematic (or the given .kicad_sch)',
@@ -78,6 +94,72 @@ export function createCommands(ctx: Context): CommandDefinition[] {
       }),
     },
   ]
+}
+
+export function flags(raw: string): { json: boolean, yes: boolean, words: string[] } {
+  const words = raw.trim().split(/\s+/).filter(Boolean)
+  return { json: words.includes('--json'), yes: words.includes('--yes') || words.includes('-y'), words: words.filter(w => !w.startsWith('-')) }
+}
+
+/** `/kicad-install`: plan (default) · `<method> --yes` · `status` · `cancel`; `--json` for UIs. */
+export async function installCommand(ctx: Context, raw: string, signal?: AbortSignal): Promise<string> {
+  const { json, yes, words } = flags(raw)
+  const [verb = 'plan'] = words
+  if (verb === 'status') {
+    const job = ctx.kicad.installer.job
+    return json ? JSON.stringify({ job: job ?? null }) : job ? formatJob(job) : 'No KiCad installation has run since dsh started.'
+  }
+  if (verb === 'cancel') {
+    const cancelled = ctx.kicad.installer.cancel()
+    return json ? JSON.stringify({ cancelled, job: ctx.kicad.installer.job ?? null }) : cancelled ? 'Cancelling the KiCad installation…' : 'No KiCad installation is running.'
+  }
+  if (verb === 'plan') {
+    const report = await ctx.kicad.doctor(signal)
+    return json ? JSON.stringify({ report, job: ctx.kicad.installer.job ?? null }) : formatPlan(report)
+  }
+  const method = verb === 'start' ? words[1] ?? '' : verb
+  if (!yes) {
+    const report = await ctx.kicad.doctor(signal)
+    const option = report.install.find(o => o.id === method)
+    if (!option) return formatPlan(report)
+    return option.runnable
+      ? `This will run:\n\n    ${option.command}\n\nRun \`/kicad-install ${option.id} --yes\` to confirm.`
+      : formatOption(option)
+  }
+  const job = await ctx.kicad.install(method, signal)
+  return json ? JSON.stringify({ job }) : `Started: ${job.command}\nFollow it with /kicad-install status; KiCad is checked again when it finishes.`
+}
+
+const MARK = { ok: '✓', warn: '!', error: '✗' } as const
+
+export function formatDoctor(report: DoctorReport): string {
+  const lines = [`**${report.summary}**`, '']
+  for (const c of report.checks) {
+    lines.push(`- ${MARK[c.status]} **${c.label}**: ${c.summary}`)
+    if (c.fix) lines.push(`  - fix: ${c.fix}`)
+  }
+  if (report.install.length) lines.push('', 'Install KiCad: run `/kicad-install` to see the options for this machine.')
+  return lines.join('\n')
+}
+
+function formatOption(o: InstallOption): string {
+  const tags = [o.recommended && 'recommended', o.needs_root && 'needs administrator rights: run it yourself', !o.available && 'not available here'].filter(Boolean)
+  const how = o.command
+    ? (o.runnable ? `\`/kicad-install ${o.id} --yes\` runs:\n\n    ${o.command}` : `\n\n    ${o.command}`)
+    : o.url ?? ''
+  return `**${o.label}**${tags.length ? ` (${tags.join('; ')})` : ''}: ${how}${o.note ? `\n${o.note}` : ''}`
+}
+
+export function formatPlan(report: DoctorReport): string {
+  if (report.status === 'ok') return `${report.summary}\nNothing to install.`
+  if (!report.install.length) return formatDoctor(report)
+  return [`**${report.summary}**`, '', ...report.install.map(formatOption), '', 'After installing, run /kicad-doctor; dsh does not need a restart.'].join('\n\n')
+}
+
+export function formatJob(job: InstallJob): string {
+  const head = `${job.label}: ${job.state}${job.phase === 'checking' ? ' (checking KiCad again)' : ''} — step ${job.step}/${job.steps}`
+  const log = job.log.slice(-20).join('\n')
+  return `${head}\n\n\`\`\`\n${log}\n\`\`\`${job.doctor ? `\n\n${job.doctor.summary}` : ''}`
 }
 
 export function formatBom(columns: string[], rows: Array<Record<string, string>>): string {

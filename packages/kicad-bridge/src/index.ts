@@ -5,11 +5,12 @@
  */
 import { fileURLToPath } from 'node:url'
 import { Service, z, type Context, type SubprocessHandle, type SubprocessRuntime, type Volatile } from './dsh.ts'
+import { Installer, needsElevation, unavailableReport, type DoctorCheck, type DoctorReport, type InstallJob, type InstallOption } from './doctor.ts'
 import { launchSpec, defaultPython, type LauncherKind } from './launcher.ts'
 import { McpClient, RpcError, type ToolCallResult, type ToolInfo } from './rpc.ts'
 
-export { McpClient, RpcError, launchSpec, defaultPython }
-export type { ToolCallResult, ToolInfo, LauncherKind }
+export { Installer, McpClient, RpcError, launchSpec, defaultPython, needsElevation, unavailableReport }
+export type { DoctorCheck, DoctorReport, InstallJob, InstallOption, ToolCallResult, ToolInfo, LauncherKind }
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -64,11 +65,61 @@ export class KiCadBridge extends Service {
   private running: Promise<Running> | undefined
   private toolCache: ToolInfo[] | undefined
   readonly sidecarDir: string
+  /** Runs a KiCad install plan the user confirmed (see {@link install}). */
+  readonly installer: Installer
 
   constructor(ctx: Context, private readonly config: Config) {
     super(ctx, 'kicad')
     this.sidecarDir = config.sidecarDir ?? fileURLToPath(new URL('../sidecar/', import.meta.url))
-    ctx.effect(() => () => this.stop(), 'kicad sidecar')
+    this.installer = new Installer({
+      subprocess: () => this.ctx.subprocess,
+      // A fresh sidecar re-reads PATH and searches for kicad-cli again: no dsh restart needed.
+      recheck: async () => {
+        await this.stop()
+        return await this.doctor()
+      },
+      logger: message => this.ctx.logger('kicad').info(message),
+    })
+    ctx.effect(() => () => {
+      this.installer.cancel()
+      return this.stop()
+    }, 'kicad sidecar')
+  }
+
+  /**
+   * Check the local KiCad environment. Never throws: when the sidecar itself cannot
+   * start (no Python, Python < 3.10) the report says so and how to fix it.
+   */
+  async doctor(signal?: AbortSignal): Promise<DoctorReport> {
+    try {
+      const result = await this.call<DoctorReport>('doctor', {}, signal)
+      if (result.ok && result.value) return result.value
+      return unavailableReport(result.text, this.pythonCommand())
+    } catch (error) {
+      if (signal?.aborted) throw error
+      return unavailableReport((error as Error).message, this.pythonCommand())
+    }
+  }
+
+  /**
+   * Start installing KiCad with one of the plans the doctor offered. Callers must have
+   * shown the command to the user and received an explicit confirmation. Plans that need
+   * root are refused (the user runs those themselves); so is installing when KiCad is fine.
+   */
+  async install(optionId: string, signal?: AbortSignal): Promise<InstallJob> {
+    if (this.installer.job?.state === 'running') throw new Error(`an installation is already running (${this.installer.job.label})`)
+    const report = await this.doctor(signal)
+    if (report.status === 'ok') throw new Error(`KiCad ${report.kicad.version} is already installed and usable; nothing to install.`)
+    const option = report.install.find(o => o.id === optionId)
+    if (!option) {
+      const known = report.install.map(o => o.id).join(', ')
+      throw new Error(known ? `unknown install option "${optionId}"; choose one of: ${known}` : `no install options: ${report.summary}`)
+    }
+    return this.installer.start(option)
+  }
+
+  private pythonCommand(): string {
+    return this.config.launcher === 'uv' ? this.config.uv : (this.config.python.get() || defaultPython())
   }
 
   /** Call one sidecar tool (see the sidecar catalog for names and arguments). */
@@ -128,11 +179,12 @@ export class KiCadBridge extends Service {
   private async start(signal?: AbortSignal): Promise<Running> {
     const subprocess: SubprocessRuntime = this.ctx.subprocess
     const key = this.launchKey()
-    const executable = await subprocess.resolveExecutable(
-      this.config.launcher === 'uv' ? this.config.uv : (this.config.python.get() || defaultPython()),
-      undefined,
-      signal,
-    )
+    const command = this.pythonCommand()
+    const executable = await subprocess.resolveExecutable(command, undefined, signal).catch((error: unknown) => {
+      const what = this.config.launcher === 'uv' ? 'uv' : 'Python 3.10+'
+      throw new RpcError(`${what} executable "${command}" was not found (${(error as Error).message}). `
+        + `Install ${what} or set the KiCad bridge '${this.config.launcher === 'uv' ? 'uv' : 'python'}' setting; /kicad-doctor shows what else is missing.`)
+    })
     const spec = launchSpec({
       launcher: this.config.launcher,
       executable,

@@ -73,6 +73,21 @@ function createCommands(ctx) {
   });
   return [
     {
+      name: "kicad-doctor",
+      description: "Check whether KiCad (kicad-cli 8+), its libraries and Python are ready, and how to fix what is missing",
+      input: { hint: "[--json]" },
+      handler: wrap(async (inv) => {
+        const report = await ctx.kicad.doctor(inv.signal);
+        return flags(inv.rawInput).json ? JSON.stringify(report) : formatDoctor(report);
+      })
+    },
+    {
+      name: "kicad-install",
+      description: "Install KiCad: list the ways for this machine, or run one you confirm (never with sudo)",
+      input: { hint: "[<method> --yes | status | cancel] [--json]" },
+      handler: wrap(async (inv) => installCommand(ctx, inv.rawInput, inv.signal))
+    },
+    {
       name: "erc",
       description: "Run KiCad ERC on the project schematic (or the given .kicad_sch)",
       input: { hint: "[path/to/file.kicad_sch]" },
@@ -120,6 +135,77 @@ function createCommands(ctx) {
       })
     }
   ];
+}
+function flags(raw) {
+  const words = raw.trim().split(/\s+/).filter(Boolean);
+  return { json: words.includes("--json"), yes: words.includes("--yes") || words.includes("-y"), words: words.filter((w) => !w.startsWith("-")) };
+}
+async function installCommand(ctx, raw, signal) {
+  const { json, yes, words } = flags(raw);
+  const [verb = "plan"] = words;
+  if (verb === "status") {
+    const job2 = ctx.kicad.installer.job;
+    return json ? JSON.stringify({ job: job2 ?? null }) : job2 ? formatJob(job2) : "No KiCad installation has run since dsh started.";
+  }
+  if (verb === "cancel") {
+    const cancelled = ctx.kicad.installer.cancel();
+    return json ? JSON.stringify({ cancelled, job: ctx.kicad.installer.job ?? null }) : cancelled ? "Cancelling the KiCad installation\u2026" : "No KiCad installation is running.";
+  }
+  if (verb === "plan") {
+    const report = await ctx.kicad.doctor(signal);
+    return json ? JSON.stringify({ report, job: ctx.kicad.installer.job ?? null }) : formatPlan(report);
+  }
+  const method = verb === "start" ? words[1] ?? "" : verb;
+  if (!yes) {
+    const report = await ctx.kicad.doctor(signal);
+    const option = report.install.find((o) => o.id === method);
+    if (!option) return formatPlan(report);
+    return option.runnable ? `This will run:
+
+    ${option.command}
+
+Run \`/kicad-install ${option.id} --yes\` to confirm.` : formatOption(option);
+  }
+  const job = await ctx.kicad.install(method, signal);
+  return json ? JSON.stringify({ job }) : `Started: ${job.command}
+Follow it with /kicad-install status; KiCad is checked again when it finishes.`;
+}
+var MARK = { ok: "\u2713", warn: "!", error: "\u2717" };
+function formatDoctor(report) {
+  const lines = [`**${report.summary}**`, ""];
+  for (const c of report.checks) {
+    lines.push(`- ${MARK[c.status]} **${c.label}**: ${c.summary}`);
+    if (c.fix) lines.push(`  - fix: ${c.fix}`);
+  }
+  if (report.install.length) lines.push("", "Install KiCad: run `/kicad-install` to see the options for this machine.");
+  return lines.join("\n");
+}
+function formatOption(o) {
+  const tags = [o.recommended && "recommended", o.needs_root && "needs administrator rights: run it yourself", !o.available && "not available here"].filter(Boolean);
+  const how = o.command ? o.runnable ? `\`/kicad-install ${o.id} --yes\` runs:
+
+    ${o.command}` : `
+
+    ${o.command}` : o.url ?? "";
+  return `**${o.label}**${tags.length ? ` (${tags.join("; ")})` : ""}: ${how}${o.note ? `
+${o.note}` : ""}`;
+}
+function formatPlan(report) {
+  if (report.status === "ok") return `${report.summary}
+Nothing to install.`;
+  if (!report.install.length) return formatDoctor(report);
+  return [`**${report.summary}**`, "", ...report.install.map(formatOption), "", "After installing, run /kicad-doctor; dsh does not need a restart."].join("\n\n");
+}
+function formatJob(job) {
+  const head = `${job.label}: ${job.state}${job.phase === "checking" ? " (checking KiCad again)" : ""} \u2014 step ${job.step}/${job.steps}`;
+  const log = job.log.slice(-20).join("\n");
+  return `${head}
+
+\`\`\`
+${log}
+\`\`\`${job.doctor ? `
+
+${job.doctor.summary}` : ""}`;
 }
 function formatBom(columns, rows) {
   if (rows.length === 0) return "BOM is empty.";
@@ -207,8 +293,13 @@ export {
   createCommands,
   createSkillProvider,
   designRequest,
+  flags,
   formatBom,
+  formatDoctor,
+  formatJob,
+  formatPlan,
   inject,
+  installCommand,
   name,
   parseSkill,
   targetFile

@@ -16,7 +16,7 @@ describe('client artifact', () => {
     expect(loaded[0]!.id).toBe('dsh-client-ui-kicad')
     const exports = loaded[0]!.factory((id) => { requested.push(id); return nodeRequire(id) })
     expect(typeof exports.apply).toBe('function')
-    expect(exports.inject).toEqual(['slots', 'locale', 'sidebarRightTabs', 'remote', 'remote.workspaceFiles', 'remote.commands'])
+    expect(exports.inject).toEqual(['slots', 'locale', 'sidebarRightTabs', 'remote', 'remote.workspaceFiles', 'remote.commands', 'remote.session'])
     expect(new Set(requested)).toEqual(new Set(['react', 'react/jsx-runtime']))
   })
 })
