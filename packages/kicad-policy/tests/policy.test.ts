@@ -147,6 +147,19 @@ describe('dsh-kicad-policy', () => {
     const sync = policy.describeEdit('kicad_update_pcb', { schematic: '/p/a.kicad_sch', delete_removed: true })
     expect(sync.displayReason).toEqual({ en: 'Update board a.kicad_pcb from a.kicad_sch, deleting footprints whose symbol is gone', zh: '根据 a.kicad_sch 更新电路板 a.kicad_pcb，并删除原理图中已不存在的封装' })
     expect(sync.reason).toBe('update a.kicad_pcb from /p/a.kicad_sch (delete_removed)')
+    const route = policy.describeEdit('kicad_autoroute', { pcb: '/p/b.kicad_pcb', exclude_nets: ['GND'] })
+    expect(route).toEqual({ reason: 'autoroute /p/b.kicad_pcb exclude_nets=GND', displayReason: { en: 'Autoroute board b.kicad_pcb with Freerouting, except GND', zh: '用 Freerouting 自动布线 b.kicad_pcb，跳过 GND' } })
+    expect(policy.describeEdit('kicad_autoroute', { pcb: '/p/b.kicad_pcb', nets: ['/SCK', '/MOSI'] }).displayReason.en).toBe('Autoroute board b.kicad_pcb with Freerouting, only /SCK, /MOSI')
+  })
+
+  it('autorouting is a design write: asked for under approval: ask, and in the working rules', async () => {
+    const pcb = fixtureBoard('rc_board')
+    const before = readFileSync(pcb, 'utf8')
+    const asking = await bootKiCad([toolKiCad], [policy, config({ approval: 'ask', extraRoots: [dirname(pcb)] })])
+    const asked = await runTool(asking, 'kicad_autoroute', { pcb })
+    expect(asked.isError).toBe(true)
+    expect(readFileSync(pcb, 'utf8')).toBe(before)
+    expect(policy.GUIDANCE).toMatch(/kicad_autoroute routes the rest[\s\S]*\/kicad-install freerouting/)
   })
 
   it('project context lists KiCad files and the last ERC', () => {

@@ -48,7 +48,7 @@ Sync is `kicad_update_pcb` when this session has it; otherwise ask the user to r
 
 | type | Meaning | Fix |
 |---|---|---|
-| `unconnected_items` | A connection is not routed (both pads and the net are listed) | `add_track{points:["R1:2","U1:5"],net,layer}` (pad endpoints snap to the pad), `add_via{x,y,net}` to change layer; GND/power can be joined by `add_zone{net,layer}` (outline defaults to the board). Many long or crossing connections mean placement is wrong: move parts first |
+| `unconnected_items` | A connection is not routed (both pads and the net are listed) | `kicad_autoroute` (keeps existing tracks), or `add_track{points:["R1:2","U1:5"],net,layer}` (pad endpoints snap to the pad), `add_via{x,y,net}` to change layer; GND/power can be joined by `add_zone{net,layer}` (outline defaults to the board). Many long or crossing connections mean placement is wrong: move parts first |
 | `shorting_items` | Copper joins two nets | `remove_item{uuid}` the offending track or via and reroute; never rename nets to hide it |
 | `tracks_crossing` | Tracks of different nets cross on one layer | Remove one, reroute it on the other layer with vias |
 | `track_dangling` / `via_dangling` | A track end or via connects to nothing | `remove_item` the leftover |

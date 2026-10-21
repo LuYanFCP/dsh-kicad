@@ -10,10 +10,10 @@ import {
   type Block, type Context, type ImageRef, type ToolDefinition, type ToolExecution,
 } from './dsh.ts'
 import type { DoctorReport } from 'dsh-kicad-bridge'
-import { formatBoard, formatCheck, formatEdit, formatFab, formatFabGate, formatJson, formatPreset, formatSync, type BoardSummary, type CheckReport, type EditValue, type FabResult, type PresetResult, type SyncValue } from './format.ts'
+import { formatAutoroute, formatBoard, formatCheck, formatEdit, formatFab, formatFabGate, formatJson, formatPreset, formatSync, type AutorouteValue, type BoardSummary, type CheckReport, type EditValue, type FabResult, type PresetResult, type SyncValue } from './format.ts'
 
-export { formatBoard, formatCheck, formatEdit, formatFab, formatFabGate, formatJson, formatPreset, formatSync }
-export type { BoardSummary, CheckReport, EditValue, FabResult, PresetResult, SyncValue }
+export { formatAutoroute, formatBoard, formatCheck, formatEdit, formatFab, formatFabGate, formatJson, formatPreset, formatSync }
+export type { AutorouteValue, BoardSummary, CheckReport, EditValue, FabResult, PresetResult, SyncValue }
 
 export const name = 'dsh-tool-kicad'
 export const inject = ['tools', 'kicad']
@@ -39,12 +39,13 @@ export const TOOL_ACCESS = {
   kicad_read_pcb: 'read',
   kicad_edit_pcb: 'write',
   kicad_update_pcb: 'write',
+  kicad_autoroute: 'write',
 } as const
 
 export type KiCadToolName = keyof typeof TOOL_ACCESS
 
 /** Tools that change design files and therefore go through approval and ERC. */
-export const DESIGN_WRITE_TOOLS: readonly KiCadToolName[] = ['kicad_create_schematic', 'kicad_edit_schematic', 'kicad_edit_pcb', 'kicad_update_pcb', 'kicad_fab_preset']
+export const DESIGN_WRITE_TOOLS: readonly KiCadToolName[] = ['kicad_create_schematic', 'kicad_edit_schematic', 'kicad_edit_pcb', 'kicad_update_pcb', 'kicad_fab_preset', 'kicad_autoroute']
 
 /** Argument names holding file paths, per tool (for the policy's path guard). */
 export const PATH_ARGUMENTS: Record<KiCadToolName, readonly string[]> = {
@@ -67,6 +68,7 @@ export const PATH_ARGUMENTS: Record<KiCadToolName, readonly string[]> = {
   kicad_read_pcb: ['path'],
   kicad_edit_pcb: ['path'],
   kicad_update_pcb: ['schematic', 'pcb'],
+  kicad_autoroute: ['pcb'],
 }
 
 /** Fab house presets shipped with the sidecar (`presets/<name>.json` + `.kicad_dru`). */
@@ -77,6 +79,11 @@ export const FAB_EXTRAS = ['ipc2581', 'odb', 'step'] as const
 const SCH = { type: 'string', required: true, description: 'Path to a .kicad_sch file (relative to the working directory or absolute).' } as const
 const PCB = { type: 'string', required: true, description: 'Path to a .kicad_pcb file (relative to the working directory or absolute).' } as const
 const JSON_OUT = { schema: { type: 'json' }, render: (_args: unknown, value: unknown): Block[] => [{ type: 'text', text: formatJson(value) }] } as const
+
+/** kicad_autoroute's default time limit for Freerouting, in seconds (the sidecar's limit is 3600). */
+export const AUTOROUTE_TIMEOUT = 300
+/** Time the sidecar gets beyond the router's limit: writing the design, importing the routes, KiCad's DRC and zone fill. */
+const AUTOROUTE_OVERHEAD_MS = 180_000
 
 export interface Config {
   /** Attach PNG renders as images when the model accepts image input. */
@@ -410,7 +417,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         'Placement: move_footprint{reference,x?,y?,rotation?,side?:front|back} (flipping to the back mirrors the part as KiCad does); move_footprints{references,dx,dy}; lock_footprint{reference,locked?} (locked parts refuse to move).',
         'Automatic placement: auto_place{} lays out every unlocked footprint from the schematic\'s functional blocks (add_block frames; without them its sheets, else net connectivity): each block stays together, connectors sit on the board edge facing out, decoupling capacitors at their IC\'s power pins, crystals at their IC; the outline is sized to fit unless you drew one, which the parts must then fit (outline: "fit" | "keep" forces either); references:[...] places only those, e.g. parts kicad_update_pcb staged; groups:[{title,references}] overrides the blocks; gap?/group_gap?/margin? in mm. place_block{title | references, x, y, width?, height?, face?:left|right|top|bottom} lays out one block with its top-left corner at x,y or inside that rectangle. Both report the ratsnest length before/after and the placement checks; run them on a new board before routing, then check with kicad_render (view "3d").',
         'Rules: set_design_rules{min_clearance?,min_track_width?,min_via_diameter?,min_via_annular_width?,min_through_hole_diameter?,min_hole_to_hole?,min_hole_clearance?,min_copper_edge_clearance?,min_silk_clearance?,min_text_height?,...}; set_net_class{name,nets?,track_width?,clearance?,via_diameter?,via_drill?} (nets move to that class; tracks and vias on them default to its sizes).',
-        'Copper: add_track{points:[[x,y] | "REF:PAD",...],net?,layer?(F.Cu),width?} (pad endpoints snap to the pad centre; the pad must be on the track\'s net and layer); add_via{x,y,net,diameter?,drill?}; add_zone{net,layer | layers,outline?("board" | [[x,y],...]),priority?,clearance?,connect_pads?:thermal|solid|none}; add_keepout{outline,layers?,tracks?,vias?,pads?,copperpour?,footprints?} (true = not allowed).',
+        'Copper: add_track{points:[[x,y] | "REF:PAD",...],net?,layer?(F.Cu),width?,locked?} (pad endpoints snap to the pad centre; the pad must be on the track\'s net and layer; locked tracks stay as they are when kicad_autoroute runs); add_via{x,y,net,diameter?,drill?,locked?}; lock_tracks{nets? | uuids?,locked?}; remove_tracks{nets?,locked?} (unroute before placing again; locked tracks stay unless locked: true); add_zone{net,layer | layers,outline?("board" | [[x,y],...]),priority?,clearance?,connect_pads?:thermal|solid|none}; add_keepout{outline,layers?,tracks?,vias?,pads?,copperpour?,footprints?} (true = not allowed).',
         'Silkscreen: add_text{text,x,y,layer?(F.SilkS),size?,thickness?,rotation?}; set_reference_text{reference,x?,y?,size?,thickness?,rotation?,hide?} (x,y on the board).',
         'Undo: remove_item{uuid} removes a footprint, track, via, zone, text or outline shape (uuids from kicad_read_pcb include_items).',
         'Keep one call to at most ~30 operations. Never rewrite a .kicad_pcb by hand. DRC runs automatically afterwards when the KiCad policy is enabled.',
@@ -459,6 +466,38 @@ export function apply(ctx: Context, config: Config = {}): void {
         return await ctx.kicad.run('update_pcb', {
           ...args, schematic: at(exec, args.schematic), ...(args.pcb ? { pcb: at(exec, args.pcb) } : {}),
         }, exec.signal) as never
+      },
+    }),
+    defineTool({
+      name: 'kicad_autoroute',
+      description: [
+        'Route a board with the Freerouting autorouter, headless, then let KiCad judge it. Run it after placement (every part inside the outline, nothing overlapping).',
+        'Tracks and vias already on the board are kept exactly as they are and the router routes around and onto them: route critical nets by hand first (power, USB/differential pairs, crystals) with kicad_edit_pcb add_track/add_via locked: true, then autoroute the rest.',
+        'nets routes only those nets, exclude_nets leaves nets unrouted (names or glob patterns). Only new tracks and vias are added; footprints never move.',
+        'Copper zones are refilled and saved afterwards, so add a GND pour (add_zone on both copper layers; connect_pads: solid avoids starved thermal reliefs) before or after routing.',
+        'The result gives KiCad\'s unrouted count; the automatic DRC follows. If connections stay unrouted, route those by hand, or give the parts more room (after auto_place: remove_tracks, then auto_place with outline "fit" and a larger gap, e.g. 2 and group_gap 4) and run it again (existing tracks are kept).',
+        'Needs Java and Freerouting: when they are missing the error says how to install them; tell the user (/kicad-install freerouting), never install anything yourself.',
+        `Long-running: timeout (default ${AUTOROUTE_TIMEOUT} s) stops the router, keeping what it routed.`,
+      ].join(' '),
+      parameters: {
+        pcb: PCB,
+        nets: { type: 'array', items: { type: 'string' }, description: 'Route only these nets (names or glob patterns such as "/LED*").' },
+        exclude_nets: { type: 'array', items: { type: 'string' }, description: 'Leave these nets unrouted, e.g. nets you route by hand later.' },
+        passes: { type: 'integer', description: 'Maximum routing passes (default: Freerouting\'s own; it stops when it no longer improves).' },
+        timeout: { type: 'number', description: `Seconds before the router stops and keeps what it has (default ${AUTOROUTE_TIMEOUT}, at most 3600).` },
+        fill_zones: { type: 'boolean', description: 'Refill and save copper zones afterwards (default true).' },
+      },
+      output: {
+        schema: { type: 'json' },
+        render: (_args, value) => [{ type: 'text', text: formatAutoroute(value as unknown as AutorouteValue) }],
+      },
+      async execute(args, exec) {
+        const seconds = Math.min(Math.max(args.timeout ?? AUTOROUTE_TIMEOUT, 5), 3600)
+        const log = ctx.logger('kicad')
+        return await ctx.kicad.run('autoroute', { ...args, pcb: at(exec, args.pcb) }, exec.signal, {
+          timeoutMs: seconds * 1000 + AUTOROUTE_OVERHEAD_MS,
+          onProgress: p => log.debug('autoroute %s: %s', args.pcb, p.message ?? p.progress),
+        }) as never
       },
     }),
   ]

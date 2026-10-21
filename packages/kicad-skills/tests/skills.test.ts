@@ -207,6 +207,19 @@ describe('/kicad-doctor and /kicad-install', () => {
     expect(JSON.parse(await skills.installCommand(ctx, 'cancel --json')).cancelled).toBe(true)
   })
 
+  it('/kicad-install offers Freerouting (an optional component) next to KiCad, and runs it only with --yes', async () => {
+    const freerouting = option('freerouting', { label: 'Freerouting 2.5.0 (download the release jar, per user)', command: 'python3 -I freerouting.py download', note: 'Downloads 64.6 MB (GPL-3.0).' })
+    const ready = {
+      ...missing, ok: true, status: 'ok', summary: 'Ready: KiCad 10.0.7.', install: [],
+      checks: [{ id: 'freerouting', label: 'Freerouting (optional, autorouting)', status: 'warn', required: false, summary: 'Freerouting is not installed.', install: [freerouting] }],
+    }
+    const { ctx } = fakeCtx(ready)
+    const plan = await skills.installCommand(ctx, '')
+    expect(plan).toMatch(/^\*\*Ready: KiCad 10\.0\.7\.\*\*[\s\S]*Optional, for kicad_autoroute[\s\S]*`\/kicad-install freerouting --yes` runs:[\s\S]*python3 -I freerouting.py download/)
+    expect(await skills.installCommand(ctx, 'freerouting')).toMatch(/This will run:[\s\S]*python3 -I freerouting\.py download[\s\S]*\/kicad-install freerouting --yes/)
+    expect(skills.formatDoctor(ready as never)).toContain('Optional: `/kicad-install freerouting` (Freerouting 2.5.0 (download the release jar, per user)).')
+  })
+
   it('/kicad-install has nothing to do when KiCad is ready', async () => {
     const { ctx } = fakeCtx({ ...missing, ok: true, status: 'ok', summary: 'Ready: KiCad 10.0.7.', install: [] })
     expect(await skills.installCommand(ctx, '')).toBe('Ready: KiCad 10.0.7.\nNothing to install.')

@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import IO, Any
 
 from . import __version__
-from .tools import TOOL_SPECS, ToolError, Toolbox
+from .tools import TOOL_SPECS, CallContext, ToolError, Toolbox
 
 PROTOCOL_VERSION = "2025-06-18"
 SUPPORTED_PROTOCOLS = ("2024-11-05", "2025-03-26", "2025-06-18")
@@ -35,6 +35,7 @@ class Server:
         self.stdout = stdout or sys.stdout
         self.pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="kicad-tool")
         self.write_lock = threading.Lock()
+        self.calls: dict[Any, CallContext] = {}  # tools/call requests in flight, by request id
 
     def send(self, message: dict[str, Any]) -> None:
         line = json.dumps(message, ensure_ascii=False, separators=(",", ":"))
@@ -86,15 +87,36 @@ class Server:
                 for s in TOOL_SPECS
             ]})
         elif method == "tools/call":
-            self.pool.submit(self._call, msg_id, params.get("name"), params.get("arguments") or {})
+            context = CallContext(progress=self._progress_sender(params))
+            if msg_id is not None:
+                self.calls[msg_id] = context
+            self.pool.submit(self._call, msg_id, params.get("name"), params.get("arguments") or {}, context)
+        elif method == "notifications/cancelled":
+            # The client gave up on a request (dsh's tool signal aborted): tools that run long (autoroute) stop.
+            context = self.calls.get(params.get("requestId"))
+            if context is not None:
+                context.cancel.set()
         elif isinstance(method, str) and method.startswith("notifications/"):
-            return  # initialized / cancelled: nothing to do for a stateless server
+            return  # initialized and the like: nothing to do
         else:
             self.reply(msg_id, error={"code": -32601, "message": f"method not found: {method}"})
 
-    def _call(self, msg_id: Any, name: str, arguments: dict[str, Any]) -> None:
+    def _progress_sender(self, params: dict[str, Any]):
+        token = (params.get("_meta") or {}).get("progressToken")
+        if token is None:
+            return None
+
+        def send(progress: float, total: float | None, message: str) -> None:
+            body: dict[str, Any] = {"progressToken": token, "progress": progress, "message": message}
+            if total is not None:
+                body["total"] = total
+            self.send({"jsonrpc": "2.0", "method": "notifications/progress", "params": body})
+
+        return send
+
+    def _call(self, msg_id: Any, name: str, arguments: dict[str, Any], context: CallContext | None = None) -> None:
         try:
-            value = self.toolbox.call(name, arguments)
+            value = self.toolbox.call(name, arguments, context)
             self.reply(msg_id, {
                 "content": [{"type": "text", "text": json.dumps(value, ensure_ascii=False, indent=1)}],
                 "structuredContent": value,
@@ -105,3 +127,5 @@ class Server:
         except Exception as exc:  # pragma: no cover - defensive
             traceback.print_exc(file=sys.stderr)
             self.reply(msg_id, {"content": [{"type": "text", "text": f"internal error: {exc!r}"}], "isError": True})
+        finally:
+            self.calls.pop(msg_id, None)

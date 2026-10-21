@@ -9,6 +9,9 @@ export interface LaunchOptions {
   executable: string
   sidecarDir: string
   kicadCli?: string
+  /** Java and Freerouting for the autorouter (empty: the sidecar searches). */
+  java?: string
+  freerouting?: string
   /** Optional extras installed by uv (`png`, `ipc`). */
   extras?: readonly string[]
   platform?: NodeJS.Platform
@@ -24,7 +27,12 @@ export function defaultPython(platform: NodeJS.Platform = process.platform): str
 }
 
 export function launchSpec(options: LaunchOptions): LaunchSpec {
-  const tail = ['-m', 'dsh_kicad_sidecar', ...(options.kicadCli ? ['--kicad-cli', options.kicadCli] : [])]
+  const tail = [
+    '-m', 'dsh_kicad_sidecar',
+    ...(options.kicadCli ? ['--kicad-cli', options.kicadCli] : []),
+    ...(options.java ? ['--java', options.java] : []),
+    ...(options.freerouting ? ['--freerouting', options.freerouting] : []),
+  ]
   const env: Record<string, string> = { PYTHONUTF8: '1', PYTHONUNBUFFERED: '1', PYTHONDONTWRITEBYTECODE: '1' }
   if (options.launcher === 'uv') {
     const extras = (options.extras ?? []).flatMap(extra => ['--extra', extra])

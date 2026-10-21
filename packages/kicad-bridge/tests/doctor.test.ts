@@ -114,6 +114,35 @@ describe('Installer', () => {
   })
 })
 
+describe('optional components', () => {
+  it.runIf(posix)('installs what a check offers (Freerouting) although KiCad is ready, then has nothing left to do', async () => {
+    const ctx = await boot({ python })
+    const freerouting = option([['sh', '-c', 'echo downloaded freerouting']], { id: 'freerouting', label: 'Freerouting 2.5.0' })
+    let installed = false
+    ctx.kicad.doctor = async () => ({
+      ...okReport,
+      checks: [installed
+        ? { id: 'freerouting', label: 'Freerouting', status: 'ok', required: false, summary: 'Freerouting 2.5.0: /data/freerouting-2.5.0.jar.' }
+        : { id: 'freerouting', label: 'Freerouting', status: 'warn', required: false, summary: 'Freerouting is not installed.', install: [freerouting] }],
+    })
+    const job = await ctx.kicad.install('freerouting')
+    expect(job.command).toBe(freerouting.command)
+    const done = await ctx.kicad.installer.settled()
+    expect(done).toMatchObject({ state: 'succeeded', phase: 'done' })
+    expect(done!.log).toContain('downloaded freerouting')
+    installed = true
+    await expect(ctx.kicad.install('freerouting')).rejects.toThrow(/Freerouting 2\.5\.0: \/data\/freerouting-2\.5\.0\.jar\. Nothing to install/)
+    await expect(ctx.kicad.install('flatpak')).rejects.toThrow(/already installed and usable/)
+  })
+
+  it('refuses an optional plan that needs root', async () => {
+    const ctx = await boot({ python })
+    const java = option([['sudo', 'dnf', 'install', '-y', 'java-25-openjdk-headless']], { id: 'java', needs_root: true, runnable: false })
+    ctx.kicad.doctor = async () => ({ ...okReport, checks: [{ id: 'java', label: 'Java', status: 'warn', required: false, summary: 'Java was not found.', install: [java] }] })
+    await expect(ctx.kicad.install('java')).rejects.toThrow(/administrator rights[\s\S]*sudo dnf install -y java-25-openjdk-headless/)
+  })
+})
+
 describe.runIf(process.platform === 'linux')('install → re-check without restarting dsh', () => {
   it('installs through a (fake) Flatpak and then finds kicad-cli inside it', async () => {
     const bin = mkdtempSync(join(tmpdir(), 'dsh-kicad-flatpak-'))

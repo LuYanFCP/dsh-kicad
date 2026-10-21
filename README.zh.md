@@ -10,10 +10,10 @@
 
 | 能力 | 说明 |
 |---|---|
-| **工具**（`kicad_*`） | `doctor`（检查本机是否就绪：kicad-cli 与 KiCad 8+、库、Python，附修复方法和安装命令）、`read_schematic`、`list_components`、`get_symbol_pins`、`list_nets`（KiCad 网表）、`search_symbols`（已安装符号库）、`erc`、`drc`、`render`（SVG；模型支持图片时附带 PNG 图片）、`export`（网表/BOM）、`export_fab`（Gerber/钻孔/坐标/BOM 压缩包及 3D 预览，KiCad 判定电路板就绪前拒绝导出，见[制板输出](#制板输出)）、`fab_preset`（JLCPCB/PCBWay 设计规则）、`create_schematic`，以及原子批量编辑 `edit_schematic`（增删移动元件、设置值/封装/属性、导线、标签、电源符号、结点、不连接标记、绕开元件和其他网络自动布线的引脚到引脚导线、引脚到网络的连接，以及按功能分区布局：带标题的功能块框、连同导线一起移动元件或整个功能块、图纸尺寸与标题栏）；电路板有 `read_pcb`（外框、层、设计规则与网络类、带 courtyard 和焊盘网络的封装、覆铜区、DRC 给出的未布线数）和原子批量编辑 `edit_pcb`（板框与安装孔、移动/翻面/锁定封装、写入 `.kicad_pro` 的设计规则与网络类、以焊盘为端点的走线、过孔、覆铜区、禁布区、丝印文字与位号、按 uuid 删除）；以及 `update_pcb`——无界面地完成 KiCad 的“从原理图更新 PCB”：新板使用 KiCad 的空板、默认叠层和占位板框；已有电路板上已放置的封装保持原位，新封装放在板框旁等待布局，网络、值和字段随原理图更新；无法上板时拒绝执行并列出需修正的 `REF:PIN`，结果由 KiCad 的原理图一致性检查判定。未修改的文件文本逐字节保持不变。 |
+| **工具**（`kicad_*`） | `doctor`（检查本机是否就绪：kicad-cli 与 KiCad 8+、库、Python，附修复方法和安装命令）、`read_schematic`、`list_components`、`get_symbol_pins`、`list_nets`（KiCad 网表）、`search_symbols`（已安装符号库）、`erc`、`drc`、`render`（SVG；模型支持图片时附带 PNG 图片）、`export`（网表/BOM）、`export_fab`（Gerber/钻孔/坐标/BOM 压缩包及 3D 预览，KiCad 判定电路板就绪前拒绝导出，见[制板输出](#制板输出)）、`fab_preset`（JLCPCB/PCBWay 设计规则）、`create_schematic`，以及原子批量编辑 `edit_schematic`（增删移动元件、设置值/封装/属性、导线、标签、电源符号、结点、不连接标记、绕开元件和其他网络自动布线的引脚到引脚导线、引脚到网络的连接，以及按功能分区布局：带标题的功能块框、连同导线一起移动元件或整个功能块、图纸尺寸与标题栏）；电路板有 `read_pcb`（外框、层、设计规则与网络类、带 courtyard 和焊盘网络的封装、覆铜区、DRC 给出的未布线数）和原子批量编辑 `edit_pcb`（板框与安装孔、移动/翻面/锁定封装、写入 `.kicad_pro` 的设计规则与网络类、以焊盘为端点的走线、过孔、覆铜区、禁布区、丝印文字与位号、按 uuid 删除）；以及 `update_pcb`——无界面地完成 KiCad 的“从原理图更新 PCB”：新板使用 KiCad 的空板、默认叠层和占位板框；已有电路板上已放置的封装保持原位，新封装放在板框旁等待布局，网络、值和字段随原理图更新；无法上板时拒绝执行并列出需修正的 `REF:PIN`，结果由 KiCad 的原理图一致性检查判定；以及 `autoroute`——用 [Freerouting](https://github.com/freerouting/freerouting) 自动布线，保留手工布好（锁定）的和已有的走线，重新填充覆铜，以 KiCad 的 DRC 结论为准（见[布线](#布线)）。未修改的文件文本逐字节保持不变。 |
 | **策略** | 设计修改走 dsh 审批（`ask`）；写操作被单调 guard 限制在会话工作目录内；每次成功修改后自动运行 KiCad ERC（原理图）或 DRC（电路板修改或应用板厂预设后，先重新填充覆铜；`update_pcb` 之后另报原理图一致性问题数）并把结论附加到工具结果；系统提示中注入稳定的 KiCad 工作规范，以及动态的“当前目录中的 KiCad 工程 + 最近一次 ERC/DRC”上下文。 |
 | **技能** | `kicad-agent-workflow`、`kicad-erc-triage`、`kicad-drc-triage`、`kicad-schematic-design`。 |
-| **命令** | `/erc`、`/drc`、`/bom`（不经过模型，作用于工程根设计）、`/kicad-fab`（制板压缩包）、`/kicad-render`、`/kicad-doctor`（环境检查）、`/kicad-install`（安装 KiCad，见下文）。 |
+| **命令** | `/erc`、`/drc`、`/bom`（不经过模型，作用于工程根设计）、`/kicad-fab`（制板压缩包）、`/kicad-render`、`/kicad-doctor`（环境检查）、`/kicad-install`（安装 KiCad 或 Freerouting 自动布线器，见下文）。 |
 | **Agent 预设** | `eda`：与 standard 类似的工具集 + 电子设计人设。KiCad 工具为全局注册，任何预设都可使用。 |
 | **Web 界面** | 右侧边栏 `*.kicad_sch` / `*.kicad_pcb` 查看器，两种模式：**交互**——内嵌 [KiCanvas](https://github.com/theacodes/kicanvas)（层次图纸、查看元件/封装/网络、图层开关、KiCad 或 Witch Hazel 主题、文件变化时自动刷新）；**SVG**——kicad-cli 渲染（平移缩放、多图纸、渲染按钮，PCB 文件变化时自动重新渲染，也是交互模式失败时的自动回退）；ERC/DRC、原理图修改与环境检查的对话卡片；sidecar（kicad-cli 路径、Python，以及 KiCad 环境检查和 **安装 KiCad**）与策略（审批、自动 ERC、自动渲染）的设置页。KiCad 缺失或版本过低时，查看器和失败的工具卡片会显示带 **安装 KiCad** 按钮的提示。 |
 | **独立 MCP server** | Python sidecar 通过 stdio 说 MCP 协议，Claude Code 或 RL 环境可以不经 dsh 直接复用同一套工具。 |
@@ -115,6 +115,12 @@ dsh plugin --profile web add "git+https://github.com/LuYanFCP/dsh-kicad.git#<com
 
 `kicad_update_pcb` 生成电路板后，一个 `kicad_edit_pcb` 操作 `auto_place` 即可按原理图的功能块（`add_block` 画的框；没有功能块时按图纸页，再不然按网络连接）完成布局：同一功能块的元件放在一起，连接器放在板边并朝外（封装上的 "PCB Edge" 标记落在板边），去耦电容紧靠其 IC 的电源引脚，晶振紧靠其 IC，功率器件周围留出空间，板框按元件大小确定（已画好的板框则保留，元件放在其中）。`place_block` 把单个功能块放到指定位置或矩形内。之后 `kicad_read_pcb` 报告 courtyard 重叠、板框外的封装和飞线总长，`kicad_render` 加 `view: "3d"` 可查看效果。在 usb-attiny85 电路板上：无 courtyard 重叠，所有封装都在板框内，USB-C 位于板边，飞线总长 214 mm，随机摆放为 345 mm（[详情](docs/pcb-architecture.md#placement-12)）。
 
+### 布线
+
+`kicad_autoroute {pcb, nets?, exclude_nets?, passes?, timeout?}` 把电路板写成 Specctra 设计文件，无界面运行 Freerouting，只把新增的走线和过孔加回电路板，从不移动封装。板上已有的走线和过孔都作为固定布线保留，因此 agent 先手工布关键网络（电源、USB 或差分对、晶振：`kicad_edit_pcb` 的 `add_track` / `add_via`，加 `locked: true`），其余交给布线器完成。之后由 `kicad-cli pcb drc --refill-zones --save-board` 重新填充并保存覆铜（例如双面 GND 铺铜），其结论（未布通数、DRC 错误、原理图一致性）就是结果。可以在 dsh 中取消，到达 `timeout`（默认 300 秒）时停止并保留已布好的线；设计文件、会话文件和日志保存在 `<工程>/.dsh-kicad/autoroute/`。仍有未布通的连接时，结果会建议手工补线，或者对用 `auto_place` 布局的电路板先清除走线（`remove_tracks`）、再以更大间距（`gap: 2, group_gap: 4`）重新布局：usb-attiny85 示例这样即可全部布通。
+
+Freerouting（GPL-3.0）是独立的 Java 程序，不随插件分发。`/kicad-doctor` 检查 Java 与 Freerouting；`/kicad-install freerouting --yes` 把固定版本的发布 jar（2.5.0，约 65 MB，校验 SHA-256）下载到你的数据目录（Linux 上为 `~/.local/share/dsh-kicad/freerouting`），从不使用 `sudo`。Freerouting 2.5.0 需要 **Java 25+**：doctor 会列出包管理器命令或 [Temurin JRE](https://adoptium.net/temurin/releases/?package=jre)。bridge 的 `java` 与 `freerouting` 设置可以指向已有的 Java 或 jar。
+
 ### 制板输出
 
 `/kicad-fab [board.kicad_pcb] [--preset jlcpcb|pcbway] [--force] [--step] [--ipc2581] [--odb]`（agent 使用 `kicad_export_fab`）先由 KiCad 判定电路板：存在 DRC 错误、未布通的连接、原理图一致性（parity）问题（原理图与电路板在同一目录时检查），或在指定预设时违反该板厂的工艺限制，都会拒绝导出，且不写任何文件。`--force` 强制导出，结果和 `fab-manifest.json` 会注明这一点。
@@ -144,6 +150,8 @@ PYTHONPATH=packages/kicad-bridge/sidecar/src python3 -m dsh_kicad_sidecar --root
 | `kicad-bridge` | `launcher` | `python` | `python` 从源码运行 sidecar；`uv` 在 uv 虚拟环境中运行并安装 `uvExtras`（`png`、`ipc`） |
 | | `python` *（实时）* | `python3` | 解释器 |
 | | `kicadCli` *（实时）* | 自动 | kicad-cli 路径 |
+| | `java` *（实时）* | 自动 | Freerouting 使用的 Java 25+（依次查找 `$JAVA_HOME`、PATH） |
+| | `freerouting` *（实时）* | 自动 | `freerouting.jar`（依次查找 `$FREEROUTING_JAR`、`/kicad-install freerouting` 下载的 jar） |
 | | `requestTimeoutMs` | `300000` | |
 | `kicad-policy` | `approval` *（实时）* | `ask` | 设计修改 `ask` / `allow` |
 | | `autoErc` *（实时）* | `true` | 每次修改原理图后运行 ERC |
@@ -170,7 +178,7 @@ python packages/kicad-bridge/sidecar/tests/make_fixtures.py   # 用编辑器本�
 
 ## 已知限制
 
-- 以原理图为主。电路板支持读取、编辑、检查、渲染与制板输出（`kicad_read_pcb`、`kicad_edit_pcb`、`kicad_drc`、`kicad_render`、`kicad_export_fab`），尚不支持从原理图同步到电路板，也没有自动布线。
+- 电路板可以从原理图创建并保持同步（`kicad_update_pcb`），可以自动布局（`auto_place`）、编辑、自动布线（`kicad_autoroute`）、检查和制板输出（`kicad_export_fab`）。自动布线需要另行安装 Java 25+ 与 Freerouting（见[布线](#布线)）；高密度电路板可能留下少数未布通的连接，由 agent 手工补齐。
 - 板厂预设数值读取自 JLCPCB 与 PCBWay 的工艺能力页面（2026-10-21），之后可能变化。JLC 的 CPL 保留 KiCad 的旋转角度，JLCPCB 预览中可能需要逐个修正。
 - 编辑覆盖元件、属性、导线、标签、电源符号、结点与不连接标记；不支持创建层次图纸、总线与图形元素。
 - 新放置在子图纸中的元件只向上查找一层根图纸来确定 instance 路径；更深的层次可能需要 KiCad 重新标注。

@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-from dsh_kicad_sidecar import kicad_cli
+from dsh_kicad_sidecar import freerouting, kicad_cli
 from dsh_kicad_sidecar.doctor import format_report, install_hint, install_options, platform_info, run_doctor
 from dsh_kicad_sidecar.kicad_cli import KiCadCli, KiCadCliError, flatpak_argv, locate_kicad_cli, parse_version
 from dsh_kicad_sidecar.tools import ToolError, Toolbox
@@ -223,3 +223,58 @@ def test_doctor_tool_in_catalog():
     out = Toolbox().call("doctor", {})
     assert out["status"] in ("ok", "missing", "outdated", "error") and out["text"].startswith(out["summary"])
     assert {c["id"] for c in out["checks"]} >= {"kicad_cli", "kicad_version", "symbol_libraries", "footprint_libraries", "python", "png", "kipy"}
+
+
+# ---- autorouting (optional): Java and Freerouting ----------------------------------------
+
+UBUNTU = {"os": "linux", "distro": "ubuntu", "distro_like": ["debian"], "name": "Ubuntu 26.04", "version": "26.04"}
+
+
+def routing(report):
+    c = checks(report)
+    return c["java"], c["freerouting"]
+
+
+def test_freerouting_missing_offers_the_download(bare):
+    report = run_doctor(KiCadCli(), FEDORA, which_of(), router=freerouting.Router(java="/usr/bin/java", java_version=(25, 0, 4)))
+    java, fr = routing(report)
+    assert java["status"] == "ok" and java["summary"] == "Java 25.0.4 (/usr/bin/java)." and not java["required"]
+    assert fr["status"] == "warn" and not fr["required"] and "/kicad-install freerouting" in fr["fix"]
+    (option,) = fr["install"]
+    assert option["id"] == "freerouting" and option["runnable"] and not option["needs_root"]
+    assert option["steps"] == [freerouting.download_command()] and "sha" in option["note"].lower() and "GPL-3.0" in option["note"]
+    assert "install: /kicad-install freerouting" in format_report(report)
+    assert report["install"] == install_options(FEDORA, which_of()) or report["status"] == "missing"  # KiCad's list is separate
+
+
+def test_java_missing_or_old_lists_the_ways_to_install_it(bare):
+    report = run_doctor(KiCadCli(), UBUNTU, which_of("apt-get"), router=freerouting.Router())
+    java, _ = routing(report)
+    assert java["status"] == "warn" and "Java was not found" in java["summary"]
+    assert [o["id"] for o in java["install"]] == ["java", "java-download"]
+    assert java["install"][0]["command"] == "sudo apt-get install -y openjdk-25-jre-headless" and java["install"][0]["needs_root"]
+    assert "adoptium.net" in java["fix"] and "'java' setting" in java["fix"]
+    old = run_doctor(KiCadCli(), FEDORA, which_of("dnf"), router=freerouting.Router(java="/usr/bin/java", java_version=(21, 0, 2)))
+    java, _ = routing(old)
+    assert java["status"] == "warn" and "older than Java 25" in java["summary"] and "java-25-openjdk-headless" in java["fix"]
+
+
+def test_macos_java_can_be_installed_without_root(bare):
+    mac = {"os": "macos", "distro": None, "distro_like": [], "name": None, "version": None}
+    java, _ = routing(run_doctor(KiCadCli(), mac, which_of("brew"), router=freerouting.Router()))
+    assert java["install"][0]["command"] == "brew install --cask temurin" and java["install"][0]["runnable"]
+
+
+def test_working_freerouting(bare):
+    router = freerouting.Router(argv=["java", "-jar", "f.jar"], jar="/data/freerouting-2.5.0.jar", java="/usr/bin/java",
+                                java_version=(25,), java_required=25, version="2.5.0", source="downloaded")
+    java, fr = routing(run_doctor(KiCadCli(), FEDORA, which_of(), router=router))
+    assert java["status"] == fr["status"] == "ok" and fr["summary"].startswith("Freerouting 2.5.0: /data/freerouting-2.5.0.jar")
+    assert "install" not in fr
+
+
+def test_a_broken_java_setting_is_reported(bare):
+    router = freerouting.Router(java="/usr/bin/java", java_version=(25,),
+                                java_problems=["the KiCad bridge 'java' setting points to /opt/jdk/bin/java, which does not exist"])
+    java, _ = routing(run_doctor(KiCadCli(), FEDORA, which_of(), router=router))
+    assert java["status"] == "warn" and "/opt/jdk/bin/java" in java["summary"] and java["fix"] == "Fix or clear the KiCad bridge 'java' setting."

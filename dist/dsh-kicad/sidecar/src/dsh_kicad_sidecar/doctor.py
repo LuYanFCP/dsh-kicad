@@ -13,6 +13,7 @@ import sys
 from typing import Any, Callable
 
 from . import __version__
+from . import freerouting
 from .footprints import default_footprint_dirs
 from .kicad_cli import FLATPAK_APP, MIN_KICAD, KiCadCli, parse_version
 from .symbols import default_symbol_dirs
@@ -135,8 +136,96 @@ def _check(check_id: str, label: str, status: str, summary: str, *, required: bo
             **({"fix": fix} if fix else {}), **extra}
 
 
+JAVA_PACKAGES = {  # a headless JRE new enough for the Freerouting release the bridge downloads
+    "fedora": ["sudo", "dnf", "install", "-y", "java-25-openjdk-headless"],
+    "ubuntu": ["sudo", "apt-get", "install", "-y", "openjdk-25-jre-headless"],
+    "debian": ["sudo", "apt-get", "install", "-y", "openjdk-25-jre-headless"],
+    "arch": ["sudo", "pacman", "-S", "--needed", "--noconfirm", "jre-openjdk-headless"],
+    "suse": ["sudo", "zypper", "--non-interactive", "install", "java-25-openjdk-headless"],
+}
+
+
+def java_options(info: dict[str, Any], which: Which = shutil.which) -> list[dict[str, Any]]:
+    """Ways to install a Java runtime for Freerouting on this machine (the user runs those that need root)."""
+    options: list[dict[str, Any]] = []
+    family = _family(info)
+    if info["os"] == "linux" and family in JAVA_PACKAGES:
+        step = JAVA_PACKAGES[family]
+        options.append(_option("java", f"Java runtime ({step[1]})", [step], needs_root=True, available=which(step[1]) is not None,
+                               note="Older releases may not package Java 25 yet; then use the Temurin download."))
+    elif info["os"] == "macos":
+        brew = which("brew")
+        options.append(_option("java", "Java runtime (Homebrew)", [["brew", "install", "--cask", "temurin"]], needs_root=False,
+                               available=brew is not None, note="" if brew else "Homebrew is not installed (https://brew.sh)."))
+    elif info["os"] == "windows":
+        winget = which("winget")
+        options.append(_option("java", "Java runtime (winget)", [["winget", "install", "--id", "EclipseAdoptium.Temurin.25.JRE", "-e",
+                                                                  "--accept-package-agreements", "--accept-source-agreements"]],
+                               needs_root=False, available=winget is not None, note="Windows may ask for permission (UAC)."))
+    options.append(_option("java-download", "Temurin JRE from adoptium.net", [], needs_root=False, available=True,
+                           note=f"Install Java {freerouting.RELEASE['java']}+, then set the KiCad bridge 'java' setting if it is not on PATH.",
+                           url=freerouting.JAVA_URL))
+    return options
+
+
+def freerouting_option() -> dict[str, Any]:
+    release = freerouting.RELEASE
+    return _option("freerouting", f"Freerouting {release['version']} (download the release jar, per user)",
+                   [freerouting.download_command()], needs_root=False, available=True,
+                   note=(f"Downloads {release['size'] / 1e6:.1f} MB from {freerouting.HOMEPAGE} (GPL-3.0) into "
+                         f"{freerouting.data_dir()} and checks its SHA-256; it runs on Java {release['java']}+."),
+                   url=freerouting.HOMEPAGE)
+
+
+def _routing_checks(router: freerouting.Router, info: dict[str, Any], which: Which) -> list[dict[str, Any]]:
+    """Optional: Java and Freerouting, which kicad_autoroute needs."""
+    release = freerouting.RELEASE
+    needed = router.java_required or release["java"]
+    checks = []
+    if router.executable:
+        checks.append(_check("java", "Java (optional, autorouting)", "ok", "Not needed: Freerouting runs as a native executable.",
+                             required=False))
+    else:
+        java, version, problems = router.java, router.java_version, router.java_problems
+        text = ".".join(map(str, version)) if version else None
+        if java and version and version[0] >= needed and problems:
+            status, summary = "warn", f"Java {text} ({java}); but {'; '.join(problems)}."
+        elif java and version and version[0] >= needed:
+            status, summary = "ok", f"Java {text} ({java})."
+        elif java and version:
+            status, summary = "warn", f"Java {text} ({java}) is older than Java {needed}, which Freerouting {router.version or release['version']} needs."
+        elif java:
+            status, summary = "warn", f"{java} does not run (`java -version` failed)."
+        else:
+            status, summary = "warn", "Java was not found; kicad_autoroute runs Freerouting, a Java program."
+        options = [] if status == "ok" or (version and version[0] >= needed) else java_options(info, which)
+        best = next((o for o in options if o["command"]), None)
+        fix = None if status == "ok" else "Fix or clear the KiCad bridge 'java' setting." if not options else (
+            f"Install Java {needed}+" + (f" (`{best['command']}`)" if best else "") +
+            f", or a Temurin JRE from {freerouting.JAVA_URL}; if it is not on PATH, set the KiCad bridge 'java' setting.")
+        checks.append(_check("java", "Java (optional, autorouting)", status, summary, required=False, fix=fix, path=java,
+                             version=text, minimum=str(needed), problems=problems, install=options))
+    if router.ok:
+        checks.append(_check("freerouting", "Freerouting (optional, autorouting)", "ok", router.describe() + ".", required=False,
+                             path=router.jar or router.executable, version=router.version, source=router.source))
+    elif router.jar is None and router.executable is None:
+        checks.append(_check("freerouting", "Freerouting (optional, autorouting)", "warn",
+                             "Freerouting is not installed; kicad_autoroute needs it." + (
+                                 " " + "; ".join(router.problems).capitalize() + "." if router.problems else ""),
+                             required=False, install=[freerouting_option()],
+                             fix=(f"Run /kicad-install freerouting to download Freerouting {release['version']} into "
+                                  f"{freerouting.data_dir()} (after you confirm; no root), or set the KiCad bridge "
+                                  "'freerouting' setting to an existing freerouting.jar.")))
+    else:
+        checks.append(_check("freerouting", "Freerouting (optional, autorouting)", "warn",
+                             f"{router.jar or router.executable} cannot run: {'; '.join(router.problems)}.", required=False,
+                             path=router.jar or router.executable, version=router.version,
+                             fix=f"Install Java {needed}+ (see the Java check) or point the 'java' setting at one."))
+    return checks
+
+
 def run_doctor(cli: KiCadCli, info: dict[str, Any] | None = None, which: Which = shutil.which,
-               python_version: tuple[int, ...] | None = None) -> dict[str, Any]:
+               python_version: tuple[int, ...] | None = None, router: freerouting.Router | None = None) -> dict[str, Any]:
     """Check everything the KiCad tools need and say how to fix what is missing."""
     info = info or platform_info()
     cli.locate()  # pick up an installation that appeared since the last call
@@ -215,6 +304,8 @@ def run_doctor(cli: KiCadCli, info: dict[str, Any] | None = None, which: Which =
                          "kicad-python (kipy) is installed." if kipy_ok else "kicad-python (kipy) is not installed; only the live IPC status probe needs it.",
                          required=False, fix=None if kipy_ok else "Use the bridge's uv launcher with the 'ipc' extra, or `pip install kicad-python`."))
 
+    checks += _routing_checks(router if router is not None else freerouting.locate(), info, which)
+
     errors = [c for c in checks if c["status"] == "error" and c["required"]]
     kicad_missing = cli.argv is None or version is None
     kicad_outdated = version is not None and version < MIN_KICAD
@@ -250,6 +341,9 @@ def format_report(report: dict[str, Any]) -> str:
         lines.append(f"{marks[c['status']]} {c['label']}: {c['summary']}")
         if c.get("fix"):
             lines.append(f"    fix: {c['fix']}")
+        for o in c.get("install") or []:
+            if o["runnable"]:
+                lines.append(f"    install: /kicad-install {o['id']} ({o['command']})")
     if report["install"]:
         lines += ["", "Install options:"]
         for o in report["install"]:

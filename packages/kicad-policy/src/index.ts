@@ -68,6 +68,7 @@ export const GUIDANCE = `# KiCad (EDA) work
 - Organise a schematic by function: one titled frame per block (add_block / move_block), parts inside a block wired together, blocks connected only through net labels and power symbols, never through wires that cross a frame.
 - Boards: create or refresh the board from the schematic with kicad_update_pcb (after ERC passes, and after every schematic change; it lists the REF:PINs to fix when it refuses), read with kicad_read_pcb (outline, footprints with courtyards and pad nets, rules, unrouted count), then change them with one kicad_edit_pcb batch: outline and mounting holes, placement, rules and net classes, tracks (route pad to pad with "REF:PAD" endpoints), vias, zones, keepouts, silkscreen.
 - Place a new board with one kicad_edit_pcb auto_place (it follows the schematic's functional blocks: draw them with add_block first), look at it with kicad_render (view "3d"), then fine-tune with move_footprint / place_block; kicad_read_pcb's placement line must show no overlaps and nothing outside the outline.
+- Routing: after placement, route critical nets by hand (power, USB/differential pairs, crystal) with add_track / add_via locked: true, then kicad_autoroute routes the rest without touching them; add a GND pour (add_zone on both copper layers), which kicad_autoroute refills. If it reports Freerouting or Java missing, give the user its install guidance (/kicad-install freerouting); do not install anything yourself.
 - To order a board: kicad_export_fab writes Gerber, drill, position and BOM files in one zip, and refuses while KiCad reports DRC errors, unrouted connections or schematic parity issues; pass force only when the user explicitly asks. kicad_fab_preset makes a fab house's limits (JLCPCB, PCBWay) the project's design rules.
 - KiCad decides correctness: after edits read the ERC/DRC verdict appended to the result (or run kicad_erc / kicad_drc). Do not declare a design correct while KiCad reports errors or unrouted connections.
 - Coordinates are millimetres, Y grows downward, on the 1.27 mm grid.
@@ -76,7 +77,9 @@ export const GUIDANCE = `# KiCad (EDA) work
 const isKiCadTool = (name: string): name is KiCadToolName => Object.hasOwn(TOOL_ACCESS, name)
 
 /** The KiCad check that follows a successful edit of each kind of design file (new fab rules change what DRC reports). */
-const AUTO_CHECK: Readonly<Record<string, 'erc' | 'drc'>> = { kicad_edit_schematic: 'erc', kicad_edit_pcb: 'drc', kicad_update_pcb: 'drc', kicad_fab_preset: 'drc' }
+const AUTO_CHECK: Readonly<Record<string, 'erc' | 'drc'>> = { kicad_edit_schematic: 'erc', kicad_edit_pcb: 'drc', kicad_update_pcb: 'drc', kicad_fab_preset: 'drc', kicad_autoroute: 'drc' }
+/** Tools whose result names the board and carries KiCad's DRC already: that verdict is appended instead of a second run. */
+const CHECKED: ReadonlySet<string> = new Set(['kicad_update_pcb', 'kicad_autoroute'])
 
 /** Tools whose path arguments must stay inside the workspace. */
 const GUARDED: ReadonlySet<string> = new Set(
@@ -134,9 +137,9 @@ export function apply(ctx: Context, config: Config): void {
       if (!check || result.isError || decision.kind !== 'accept') return decision
       const args = exec.arguments as { path?: string, dry_run?: boolean }
       if (args.dry_run) return decision
-      // kicad_update_pcb names its board in the result (by default the schematic's name) and has already run
-      // KiCad's DRC with schematic parity: that verdict is appended instead of a second run.
-      const synced = exec.name === 'kicad_update_pcb' ? (result as { value?: { pcb?: string, drc?: CheckReport } }).value : undefined
+      // kicad_update_pcb and kicad_autoroute name their board in the result (update_pcb's default is the schematic's
+      // name) and have already run KiCad's DRC (with schematic parity): that verdict is appended instead of a second run.
+      const synced = CHECKED.has(exec.name) ? (result as { value?: { pcb?: string, drc?: CheckReport } }).value : undefined
       let path = synced ? synced.pcb : typeof args.path === 'string' ? resolveArg(cwdOf(exec), args.path) : undefined
       if (!path) return decision
       if (exec.name === 'kicad_fab_preset') {
@@ -195,7 +198,7 @@ export function apply(ctx: Context, config: Config): void {
 }
 
 /** The audited approval reason plus localized prompt text for one design write. */
-export function describeEdit(tool: string, args: { path?: string, operations?: Array<{ op?: string }>, preset?: string, schematic?: string, pcb?: string, delete_removed?: boolean }): Pick<Extract<PreToolDecision, { kind: 'ask' }>, 'reason' | 'displayReason'> {
+export function describeEdit(tool: string, args: { path?: string, operations?: Array<{ op?: string }>, preset?: string, schematic?: string, pcb?: string, delete_removed?: boolean, nets?: string[], exclude_nets?: string[] }): Pick<Extract<PreToolDecision, { kind: 'ask' }>, 'reason' | 'displayReason'> {
   const file = args.path ? basename(args.path) : 'a design file'
   if (tool === 'kicad_create_schematic') {
     return { reason: `create ${args.path}`, displayReason: { en: `Create KiCad schematic ${file}`, zh: `创建 KiCad 原理图 ${file}` } }
@@ -210,6 +213,18 @@ export function describeEdit(tool: string, args: { path?: string, operations?: A
     return {
       reason: `update ${args.pcb ?? board} from ${args.schematic}${args.delete_removed ? ' (delete_removed)' : ''}`,
       displayReason: { en: `Update board ${board} from ${sch}${removed.en}`, zh: `根据 ${sch} 更新电路板 ${board}${removed.zh}` },
+    }
+  }
+  if (tool === 'kicad_autoroute') {
+    const board = args.pcb ? basename(args.pcb) : 'the board'
+    const scope = args.nets?.length
+      ? { en: `, only ${args.nets.join(', ')}`, zh: `，仅 ${args.nets.join('、')}`, reason: ` nets=${args.nets.join(',')}` }
+      : args.exclude_nets?.length
+        ? { en: `, except ${args.exclude_nets.join(', ')}`, zh: `，跳过 ${args.exclude_nets.join('、')}`, reason: ` exclude_nets=${args.exclude_nets.join(',')}` }
+        : { en: '', zh: '', reason: '' }
+    return {
+      reason: `autoroute ${args.pcb}${scope.reason}`,
+      displayReason: { en: `Autoroute board ${board} with Freerouting${scope.en}`, zh: `用 Freerouting 自动布线 ${board}${scope.zh}` },
     }
   }
   const ops = args.operations ?? []

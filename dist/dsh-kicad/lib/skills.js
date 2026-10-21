@@ -124,7 +124,7 @@ function createCommands(ctx) {
     },
     {
       name: "kicad-install",
-      description: "Install KiCad: list the ways for this machine, or run one you confirm (never with sudo)",
+      description: "Install KiCad, or the Freerouting autorouter: list the ways for this machine, or run one you confirm (never with sudo)",
       input: { hint: "[<method> --yes | status | cancel] [--json]" },
       handler: wrap(async (inv) => installCommand(ctx, inv.rawInput, inv.signal))
     },
@@ -252,7 +252,7 @@ async function installCommand(ctx, raw, signal) {
   const method = verb === "start" ? words[1] ?? "" : verb;
   if (!yes) {
     const report = await ctx.kicad.doctor(signal);
-    const option = report.install.find((o) => o.id === method);
+    const option = [...optionalInstalls(report), ...report.install].find((o) => o.id === method);
     if (!option) return formatPlan(report);
     return option.runnable ? `This will run:
 
@@ -265,6 +265,9 @@ Run \`/kicad-install ${option.id} --yes\` to confirm.` : formatOption(option);
 Follow it with /kicad-install status; KiCad is checked again when it finishes.`;
 }
 var MARK = { ok: "\u2713", warn: "!", error: "\u2717" };
+function optionalInstalls(report) {
+  return report.checks.flatMap((c) => c.install ?? []);
+}
 function formatDoctor(report) {
   const lines = [`**${report.summary}**`, ""];
   for (const c of report.checks) {
@@ -272,6 +275,8 @@ function formatDoctor(report) {
     if (c.fix) lines.push(`  - fix: ${c.fix}`);
   }
   if (report.install.length) lines.push("", "Install KiCad: run `/kicad-install` to see the options for this machine.");
+  const optional = optionalInstalls(report).filter((o) => o.runnable);
+  if (optional.length) lines.push("", `Optional: ${optional.map((o) => `\`/kicad-install ${o.id}\` (${o.label})`).join(", ")}.`);
   return lines.join("\n");
 }
 function formatOption(o) {
@@ -285,10 +290,14 @@ function formatOption(o) {
 ${o.note}` : ""}`;
 }
 function formatPlan(report) {
-  if (report.status === "ok") return `${report.summary}
+  const optional = optionalInstalls(report);
+  const extras = optional.length ? ["**Optional, for kicad_autoroute:**", ...optional.map(formatOption)] : [];
+  if (report.status === "ok") {
+    return optional.length ? [`**${report.summary}**`, ...extras].join("\n\n") : `${report.summary}
 Nothing to install.`;
-  if (!report.install.length) return formatDoctor(report);
-  return [`**${report.summary}**`, "", ...report.install.map(formatOption), "", "After installing, run /kicad-doctor; dsh does not need a restart."].join("\n\n");
+  }
+  if (!report.install.length) return [formatDoctor(report), ...extras].join("\n\n");
+  return [`**${report.summary}**`, "", ...report.install.map(formatOption), ...extras, "", "After installing, run /kicad-doctor; dsh does not need a restart."].join("\n\n");
 }
 function formatJob(job) {
   const head = `${job.label}: ${job.state}${job.phase === "checking" ? " (checking KiCad again)" : ""} \u2014 step ${job.step}/${job.steps}`;

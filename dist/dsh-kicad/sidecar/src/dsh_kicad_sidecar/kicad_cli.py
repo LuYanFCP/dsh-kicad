@@ -191,7 +191,8 @@ class KiCadCli:
                 report = json.load(fh)
         return normalize_report(report, "erc")
 
-    def drc(self, board: str, severity: str = "all", schematic_parity: bool = False, refill_zones: bool = False) -> dict[str, Any]:
+    def drc(self, board: str, severity: str = "all", schematic_parity: bool = False, refill_zones: bool = False,
+            save_board: bool = False) -> dict[str, Any]:
         with tempfile.TemporaryDirectory(prefix="dsh-kicad-drc-") as tmp:
             out = os.path.join(tmp, "drc.json")
             sev = {"all": "--severity-all", "error": "--severity-error", "warning": "--severity-warning"}[severity]
@@ -200,6 +201,8 @@ class KiCadCli:
                 args.append("--schematic-parity")
             if refill_zones:  # fills in memory only; the board file is not saved
                 args.append("--refill-zones")
+            if save_board:  # ...unless asked: then the filled zones are written back (KiCad's writer)
+                args.append("--save-board")
             proc = self.run(*args, board, cwd=os.path.dirname(board))
             with open(out, encoding="utf-8") as fh:
                 report = json.load(fh)
