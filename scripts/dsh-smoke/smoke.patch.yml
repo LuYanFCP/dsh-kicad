@@ -1,0 +1,3 @@
+- insert:
+    - id: kicad-smoke
+      name: './smoke.js'

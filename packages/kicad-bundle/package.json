@@ -1,0 +1,33 @@
+{
+  "name": "dsh-kicad-bundle",
+  "version": "0.1.0",
+  "description": "KiCad for DeepSeek Harness: schematic tools, ERC/DRC, approval policy, skills, commands, sidebar viewer and an EDA agent preset",
+  "license": "MIT",
+  "type": "module",
+  "icon": "./icon.svg",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./presets/*.yml": "./presets/*.yml",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": ["index.js", "icon.svg", "cordis.patch.yml", "presets/*.yml", "locale/*.json"],
+  "keywords": ["dsh", "dsh-bundle", "kicad", "eda", "schematic"],
+  "engines": { "dsh": ">=0.2.1-rc.2 <0.3.0-0" },
+  "dependencies": {
+    "dsh-kicad-bridge": "workspace:^",
+    "dsh-tool-kicad": "workspace:^",
+    "dsh-kicad-policy": "workspace:^",
+    "dsh-kicad-skills": "workspace:^"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": ["./cordis.patch.yml", "./presets/eda.patch.yml"]
+    }
+  },
+  "repository": { "type": "git", "url": "git+https://github.com/LuYanFCP/dsh-kicad.git", "directory": "packages/kicad-bundle" },
+  "homepage": "https://github.com/LuYanFCP/dsh-kicad#readme"
+}

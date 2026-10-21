@@ -66,26 +66,31 @@ export function apply(ctx: Context, config: Config): void {
   const memory = new ErcMemory()
   const cwdOf = (exec: Pick<ToolExecution, 'agent'>): string => agentCwd(ctx, exec.agent) ?? process.cwd()
 
-  if (config.restrictToWorkspace) {
-    ctx.effect(() => ctx.tools.guard((exec) => {
-      if (!GUARDED.has(exec.name)) return undefined
-      const cwd = cwdOf(exec)
-      const roots = [cwd, ...config.extraRoots]
-      for (const key of PATH_ARGUMENTS[exec.name as KiCadToolName]) {
-        const value = (exec.arguments as Record<string, unknown> | null)?.[key]
-        if (typeof value !== 'string' || value === '') continue
-        const target = resolveArg(cwd, value)
-        if (!roots.some(root => inside(target, root))) {
-          return `${exec.name} may only write inside the project directory (${cwd}); "${value}" resolves to ${target}. Copy the design into the project first, or add a root to the KiCad policy's extraRoots.`
-        }
+  /** Why a call may not run (path outside the workspace), or undefined. */
+  const outsideWorkspace = (exec: Pick<ToolExecution, 'name' | 'arguments' | 'agent'>): string | undefined => {
+    if (!config.restrictToWorkspace || !GUARDED.has(exec.name)) return undefined
+    const cwd = cwdOf(exec)
+    const roots = [cwd, ...config.extraRoots]
+    for (const key of PATH_ARGUMENTS[exec.name as KiCadToolName]) {
+      const value = (exec.arguments as Record<string, unknown> | null)?.[key]
+      if (typeof value !== 'string' || value === '') continue
+      const target = resolveArg(cwd, value)
+      if (!roots.some(root => inside(target, root))) {
+        return `${exec.name} may only write inside the project directory (${cwd}); "${value}" resolves to ${target}. Copy the design into the project first, or add a root to the KiCad policy's extraRoots.`
       }
-      return undefined
-    }), 'kicad workspace guard')
+    }
+    return undefined
   }
+
+  // The guard is the monotonic backstop; pre-execute denies the same calls early so
+  // the user is never asked to approve an edit the guard would refuse anyway.
+  if (config.restrictToWorkspace) ctx.effect(() => ctx.tools.guard(outsideWorkspace), 'kicad workspace guard')
 
   if (config.approval === 'ask') {
     ctx.on('tools/pre-execute', async (exec, next): Promise<PreToolDecision> => {
       if (!(DESIGN_WRITE_TOOLS as readonly string[]).includes(exec.name)) return next()
+      const denied = outsideWorkspace(exec)
+      if (denied) return { kind: 'deny', reason: denied }
       const args = (exec.arguments ?? {}) as { path?: string, operations?: Array<{ op?: string }>, dry_run?: boolean }
       if (args.dry_run) return next()
       const decision = await next()
