@@ -11168,7 +11168,7 @@ function DoctorPanel(props) {
     }
   };
   (0, import_react.useEffect)(() => {
-    if (!props.initial) void check(false);
+    if (!props.initial) void check(props.fresh === true);
   }, []);
   const running = job !== void 0 && job.phase !== "done";
   (0, import_react.useEffect)(() => {
@@ -11545,7 +11545,7 @@ function createSettingsCard(fields, summary, extra) {
 }
 var bridgeSummary = (v4, tr2) => tr2("settings.summaryBridge", { cli: String(v4.kicadCli || tr2("common.default")) });
 function createBridgeSettings(remote) {
-  return createSettingsCard(BRIDGE_FIELDS, bridgeSummary, (props) => /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(DoctorPanel, { remote, t: props.t }, props.form?.state.revision ?? 0));
+  return createSettingsCard(BRIDGE_FIELDS, bridgeSummary, (props) => /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(DoctorPanel, { remote, t: props.t, fresh: true }, props.form?.state.revision ?? 0));
 }
 var BridgeSettings = createSettingsCard(BRIDGE_FIELDS, bridgeSummary);
 var PolicySettings = createSettingsCard(POLICY_FIELDS, (v4, tr2) => tr2("settings.summaryPolicy", {

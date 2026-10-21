@@ -156,6 +156,8 @@ export interface DoctorPanelProps {
   initial?: DoctorReport
   /** Called with every fresh report. */
   onReport?: (report: DoctorReport) => void
+  /** Check again on mount instead of reusing this page's cached report (settings may have changed). */
+  fresh?: boolean
   pollMs?: number
 }
 
@@ -204,7 +206,7 @@ export function DoctorPanel(props: DoctorPanelProps): ReactNode {
   }
 
   useEffect(() => {
-    if (!props.initial) void check(false)
+    if (!props.initial) void check(props.fresh === true)
   }, [])
 
   // Follow a running installation until it has been checked again.
