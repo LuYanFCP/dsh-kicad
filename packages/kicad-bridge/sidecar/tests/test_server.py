@@ -76,3 +76,20 @@ def test_render_png(project):
     value = res["structuredContent"]
     assert value["svg"][0].endswith(".svg") and os.path.isfile(value["png"][0])
     assert ".dsh-kicad" in value["output_dir"]
+
+
+@needs_symbols
+def test_library_symbol_and_footprint_search():
+    out = rpc([
+        {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "library_symbol", "arguments": {"lib_id": "Regulator_Linear:AMS1117-3.3"}}},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "search_footprints", "arguments": {"query": "R 0603", "library": "Resistor_SMD", "limit": 3}}},
+        {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "search_footprints", "arguments": {"query": "Connector_USB:USB_C_Receptacle_GCT_USB4125-xx-x_6P_TopMnt_Horizontal"}}},
+        {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "library_symbol", "arguments": {"lib_id": "Device:NOPE"}}},
+    ])
+    ldo = out[1]["result"]["structuredContent"]
+    assert {p["name"] for p in ldo["pins"]} >= {"VI", "VO", "GND"} and ldo["footprint"].startswith("Package_TO_SOT_SMD:SOT-223")
+    fps = [r["lib_id"] for r in out[2]["result"]["structuredContent"]["results"]]
+    assert "Resistor_SMD:R_0603_1608Metric" in fps
+    usb = out[3]["result"]["structuredContent"]["results"][0]
+    assert usb["exists"] and set(usb["pads"]) == {"A5", "A9", "A12", "B5", "B9", "B12", "SH"}
+    assert out[4]["result"]["isError"]

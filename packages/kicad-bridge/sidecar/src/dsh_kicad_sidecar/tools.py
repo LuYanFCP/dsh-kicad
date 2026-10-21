@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import threading
 from dataclasses import dataclass
@@ -11,6 +12,8 @@ from typing import Any, Callable
 from . import __version__
 from .kicad_cli import KiCadCli, KiCadCliError, svg_to_png
 from .schematic import OPERATIONS, Schematic, SchematicError, new_schematic_text
+from .footprints import FootprintLibraries, default_footprint_dirs
+from . import geometry
 from .symbols import LibraryError, SymbolLibraries, default_symbol_dirs
 
 __all__ = ["ToolError", "Toolbox", "TOOL_SPECS"]
@@ -68,6 +71,13 @@ TOOL_SPECS: list[ToolSpec] = [
              _obj({"path": SCH, "net": {"type": "string", "description": "Only nets whose name contains this text."}}, ["path"])),
     ToolSpec("search_symbols", "Search installed KiCad symbol libraries (and the project's sym-lib-table) by keywords; returns lib_ids to use with add_symbol.",
              _obj({"query": {"type": "string"}, "library": {"type": "string"}, "limit": {"type": "integer", "default": 20},
+                   "project_dir": {"type": "string"}}, ["query"])),
+    ToolSpec("library_symbol", "Inspect a library symbol before placing it: every pin (number, name, electrical type, unit), units, description, keywords, default footprint and footprint filters.",
+             _obj({"lib_id": {"type": "string", "description": "e.g. MCU_Microchip_ATtiny:ATtiny85-20S"}, "project_dir": {"type": "string"}}, ["lib_id"])),
+    ToolSpec("search_footprints", "Search installed footprint libraries (and the project fp-lib-table) by name terms, e.g. 'R 0603', 'SOT-223', 'USB_C 6P'. With an exact lib_id, confirms it exists and lists its pad names.",
+             _obj({"query": {"type": "string", "description": "Name terms (all must match) or an exact Library:Name."},
+                   "library": {"type": "string"}, "limit": {"type": "integer", "default": 20},
+                   "pads": {"type": "boolean", "default": False, "description": "Include pad names in every result."},
                    "project_dir": {"type": "string"}}, ["query"])),
     ToolSpec("erc", "Run KiCad's Electrical Rules Check on a schematic and return KiCad's verdict and violations.",
              _obj({"path": SCH, "severity": {"type": "string", "enum": ["all", "error", "warning"], "default": "all"}}, ["path"])),
@@ -162,6 +172,7 @@ class Toolbox:
             "kicad_cli": " ".join(self.cli.argv) if self.cli.argv else None,
             "kicad_version": self.cli.version(),
             "symbol_dirs": default_symbol_dirs(),
+            "footprint_dirs": default_footprint_dirs(),
             "rasterizers": rasterizers,
             "ipc_client_installed": ipc,
             "roots": self.roots,
@@ -203,6 +214,43 @@ class Toolbox:
         project_dir = self.resolve(args["project_dir"]) if args.get("project_dir") else None
         libs = self.libraries(project_dir) if project_dir else self.libraries("")
         results = libs.search(args["query"], limit=int(args.get("limit", 20)), library=args.get("library"))
+        return {"query": args["query"], "count": len(results), "results": results}
+
+    def footprints(self, project_dir: str) -> FootprintLibraries:
+        key = "fp:" + project_dir
+        if key not in self._libraries:
+            self._libraries[key] = FootprintLibraries(project_dir or None)  # type: ignore[assignment]
+        return self._libraries[key]  # type: ignore[return-value]
+
+    def tool_library_symbol(self, args):
+        project_dir = self.resolve(args["project_dir"]) if args.get("project_dir") else ""
+        node = self.libraries(project_dir).get(args["lib_id"])
+        props = {p.value(0): p.value(1) for p in node.lists("property")}
+        pins = geometry.library_pins(node)
+        units = sorted({p.unit for p in pins if p.unit})
+        fp_filters = props.get("ki_fp_filters", "")
+        return {
+            "lib_id": args["lib_id"],
+            "description": props.get("Description", ""), "keywords": props.get("ki_keywords", ""),
+            "reference_prefix": props.get("Reference", ""), "default_value": props.get("Value", ""),
+            "footprint": props.get("Footprint", ""), "footprint_filters": fp_filters.split() if fp_filters else [],
+            "datasheet": props.get("Datasheet", ""), "power_symbol": node.find("power") is not None,
+            "units": units or [1],
+            "pins": [{"number": p.number, "name": p.name, "type": p.electrical_type, "unit": p.unit or "all", **({"hidden": True} if p.hidden else {})}
+                     for p in sorted(pins, key=lambda p: (p.unit, _num_key(p.number))) if p.body_style in (0, 1)],
+        }
+
+    def tool_search_footprints(self, args):
+        project_dir = self.resolve(args["project_dir"]) if args.get("project_dir") else ""
+        libs = self.footprints(project_dir)
+        query = args["query"].strip()
+        if re.fullmatch(r"[^\s:]+:[^\s]+", query):
+            try:
+                return {"query": query, "count": 1, "results": [libs.get(query)]}
+            except LookupError:
+                pass  # fall back to a fuzzy search on the name part
+            query = query.split(":", 1)[1]
+        results = libs.search(query, library=args.get("library"), limit=int(args.get("limit", 20)), pads=bool(args.get("pads")))
         return {"query": args["query"], "count": len(results), "results": results}
 
     def tool_erc(self, args):
@@ -299,3 +347,7 @@ class Toolbox:
             return {"available": True, "kicad_version": version, "open_documents": docs}
         except Exception as exc:
             return {"available": False, "reason": f"no KiCad IPC server reachable: {exc}"}
+
+
+def _num_key(number: str):
+    return (0, int(number), "") if number.isdigit() else (1, 0, number)

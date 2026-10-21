@@ -31,6 +31,8 @@ Ask **at most 3–4 questions**, all at once, with `ask_user_question` (multiple
 
 Write a numbered spec as precise as a datasheet-literate engineer would — every part with its `lib_id`-level identity, value, footprint size and every connection by net name. Use the proven blocks below. Then a short "assumptions I made" list in plain language, and the acceptance criteria (KiCad ERC 0 errors; every board part has a footprint; layout left-to-right, no overlaps).
 
+Verify identities while writing, with tools rather than shell commands: `kicad_search_symbols` for lib_ids, `kicad_library_symbol` for pin names/numbers, `kicad_search_footprints` for footprint ids and pad names.
+
 Save it as `design-brief.md` next to the schematic, show it to the user, and ask for confirmation (`ask_user_question`: "Build this" / "Change something"). Only after "Build this", follow the `kicad-agent-workflow` skill. Re-read `design-brief.md` before the final report and check every numbered item against `kicad_list_nets`.
 
 ## Proven blocks (use these values unless the user overrides)
