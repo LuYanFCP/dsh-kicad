@@ -83,6 +83,10 @@ dsh web
 
 `dsh plugin … add <dir>` links the directory; leaf packages resolve through this checkout's `node_modules`, and dsh maps `@deepseek-ai/*` imports to the running installation. Rebuild and restart dsh after code changes. In the Web UI you can also use **Plugins → Install** with the same absolute path.
 
+### Paste the repository URL (simplest)
+
+In dsh, **Plugins → Add plugin**, enter `https://github.com/LuYanFCP/dsh-kicad` and install (or `dsh plugin --profile web add https://github.com/LuYanFCP/dsh-kicad`). The repository root is itself the `dsh-kicad` bundle; it loads the prebuilt `dist/dsh-kicad`. Append `#<tag-or-commit>` to pin a version.
+
 ### From the plugin market (search inside dsh)
 
 dsh finds plugins through **plugin markets**: JSON indexes you add once. This repository publishes one.

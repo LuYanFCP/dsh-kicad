@@ -1,0 +1,6 @@
+{
+  "name": "dsh-kicad-smoke",
+  "private": true,
+  "description": "Keyless smoke overlay; its own package so it is not attributed to the dsh-kicad root bundle",
+  "type": "module"
+}
