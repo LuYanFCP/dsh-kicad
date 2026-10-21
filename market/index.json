@@ -49,8 +49,8 @@
         "zh": "KiCad 原理图助手"
       },
       "description": {
-        "en": "Design and check KiCad schematics with the agent: describe a board in one sentence (/kicad-design), approve each edit, KiCad ERC after every change, interactive KiCanvas viewer, /erc /drc /bom, EDA preset.",
-        "zh": "让 agent 帮你设计和检查 KiCad 原理图：一句话描述想做的板子（/kicad-design），每次修改先审批、改完自动跑 KiCad ERC，内置 KiCanvas 交互查看器、/erc /drc /bom 和 EDA 预设。"
+        "en": "AI electronics design with KiCad: describe the circuit board you want in one sentence (/kicad-design) and the agent asks a few questions, writes the spec and draws the schematic; approve each edit, KiCad ERC after every change, interactive KiCanvas schematic/PCB viewer, /erc /drc /bom, EDA preset. Beginner friendly; MCU, USB-C power, LED and button circuits built in.",
+        "zh": "用 AI 做电子电路设计（KiCad）：一句话说出你想做的电路板（/kicad-design），agent 会问几个问题、写好设计规格并画出原理图；每次修改先审批、改完自动跑 KiCad ERC，内置 KiCanvas 原理图/PCB 交互查看器、/erc /drc /bom 和 EDA 预设。适合新手，内置单片机、USB-C 供电、LED 和按键等常用电路。"
       },
       "icon": "icons/dsh-kicad.svg",
       "author": "LuYanFCP",
@@ -71,11 +71,11 @@
       "versions": [
         {
           "version": "0.1.0",
-          "publishTimestamp": 1792565325,
+          "publishTimestamp": 1792565680,
           "source": {
             "type": "git",
             "url": "https://github.com/LuYanFCP/dsh-kicad",
-            "commit": "2f77570569a14132dbc61fddee37f3eee782afc3",
+            "commit": "b9cd783467043becb812faa7c2a4d350d22dd565",
             "path": "dist/dsh-kicad"
           },
           "engines": {
