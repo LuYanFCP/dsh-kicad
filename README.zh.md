@@ -61,11 +61,21 @@ dsh web
 
 `dsh plugin … add <目录>` 会以 link 方式安装；子包通过本仓库的 `node_modules` 解析，`@deepseek-ai/*` 的 import 由 dsh 映射到正在运行的安装。修改代码后需重新构建并重启 dsh。也可以在 Web 界面 **Plugins → Install** 中填入同一绝对路径。
 
-### 通过 npm / 插件市场
+### 通过插件市场（在 dsh 里搜索安装）
 
-发布到 npm（`pnpm -r publish`）后：`dsh plugin --profile web add dsh-kicad-bundle`；或在 **Plugins → Discover → Add index source** 中添加类似 [`market/index.json`](market/index.json) 的索引（需先启用实验性的 “Custom plugin markets” bundle）。`node market/validate.mjs <dsh>/node_modules/@deepseek-ai/dsh-plugin-market-index` 会用 dsh 自带的校验器检查索引。
+dsh 通过**插件市场**检索插件：添加一次市场索引（JSON）即可搜索。本仓库发布了一个索引。
 
-目前不支持只指向 `packages/kicad-bundle` 子目录的 Git 源：pnpm 无法从 Git 子目录解析 bundle 的 `workspace:` 兄弟包。请使用 npm 或本地仓库。
+1. **Plugins → Experimental plugins → More → Custom plugin markets** 打开，出现 **Discover** 标签。
+2. **Discover → Add index source** 填入：`https://raw.githubusercontent.com/LuYanFCP/dsh-kicad/main/market/index.json`
+3. 搜索 `kicad`、`原理图`、`电路板`、`circuit board` 等，点 **Install → Enable now**，无需重启。
+
+市场条目从固定的 Git commit 安装 `dist/dsh-kicad`：由 `pnpm run dist`（`scripts/pack-dist.mjs`）生成的单个自包含包。也可以直接安装：
+
+```sh
+dsh plugin --profile web add "git+https://github.com/LuYanFCP/dsh-kicad.git#<commit>&path:/dist/dsh-kicad"
+```
+
+发布新版本：`pnpm run dist` 并提交，然后在 `market/index.json` 中用该 commit 增加一个版本，并用 `node market/validate.mjs <dsh>/node_modules/@deepseek-ai/dsh-plugin-market-index` 校验。
 
 ## 使用
 
