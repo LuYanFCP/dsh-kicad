@@ -1,7 +1,8 @@
 /**
  * Right-sidebar body for .kicad_sch / .kicad_pcb: shows the SVG that kicad-cli
  * rendered into <project>/.dsh-kicad/render/<name>/, follows file changes through
- * `useResource`, and re-renders on request through the `/kicad-render` command.
+ * `useResource`, and re-renders on request through the `/kicad-render` command
+ * (and by itself when a board changes, see `rendersItself`).
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode, type WheelEvent } from 'react'
 import { orderPages, parseFileAddress, renderDir, sessionFileAddress } from './address.ts'
@@ -33,6 +34,19 @@ function remember(key: string, value: string): void {
   } catch {
     // storage unavailable: the choice lasts for this tab only
   }
+}
+
+/** Quiet time after a design change before the SVG view renders it itself; a host render landing sooner wins. */
+export const SELF_RENDER_DELAY_MS = 1500
+
+/**
+ * Designs the SVG view re-renders itself when they change on disk. The policy's
+ * autoRender re-renders a schematic after each kicad_edit_schematic (and the user
+ * may switch that off); nothing on the host renders a board after kicad_edit_pcb
+ * (or after KiCad itself saves it).
+ */
+export function rendersItself(path: string): boolean {
+  return /\.kicad_pcb$/i.test(path)
 }
 
 export function createViewer(remote: ClientRemote) {
@@ -116,7 +130,14 @@ function createSvgView(remote: ClientRemote) {
     const sourceState = props.useResource?.(tab.contentId ?? 'none:')
     const svgVersion = svgState?.value?.version
     const sourceVersion = sourceState?.value?.version
-    const sourceAtLoad = useRef<string | undefined>(undefined)
+    /** Source version the shown SVG was rendered from (state: a reload must re-check staleness). */
+    const [sourceAtLoad, setSourceAtLoad] = useState<string | undefined>(undefined)
+    /** Source version when this design opened: a change from it counts even before any render exists. */
+    const sourceAtOpen = useRef<{ path: string, version: string | undefined } | undefined>(undefined)
+    /** Source version the last render started from (the file may change again while it runs). */
+    const renderedFrom = useRef<string | undefined>(undefined)
+    /** Source version the view last re-rendered by itself: one attempt per version, so failures do not loop. */
+    const selfRendered = useRef<string | undefined>(undefined)
 
     // List rendered pages (again after a render or when the root page changes on disk).
     useEffect(() => {
@@ -144,7 +165,8 @@ function createSvgView(remote: ClientRemote) {
           return
         }
         url = URL.createObjectURL(new Blob([result.value.data as BlobPart], { type: 'image/svg+xml' }))
-        sourceAtLoad.current = sourceVersion
+        setSourceAtLoad(renderedFrom.current ?? sourceVersion)
+        renderedFrom.current = undefined
         setError(undefined)
         setSvgUrl(url)
       }, (cause: unknown) => !controller.signal.aborted && setError(tr('viewer.failed', { message: String(cause) })))
@@ -187,30 +209,55 @@ function createSvgView(remote: ClientRemote) {
     }
     const onPointerUp = (): void => { drag.current = undefined }
 
-    const render = async (): Promise<void> => {
+    /** Render with kicad-cli; `background` renders are the view's own and hidden from the chat (`--json`). */
+    const render = async (background = false): Promise<void> => {
       if (!sessionId) return
       setRendering(true)
       setError(undefined)
+      renderedFrom.current = sourceVersion
+      let failure: string | undefined
       try {
-        const result = await remote.commands.execute(sessionId, `/kicad-render ${designPath}`, [])
-        if (!result.ok) setError(tr('viewer.renderFailed', { message: result.error.message }))
+        const result = await remote.commands.execute(sessionId, `/kicad-render ${designPath}${background ? ' --json' : ''}`, [])
+        if (!result.ok) failure = result.error.message
         else if (result.value?.result.kind === 'error') {
-          setError(tr('viewer.renderFailed', { message: result.value.result.text }))
+          failure = result.value.result.text
           // Re-check so the notice (with the installer) appears right away.
-          if (KICAD_MISSING.test(result.value.result.text)) setKicadFailed(true)
+          if (KICAD_MISSING.test(failure)) setKicadFailed(true)
         }
         else setListing(n => n + 1)
       } catch (cause) {
-        setError(tr('viewer.renderFailed', { message: String(cause) }))
+        failure = String(cause)
       } finally {
         setRendering(false)
       }
+      if (failure !== undefined) {
+        renderedFrom.current = undefined
+        setError(tr('viewer.renderFailed', { message: failure }))
+      }
     }
+
+    useEffect(() => {
+      if (sourceAtOpen.current?.path !== designPath) sourceAtOpen.current = { path: designPath, version: sourceVersion }
+      else sourceAtOpen.current.version ??= sourceVersion
+    }, [designPath, sourceVersion])
+
+    // Keep a board live: once it differs from what is shown and has been quiet for a
+    // moment, render it again. Only while this tab is visible; a hidden tab catches up when shown.
+    useEffect(() => {
+      if (!sessionId || !rendersItself(designPath) || tab.visible === false || rendering || sourceVersion === undefined) return
+      const shown = svgUrl !== undefined ? sourceAtLoad : sourceAtOpen.current?.version
+      if (shown === undefined || shown === sourceVersion || selfRendered.current === sourceVersion) return
+      const timer = setTimeout(() => {
+        selfRendered.current = sourceVersion
+        void render(true)
+      }, SELF_RENDER_DELAY_MS)
+      return () => clearTimeout(timer)
+    }, [sessionId, designPath, sourceVersion, svgUrl, sourceAtLoad, rendering, tab.visible])
 
     if (!sessionId) {
       return <div className="dshk-root"><style>{CSS}</style><div className="dshk-note">{tr('viewer.noSession')}</div></div>
     }
-    const stale = svgUrl !== undefined && sourceAtLoad.current !== undefined && sourceVersion !== undefined && sourceVersion !== sourceAtLoad.current
+    const stale = svgUrl !== undefined && sourceAtLoad !== undefined && sourceVersion !== undefined && sourceVersion !== sourceAtLoad
     return (
       <div className="dshk-root" data-kicad-viewer={designPath}>
         <style>{CSS}</style>

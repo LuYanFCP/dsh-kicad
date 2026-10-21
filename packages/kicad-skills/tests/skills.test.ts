@@ -1,4 +1,5 @@
-import { dirname } from 'node:path'
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
 import SkillRegistry from '@deepseek-ai/dsh-skill'
 import { afterEach, describe, expect, it } from 'vitest'
 import * as skills from '../src/index.ts'
@@ -12,10 +13,33 @@ describe('kicad skills', () => {
   it('registers packaged skills with the dsh skill registry', async () => {
     const ctx = await bootKiCad([SkillRegistry], [skills, { commands: false }])
     const names = (await ctx.skills.list()).map(s => s.name).filter(n => n.startsWith('kicad-'))
-    expect(names).toEqual(['kicad-agent-workflow', 'kicad-design-brief', 'kicad-erc-triage', 'kicad-schematic-design'])
+    expect(names).toEqual(['kicad-agent-workflow', 'kicad-design-brief', 'kicad-drc-triage', 'kicad-erc-triage', 'kicad-schematic-design'])
     const body = await ctx.skills.get('kicad-erc-triage')
     expect(body?.content).toContain('power_pin_not_driven')
     expect(body?.content.startsWith('---')).toBe(false)
+  })
+
+  it('ships DRC triage for the violation types kicad-cli reports, with the planned board edits', async () => {
+    const ctx = await bootKiCad([SkillRegistry], [skills, { commands: false }])
+    const drc = (await ctx.skills.list()).find(s => s.name === 'kicad-drc-triage')
+    expect(drc?.description).toMatch(/DRC/)
+    const body = (await ctx.skills.get('kicad-drc-triage'))!.content
+    for (const type of ['clearance', 'courtyards_overlap', 'unconnected_items', 'track_width', 'hole_clearance', 'silk_over_copper', 'lib_footprint_mismatch', 'missing_footprint', 'extra_footprint', 'net_conflict', 'invalid_outline', 'shorting_items']) {
+      expect(body, type).toContain(`\`${type}\``)
+    }
+    // Every `op{...}` the skill names is a real kicad_edit_pcb operation.
+    const pcb = readFileSync(new URL('../../kicad-bridge/sidecar/src/dsh_kicad_sidecar/pcb.py', import.meta.url), 'utf8')
+    const operations = new Set([...pcb.slice(pcb.indexOf('OPERATIONS')).matchAll(/^ {4}"([a-z_]+)": lambda/gm)].map(m => m[1]))
+    const named = new Set([...body.matchAll(/`([a-z_]+)\{/g)].map(m => m[1]))
+    expect([...named].filter(op => !operations.has(op))).toEqual([])
+    for (const op of ['move_footprint', 'move_footprints', 'set_design_rules', 'set_net_class', 'add_track', 'add_via', 'add_zone', 'remove_item', 'set_reference_text']) {
+      expect(named, op).toContain(op)
+    }
+    expect(body).toContain('kicad_read_pcb')
+    expect(body).toContain('--refill-zones')
+    expect(body).toMatch(/schematic_parity[\s\S]*\*\*warnings\*\*/)
+    const workflow = (await ctx.skills.get('kicad-agent-workflow'))!.content
+    expect(workflow).toMatch(/## Handing over to the board[\s\S]*0 ERC errors[\s\S]*footprint[\s\S]*kicad-drc-triage/)
   })
 
   it('keeps every SKILL.md under the 8192-character pruning threshold', async () => {
@@ -45,6 +69,16 @@ describe('kicad commands', () => {
     expect((bom as { text: string }).text).toMatch(/\| R1 \| 10k \|/)
     const drc = await commands.drc!.handler(invocation(`${dirname(path)}/missing.kicad_pcb`))
     expect(drc.kind).toBe('error')
+  })
+
+  it('/kicad-render takes the viewer\'s --json marker off the path', async () => {
+    const calls: Array<Record<string, unknown>> = []
+    const ctx = { get: () => undefined, kicad: { run: async (_tool: string, args: Record<string, unknown>) => (calls.push(args), { svg: ['/p/.dsh-kicad/render/board/board.svg'] }) } }
+    const render = skills.createCommands(ctx as never).find(c => c.name === 'kicad-render')!
+    const out = await render.handler(invocation('hw/board.kicad_pcb --json'))
+    expect(out.kind).toBe('success')
+    expect(calls[0]).toMatchObject({ path: resolve('hw/board.kicad_pcb'), format: 'svg' })
+    expect(JSON.parse((out as { text: string }).text).svg).toHaveLength(1)
   })
 
   it('formats an empty BOM', () => {
