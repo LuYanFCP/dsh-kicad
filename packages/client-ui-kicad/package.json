@@ -1,0 +1,33 @@
+{
+  "name": "dsh-client-ui-kicad",
+  "version": "0.1.0",
+  "description": "KiCad Web UI for DeepSeek Harness: schematic/board sidebar viewer, ERC/DRC conversation cards, settings cards",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": { "types": "./lib/index.d.ts", "default": "./lib/index.js" },
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": ["lib/index.js", "lib/index.d.ts", "lib/client.js", "locale/*.json"],
+  "engines": { "dsh": ">=0.2.1-rc.2 <0.3.0-0" },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-api-remotes",
+        "@deepseek-ai/dsh-client-ui-sidebar-right",
+        "@deepseek-ai/dsh-client-ui-tool",
+        "@deepseek-ai/dsh-client-ui-plugin-manager"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "tsc -b && node ../../scripts/build-client.mjs"
+  },
+  "repository": { "type": "git", "url": "git+https://github.com/LuYanFCP/dsh-kicad.git", "directory": "packages/client-ui-kicad" }
+}
