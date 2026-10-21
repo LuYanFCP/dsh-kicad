@@ -97,3 +97,55 @@ def test_read_edit_erc_loop(project):
     assert after["counts"]["error"] == 0, after["violations"]
     nets = {n["name"]: n["nodes"] for n in cli.netlist(path)["nets"]}
     assert any(node["ref"] == "R1" and node["pin"] == "1" for node in nets["A"])
+
+
+@needs_symbols
+@needs_kicad_cli
+def test_disconnect_pin_undoes_label_and_power_connections(project):
+    from dsh_kicad_sidecar.kicad_cli import KiCadCli
+
+    path = project("rc_filter")
+    cli = KiCadCli()
+    s = Schematic(path)
+    labels_before = sum(1 for _ in s.root.lists("label"))
+    removed = s.apply({"op": "disconnect_pin", "pin": "C1:2"})  # its GND power symbol + stub
+    assert removed == {"wires": 1, "labels": 0, "no_connects": 0, "power_symbols": 1}
+    removed = s.apply({"op": "disconnect_pin", "pin": "J1:1"})  # IN label + stub
+    assert removed["wires"] == 1 and removed["labels"] == 1
+    assert sum(1 for _ in s.root.lists("label")) == labels_before - 1
+    s.save()
+    nets = {n["name"]: {(x["ref"], x["pin"]) for x in n["nodes"]} for n in cli.netlist(path)["nets"]}
+    assert ("C1", "2") not in nets.get("GND", set()) and ("J1", "1") not in nets.get("/IN", set())
+    # The rest of the design is untouched: R1-C1 still share OUT.
+    assert {("R1", "2"), ("C1", "1")} <= nets["/OUT"]
+    # Re-adding restores a clean ERC.
+    s = Schematic(path)
+    s.apply({"op": "connect_pin_to_net", "pin": "C1:2", "net": "GND", "kind": "power"})
+    s.apply({"op": "connect_pin_to_net", "pin": "J1:1", "net": "IN"})
+    s.save()
+    assert cli.erc(path)["passed"]
+
+
+@needs_symbols
+def test_disconnect_pin_stops_at_the_other_part(project):
+    s = Schematic(project("rc_filter"))
+    s.apply({"op": "disconnect_pin", "pin": "R1:2"})  # the R1-C1 wire; must not touch C1's OUT label
+    assert any(l["text"] == "OUT" for l in s.summary()["labels"])
+    assert all(_ for _ in s.pins("C1"))
+
+
+def test_remove_item_label_and_wire(project):
+    s = Schematic(project("rc_filter"))
+    wiring = s.wiring()
+    first = wiring["wires"][0]
+    s.apply({"op": "remove_item", "uuid": first["uuid"]})
+    assert len(s.wiring()["wires"]) == len(wiring["wires"]) - 1
+    assert s.apply({"op": "remove_label", "text": "OUT"}) == 2
+    with pytest.raises(SchematicError):
+        s.apply({"op": "remove_label", "text": "NOPE"})
+    w = s.wiring()["wires"][0]
+    assert s.apply({"op": "remove_wire", "x": w["from"][0], "y": w["from"][1]}) >= 1
+    with pytest.raises(SchematicError):
+        s.apply({"op": "remove_item", "uuid": "00000000-dead"})
+    summary = s.summary(include_wiring=True)
+    assert "wiring" in summary and all("uuid" in l for l in summary["labels"])

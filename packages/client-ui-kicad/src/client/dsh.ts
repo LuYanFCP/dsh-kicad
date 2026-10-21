@@ -78,7 +78,8 @@ export interface ToolViewProps {
   callId: string
   phase: 'preparing' | 'start' | 'result'
   block: {
-    args?: unknown
+    /** Lazy argument view (dsh PartialArguments): `text(key)` reads a string field, even while arguments stream in. */
+    args?: { text?(key: string): string | undefined }
     call?: { name: string, argsRaw: string } | null
     content?: ReadonlyArray<{ type: string, text?: string }>
     isError?: boolean

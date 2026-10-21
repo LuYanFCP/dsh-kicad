@@ -247,14 +247,15 @@ class Schematic:
                 out[flag] = value
         return out
 
-    def summary(self, include_components: bool = True) -> dict[str, Any]:
+    def summary(self, include_components: bool = True, include_wiring: bool = False) -> dict[str, Any]:
         root = self.root
         title = root.find("title_block")
         labels: list[dict] = []
         for kind in LABEL_KINDS:
             for lab in root.lists(kind):
                 at = lab.find("at")
-                labels.append({"kind": kind, "text": lab.value(0), "at": [_f(at.value(0)), _f(at.value(1))] if at else None})
+                labels.append({"kind": kind, "text": lab.value(0), "at": [_f(at.value(0)), _f(at.value(1))] if at else None,
+                               "uuid": lab.child_value("uuid")})
         sheets = []
         for sheet in root.lists("sheet"):
             name = sheet.property("Sheetname") or sheet.property("Sheet name")
@@ -280,6 +281,8 @@ class Schematic:
             "labels": labels,
             "sheets": sheets,
         }
+        if include_wiring:
+            out["wiring"] = self.wiring()
         if include_components:
             out["components"] = sorted((c for c in comps if not c.get("power")), key=lambda c: _ref_key(c["reference"]))
         return out
@@ -571,6 +574,122 @@ class Schematic:
         self.changes[-1] = f"connected {reference}:{pin} to net {net}"
         return {"pin": [p["x"], p["y"]], "end": [ex, ey]}
 
+    # ---- removal -------------------------------------------------------------------
+    def wiring(self) -> dict[str, list[dict]]:
+        """Wires, junctions and no-connect flags with their uuids (for targeted removal)."""
+        def pt(node: SList) -> list[float]:
+            return [_f(node.value(0)), _f(node.value(1))]
+        wires = []
+        for w in self.root.lists("wire"):
+            xy = list(w.find("pts").lists("xy"))
+            wires.append({"from": pt(xy[0]), "to": pt(xy[-1]), "uuid": w.child_value("uuid")})
+        return {
+            "wires": wires,
+            "junctions": [{"at": pt(j.find("at")), "uuid": j.child_value("uuid")} for j in self.root.lists("junction")],
+            "no_connects": [{"at": pt(n.find("at")), "uuid": n.child_value("uuid")} for n in self.root.lists("no_connect")],
+        }
+
+    def remove_item(self, uuid: str) -> str:
+        """Remove any top-level item (wire, label, junction, no-connect, symbol, ...) by uuid."""
+        for item in list(self.root.lists()):
+            if item.child_value("uuid") == uuid and item.head not in ("kicad_sch", "lib_symbols"):
+                self.root.remove(item)
+                what = item.head or "item"
+                if what == "symbol":
+                    what = f"symbol {SymbolRef(item).reference}"
+                elif what in LABEL_KINDS:
+                    what = f"{what} '{item.value(0)}'"
+                self.changes.append(f"removed {what} ({uuid})")
+                return what
+        raise SchematicError(f"no item with uuid {uuid}")
+
+    def remove_label(self, text: str, x: float | None = None, y: float | None = None) -> int:
+        """Remove labels named ``text`` (all of them, or only the one at x,y)."""
+        removed = 0
+        for kind in LABEL_KINDS:
+            for lab in list(self.root.lists(kind)):
+                if lab.value(0) != text:
+                    continue
+                if x is not None and y is not None and _key(*_xy(lab)) != _key(x, y):
+                    continue
+                self.root.remove(lab)
+                removed += 1
+        if not removed:
+            raise SchematicError(f"no label '{text}'" + (f" at ({x}, {y})" if x is not None else ""))
+        self.changes.append(f"removed {removed} label(s) '{text}'")
+        return removed
+
+    def remove_wire(self, x: float, y: float) -> int:
+        """Remove every wire segment with an endpoint at (x, y)."""
+        target = _key(x, y)
+        removed = 0
+        for w in list(self.root.lists("wire")):
+            if target in {_key(_f(p.value(0)), _f(p.value(1))) for p in w.find("pts").lists("xy")}:
+                self.root.remove(w)
+                removed += 1
+        if not removed:
+            raise SchematicError(f"no wire ends at ({x}, {y})")
+        self.changes.append(f"removed {removed} wire(s) at ({x}, {y})")
+        return removed
+
+    def disconnect_pin(self, reference: str, pin: str) -> dict:
+        """Undo the wiring attached to one pin: follow its wires up to the next part pin or branch
+        point, removing those wires and the labels, no-connect flags and power symbols on the way."""
+        start = self.pin(reference, pin)
+        start_key = _key(start["x"], start["y"])
+        power_refs: dict[tuple[float, float], list[SList]] = {}
+        part_pins: dict[tuple[float, float], int] = {}
+        for sym in self.symbols():
+            lib = self.lib_symbol(sym.lib_id)
+            if lib is None:
+                continue
+            for p in geometry.placed_pins(lib, sym.at, sym.mirror, sym.unit, sym.body_style):
+                k = _key(p["x"], p["y"])
+                if lib.find("power") is not None:
+                    power_refs.setdefault(k, []).append(sym.node)
+                elif not (sym.reference == reference and p["number"] == start["number"]):
+                    part_pins[k] = part_pins.get(k, 0) + 1
+        junctions = {_key(*_xy(j)) for j in self.root.lists("junction")}
+        removed = {"wires": 0, "labels": 0, "no_connects": 0, "power_symbols": 0}
+
+        def clear_point(k: tuple[float, float]) -> None:
+            for kind in LABEL_KINDS:
+                for lab in list(self.root.lists(kind)):
+                    if _key(*_xy(lab)) == k:
+                        self.root.remove(lab)
+                        removed["labels"] += 1
+            for nc in list(self.root.lists("no_connect")):
+                if _key(*_xy(nc)) == k:
+                    self.root.remove(nc)
+                    removed["no_connects"] += 1
+            for node in power_refs.pop(k, []):
+                if any(it is node for it in self.root.items):
+                    self.root.remove(node)
+                    removed["power_symbols"] += 1
+
+        queue, seen = [start_key], set()
+        while queue:
+            k = queue.pop()
+            if k in seen:
+                continue
+            seen.add(k)
+            clear_point(k)
+            for w in list(self.root.lists("wire")):
+                ends = [_key(_f(p.value(0)), _f(p.value(1))) for p in w.find("pts").lists("xy")]
+                if k not in ends:
+                    continue
+                self.root.remove(w)
+                removed["wires"] += 1
+                for other in ends:
+                    if other == k or other in part_pins or other in junctions:
+                        continue
+                    still = sum(1 for w2 in self.root.lists("wire")
+                                if other in {_key(_f(p.value(0)), _f(p.value(1))) for p in w2.find("pts").lists("xy")})
+                    if still <= 1:  # a plain corner or the stub's end, not a branch point
+                        queue.append(other)
+        self.changes.append(f"disconnected {reference}:{pin} ({', '.join(f'{v} {k}' for k, v in removed.items() if v) or 'nothing attached'})")
+        return removed
+
     # ---- batch ---------------------------------------------------------------------
     def apply(self, op: dict[str, Any]) -> Any:
         """Apply one operation dict (``{"op": "add_symbol", ...}``)."""
@@ -583,6 +702,15 @@ class Schematic:
             return handler(self, **args)
         except TypeError as exc:
             raise SchematicError(f"bad arguments for {name}: {exc}") from exc
+
+
+def _key(x: float, y: float) -> tuple[float, float]:
+    return (round(float(x), 2), round(float(y), 2))
+
+
+def _xy(node: SList) -> tuple[float, float]:
+    at = node.find("at")
+    return (_f(at.value(0)), _f(at.value(1))) if at is not None else (0.0, 0.0)
 
 
 def _pin_pair(value: str) -> tuple[str, str]:
@@ -606,6 +734,10 @@ OPERATIONS: dict[str, Callable[..., Any]] = {
     "no_connect_pin": lambda s, pin: s.no_connect_pin(*_pin_pair(pin)),
     "connect_pins": lambda s, a, b: s.connect_pins(_pin_pair(a), _pin_pair(b)),
     "connect_pin_to_net": lambda s, pin, net, kind="label": s.connect_pin_to_net(*_pin_pair(pin), net, kind),
+    "disconnect_pin": lambda s, pin: s.disconnect_pin(*_pin_pair(pin)),
+    "remove_item": lambda s, uuid: s.remove_item(uuid),
+    "remove_label": lambda s, text, x=None, y=None: s.remove_label(text, x, y),
+    "remove_wire": lambda s, x, y: s.remove_wire(x, y),
 }
 
 
