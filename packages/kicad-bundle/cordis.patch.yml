@@ -14,6 +14,7 @@
         approval: follow
         restrictToWorkspace: true
         autoErc: true
+        autoDrc: true
         autoRender: true
     - id: kicad-skills
       name: 'dsh-kicad-skills'

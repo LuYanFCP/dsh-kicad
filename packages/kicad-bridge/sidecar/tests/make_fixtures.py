@@ -1,4 +1,5 @@
-"""Regenerate tests/fixtures with the sidecar's own editor (needs KiCad symbol libraries).
+"""Regenerate tests/fixtures with the sidecar's own editor (needs KiCad symbol libraries; the board
+fixture also needs KiCad's pcbnew Python module, i.e. KiCad's Python).
 
     python tests/make_fixtures.py
 """
@@ -52,8 +53,54 @@ def blank():
     project("blank")
 
 
+def rc_board():
+    """A 50 x 30 mm two-layer board with J1, R1 and C1 placed but unrouted (4 missing connections).
+
+    Written by KiCad itself through its pcbnew Python module (run this with KiCad's Python), so the board
+    tests start from a file in KiCad's own format."""
+    try:
+        import pcbnew  # type: ignore
+    except ImportError:
+        print("rc_board skipped: KiCad's pcbnew Python module is not importable")
+        return
+    d = os.path.join(HERE, "fixtures", "rc_board")
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, "rc_board.kicad_pcb")
+    board = pcbnew.NewBoard(path)
+    nets = {}
+    for name in ("IN", "OUT", "GND"):
+        nets[name] = pcbnew.NETINFO_ITEM(board, name)
+        board.Add(nets[name])
+    libs = "/usr/share/kicad/footprints"
+    for lib, name, ref, value, x, y, rot, pads in [
+        ("Connector_PinHeader_2.54mm", "PinHeader_1x03_P2.54mm_Vertical", "J1", "IN_OUT_GND", 105, 112.46, 0, {"1": "IN", "2": "OUT", "3": "GND"}),
+        ("Resistor_SMD", "R_0603_1608Metric", "R1", "10k", 120, 110, 0, {"1": "IN", "2": "OUT"}),
+        ("Capacitor_SMD", "C_0603_1608Metric", "C1", "100n", 132, 118, 90, {"1": "OUT", "2": "GND"}),
+    ]:
+        fp = pcbnew.FootprintLoad(os.path.join(libs, f"{lib}.pretty"), name)
+        fp.SetFPID(pcbnew.LIB_ID(lib, name))
+        fp.SetReference(ref)
+        fp.SetValue(value)
+        fp.SetPosition(pcbnew.VECTOR2I_MM(x, y))
+        fp.SetOrientationDegrees(rot)
+        board.Add(fp)
+        for pad in fp.Pads():
+            pad.SetNet(nets[pads[pad.GetNumber()]])
+    outline = pcbnew.PCB_SHAPE(board, pcbnew.SHAPE_T_RECTANGLE)
+    outline.SetStart(pcbnew.VECTOR2I_MM(100, 100))
+    outline.SetEnd(pcbnew.VECTOR2I_MM(150, 130))
+    outline.SetLayer(pcbnew.Edge_Cuts)
+    outline.SetWidth(pcbnew.FromMM(0.05))
+    board.Add(outline)
+    pcbnew.SaveBoard(path, board)
+    prl = os.path.join(d, "rc_board.kicad_prl")
+    if os.path.exists(prl):
+        os.unlink(prl)
+
+
 if __name__ == "__main__":
     rc_filter()
     erc_errors()
     blank()
+    rc_board()
     print("fixtures written")

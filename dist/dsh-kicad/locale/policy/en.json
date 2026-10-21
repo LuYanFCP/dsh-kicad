@@ -1,1 +1,1 @@
-{ "meta": { "title": "KiCad policy", "description": "Asks before KiCad design edits, keeps writes inside the project, re-runs ERC after every edit, and tells the model about the open KiCad project." } }
+{ "meta": { "title": "KiCad policy", "description": "Asks before KiCad design edits, keeps writes inside the project, re-runs ERC/DRC after every edit, and tells the model about the open KiCad project." } }

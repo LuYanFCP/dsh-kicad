@@ -10,8 +10,8 @@ KiCad for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (d
 
 | Surface | What it does |
 |---|---|
-| **Tools** (`kicad_*`) | `doctor` (is this machine ready: kicad-cli and KiCad 8+, libraries, Python, with fixes and install commands), `read_schematic`, `list_components`, `get_symbol_pins`, `list_nets` (KiCad netlist), `search_symbols` (installed libraries), `erc`, `drc`, `render` (SVG, PNG attached as an image for image-capable models), `export` (netlist/BOM), `create_schematic`, and `edit_schematic` — an atomic batch of edits (add/move/remove symbols, set values/footprints/properties, wires, labels, power symbols, junctions, no-connects, pin-to-pin wires routed around parts and other nets, pin-to-net connections, plus layout by function: titled block frames, moving a part or a whole block together with its wiring, page size and title block). Untouched file text stays byte-identical. |
-| **Policy** | Design edits go through dsh approval (`ask`); writes are confined to the session's working directory (a monotonic guard); after every successful edit KiCad ERC runs and its verdict is appended to the tool result; the system prompt gets stable KiCad working rules and a dynamic "KiCad project in this directory + last ERC" context. |
+| **Tools** (`kicad_*`) | `doctor` (is this machine ready: kicad-cli and KiCad 8+, libraries, Python, with fixes and install commands), `read_schematic`, `list_components`, `get_symbol_pins`, `list_nets` (KiCad netlist), `search_symbols` (installed libraries), `erc`, `drc`, `render` (SVG, PNG attached as an image for image-capable models), `export` (netlist/BOM), `create_schematic`, and `edit_schematic` — an atomic batch of edits (add/move/remove symbols, set values/footprints/properties, wires, labels, power symbols, junctions, no-connects, pin-to-pin wires routed around parts and other nets, pin-to-net connections, plus layout by function: titled block frames, moving a part or a whole block together with its wiring, page size and title block); for boards `read_pcb` (outline, layers, rules and net classes, footprints with courtyards and pad nets, zones, DRC's unrouted count) and `edit_pcb` — an atomic batch (board outline and mounting holes, moving, flipping and locking footprints, design rules and net classes in the `.kicad_pro`, tracks with pad-to-pad endpoints, vias, zones, keepouts, silkscreen text and reference designators, removal by uuid). Untouched file text stays byte-identical. |
+| **Policy** | Design edits go through dsh approval (`ask`); writes are confined to the session's working directory (a monotonic guard); after every successful edit KiCad ERC (schematic) or DRC (board, zones refilled) runs and its verdict is appended to the tool result; the system prompt gets stable KiCad working rules and a dynamic "KiCad project in this directory + last ERC/DRC" context. |
 | **Skills** | `kicad-agent-workflow`, `kicad-erc-triage`, `kicad-schematic-design`. |
 | **Commands** | `/erc`, `/drc`, `/bom` (model-free, run on the project's root design), `/kicad-render`, `/kicad-doctor` (environment check), `/kicad-install` (install KiCad, see below). |
 | **Agent preset** | `eda` — a standard-like tool set with an electronics-design persona. The KiCad tools are global, so every preset can use them. |
@@ -27,7 +27,7 @@ dsh-kicad-bundle  (cordis.patch.yml: global rows + presets/eda.patch.yml)
 │    └─ sidecar/        Python ≥3.10, stdlib-only core: lossless .kicad_sch S-expression editing, symbol libraries,
 │                       pin geometry, kicad-cli (ERC/DRC/netlist/BOM/SVG); optional extras: png (cairosvg), ipc (kicad-python)
 ├─ dsh-tool-kicad       Host  kicad_* tools (defineTool), paths resolved against the session working directory
-├─ dsh-kicad-policy     Host  tools.guard + tools/pre-execute (ask/deny) + tools/post-execute (auto ERC) + prompt section/context
+├─ dsh-kicad-policy     Host  tools.guard + tools/pre-execute (ask/deny) + tools/post-execute (auto ERC/DRC) + prompt section/context
 ├─ dsh-kicad-skills     Host  skill provider + /erc /drc /bom /kicad-render
 └─ dsh-client-ui-kicad  Client sidebarRightTabs type + tool.call.toolview rows + plugins.row.config pages
 kicad-plugin/           KiCad IPC plugin ("Open in DSH")
@@ -134,7 +134,8 @@ Copy `kicad-plugin/` into KiCad's IPC plugin directory (KiCad 9/10: the `plugins
 | | `kicadCli` *(live)* | auto | kicad-cli path |
 | | `requestTimeoutMs` | `300000` | |
 | `kicad-policy` | `approval` *(live)* | `ask` | `ask` / `allow` for design edits |
-| | `autoErc` *(live)* | `true` | ERC after each edit |
+| | `autoErc` *(live)* | `true` | ERC after each schematic edit |
+| | `autoDrc` *(live)* | `true` | DRC after each board edit (with `--refill-zones` when the board has zones) |
 | | `autoRender` *(live)* | `true` | refresh the sidebar SVG after each edit |
 | | `restrictToWorkspace`, `extraRoots` | `true`, `[]` | write confinement |
 | | `guidance`, `projectContext` | `true` | prompt section / dynamic context |
@@ -147,7 +148,7 @@ Copy `kicad-plugin/` into KiCad's IPC plugin directory (KiCad 9/10: the `plugins
 ```sh
 pnpm install && pnpm run build
 pnpm test            # vitest: host packages against dsh's real ToolRuntime/SkillRegistry + real sidecar; client in jsdom
-pnpm run test:py     # pytest: S-expression round trip (KiCad demo files), editing, kicad-cli, MCP server
+pnpm run test:py     # pytest: S-expression round trip (KiCad demo files), schematic and board editing judged by kicad-cli, MCP server
 python packages/kicad-bridge/sidecar/tests/make_fixtures.py   # regenerate fixtures with the editor itself
 ```
 

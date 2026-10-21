@@ -5,9 +5,9 @@
  * - `ctx.tools.guard()`      monotonic denial of writes outside the project
  * - `tools/pre-execute`      design edits follow the session's dsh permissions
  *                            (read-only denies; `approval: ask` adds an approval card)
- * - `tools/post-execute`     a successful edit is followed by KiCad ERC, whose
- *                            verdict is appended to the tool result
- * - `tools/result`           remembers the latest ERC per schematic
+ * - `tools/post-execute`     a successful edit is followed by KiCad ERC (schematic)
+ *                            or DRC (board), whose verdict is appended to the tool result
+ * - `tools/result`           remembers the latest ERC/DRC per design file
  * - `systemPrompt.section`   stable KiCad working rules (cache-friendly)
  * - `systemPrompt.context`   the KiCad project found in the working directory
  */
@@ -35,6 +35,8 @@ export interface Config {
   extraRoots: string[]
   /** Run KiCad ERC after every successful schematic edit and append the verdict. */
   autoErc: Volatile<boolean>
+  /** Run KiCad DRC (zones refilled) after every successful board edit and append the verdict. */
+  autoDrc: Volatile<boolean>
   /** Refresh the SVG render used by the sidebar viewer after every edit. */
   autoRender: Volatile<boolean>
   /** Add the KiCad working rules section to the system prompt. */
@@ -48,6 +50,7 @@ export const Config: z<Config> = z.object({
   restrictToWorkspace: z.boolean().default(true).description('Only allow KiCad writes inside the working directory.'),
   extraRoots: z.array(z.string()).default([]).description('Additional directories KiCad tools may write to.'),
   autoErc: z.boolean().default(true).volatile().description('Run ERC after every schematic edit.'),
+  autoDrc: z.boolean().default(true).volatile().description('Run DRC after every board edit.'),
   autoRender: z.boolean().default(true).volatile().description('Re-render the sidebar SVG after every schematic edit.'),
   guidance: z.boolean().default(true).description('Add KiCad working rules to the system prompt.'),
   projectContext: z.boolean().default(true).description('Tell the model which KiCad project is open.'),
@@ -62,11 +65,15 @@ export const GUIDANCE = `# KiCad (EDA) work
 - Draw the circuit with wires: connect parts that work together with connect_pins (it routes around parts and other nets). Use power symbols for supply rails and net labels only between blocks or across the page, not for two parts side by side. Place parts so the pins you will wire face each other.
 - Fix mistakes with disconnect_pin / remove_item / move_symbol. Never rebuild or rewrite a schematic file to change its layout.
 - Organise a schematic by function: one titled frame per block (add_block / move_block), parts inside a block wired together, blocks connected only through net labels and power symbols, never through wires that cross a frame.
-- KiCad decides correctness: after edits read the ERC verdict appended to the result (or run kicad_erc / kicad_drc). Do not declare a design correct while KiCad reports errors.
+- Boards: read with kicad_read_pcb (outline, footprints with courtyards and pad nets, rules, unrouted count), then change them with one kicad_edit_pcb batch: outline and mounting holes, placement, rules and net classes, tracks (route pad to pad with "REF:PAD" endpoints), vias, zones, keepouts, silkscreen.
+- KiCad decides correctness: after edits read the ERC/DRC verdict appended to the result (or run kicad_erc / kicad_drc). Do not declare a design correct while KiCad reports errors or unrouted connections.
 - Coordinates are millimetres, Y grows downward, on the 1.27 mm grid.
 - If a kicad_* tool fails because KiCad or Python is missing or too old, run kicad_doctor and give the user its fix. Do not install software yourself; the user installs KiCad (the doctor panel's Install button or /kicad-install).`
 
 const isKiCadTool = (name: string): name is KiCadToolName => Object.hasOwn(TOOL_ACCESS, name)
+
+/** The KiCad check that follows a successful edit of each kind of design file. */
+const AUTO_CHECK: Readonly<Record<string, 'erc' | 'drc'>> = { kicad_edit_schematic: 'erc', kicad_edit_pcb: 'drc' }
 
 /** Tools whose path arguments must stay inside the workspace. */
 const GUARDED: ReadonlySet<string> = new Set(
@@ -120,26 +127,29 @@ export function apply(ctx: Context, config: Config): void {
   {
     ctx.on('tools/post-execute', async (exec, result, next): Promise<PostToolDecision> => {
       const decision = await next()
-      if (exec.name !== 'kicad_edit_schematic' || result.isError || decision.kind !== 'accept') return decision
+      const check = AUTO_CHECK[exec.name]
+      if (!check || result.isError || decision.kind !== 'accept') return decision
       const args = exec.arguments as { path?: string, dry_run?: boolean }
       if (args.dry_run || typeof args.path !== 'string') return decision
       const path = resolveArg(cwdOf(exec), args.path)
-      if (config.autoRender.get()) {
+      if (check === 'erc' && config.autoRender.get()) {
         // Fire and forget: the sidebar viewer watches the SVG file.
         void ctx.kicad.call('render', { path, format: 'svg' }).catch(() => undefined)
       }
-      if (!config.autoErc.get()) return decision
+      if (!(check === 'erc' ? config.autoErc : config.autoDrc).get()) return decision
+      const label = check.toUpperCase()
       let note: string
       try {
-        const erc = await ctx.kicad.call<CheckReport>('erc', { path }, exec.signal)
-        if (erc.ok && erc.value) {
-          memory.remember(path, erc.value)
-          note = `Automatic ${formatCheck(erc.value)}`
+        // DRC refills zones itself when the board has any (the file is not changed).
+        const report = await ctx.kicad.call<CheckReport>(check, { path }, exec.signal)
+        if (report.ok && report.value) {
+          memory.remember(path, report.value)
+          note = `Automatic ${formatCheck(report.value)}`
         } else {
-          note = `Automatic ERC could not run: ${erc.text}`
+          note = `Automatic ${label} could not run: ${report.text}`
         }
       } catch (error) {
-        note = `Automatic ERC could not run: ${(error as Error).message}`
+        note = `Automatic ${label} could not run: ${(error as Error).message}`
       }
       const base = 'content' in decision && decision.content ? decision.content : result.content
       return { ...decision, content: [...base, { type: 'text', text: note }] } as PostToolDecision
@@ -147,7 +157,7 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   ctx.on('tools/result', (exec, result) => {
-    if (exec.name !== 'kicad_erc' || result.isError) return
+    if ((exec.name !== 'kicad_erc' && exec.name !== 'kicad_drc') || result.isError) return
     const value = (result as { value?: unknown }).value as CheckReport & { path?: string } | undefined
     if (value?.path) memory.remember(value.path, value)
   })
@@ -172,7 +182,7 @@ export function apply(ctx: Context, config: Config): void {
 
 /** The audited approval reason plus localized prompt text for one design write. */
 export function describeEdit(tool: string, args: { path?: string, operations?: Array<{ op?: string }> }): Pick<Extract<PreToolDecision, { kind: 'ask' }>, 'reason' | 'displayReason'> {
-  const file = args.path ? basename(args.path) : 'a schematic'
+  const file = args.path ? basename(args.path) : 'a design file'
   if (tool === 'kicad_create_schematic') {
     return { reason: `create ${args.path}`, displayReason: { en: `Create KiCad schematic ${file}`, zh: `创建 KiCad 原理图 ${file}` } }
   }

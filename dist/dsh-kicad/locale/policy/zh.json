@@ -1,1 +1,1 @@
-{ "meta": { "title": "KiCad 策略", "description": "KiCad 设计修改前请求审批、限制只写当前工程目录、每次修改后自动跑 ERC，并向模型注入当前工程上下文。" } }
+{ "meta": { "title": "KiCad 策略", "description": "KiCad 设计修改前请求审批、限制只写当前工程目录、每次修改后自动跑 ERC/DRC，并向模型注入当前工程上下文。" } }

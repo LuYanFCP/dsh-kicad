@@ -191,13 +191,15 @@ class KiCadCli:
                 report = json.load(fh)
         return normalize_report(report, "erc")
 
-    def drc(self, board: str, severity: str = "all", schematic_parity: bool = False) -> dict[str, Any]:
+    def drc(self, board: str, severity: str = "all", schematic_parity: bool = False, refill_zones: bool = False) -> dict[str, Any]:
         with tempfile.TemporaryDirectory(prefix="dsh-kicad-drc-") as tmp:
             out = os.path.join(tmp, "drc.json")
             sev = {"all": "--severity-all", "error": "--severity-error", "warning": "--severity-warning"}[severity]
             args = ["pcb", "drc", "--format", "json", "--units", "mm", sev, "-o", out]
             if schematic_parity:
                 args.append("--schematic-parity")
+            if refill_zones:  # fills in memory only; the board file is not saved
+                args.append("--refill-zones")
             self.run(*args, board, cwd=os.path.dirname(board))
             with open(out, encoding="utf-8") as fh:
                 report = json.load(fh)
@@ -309,6 +311,7 @@ def normalize_report(report: dict[str, Any], kind: str) -> dict[str, Any]:
     active = [v for v in violations if not v.get("excluded")]
     counts = Counter(v["severity"] for v in active)
     by_type = Counter(v["type"] for v in active)
+    extra = {"unrouted": sum(1 for v in active if v.get("category") == "unconnected")} if kind == "drc" else {}
     return {
         "kind": kind,
         "source": report.get("source"),
@@ -318,6 +321,7 @@ def normalize_report(report: dict[str, Any], kind: str) -> dict[str, Any]:
         "counts": {"error": counts.get("error", 0), "warning": counts.get("warning", 0),
                    "exclusion": len(violations) - len(active), "total": len(active)},
         "by_type": dict(by_type.most_common()),
+        **extra,
         "violations": violations,
     }
 

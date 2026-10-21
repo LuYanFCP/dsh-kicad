@@ -86,7 +86,7 @@ class FootprintLibraries:
             out["pads"] = names
         return out
 
-    def get(self, lib_id: str) -> dict:
+    def path(self, lib_id: str) -> str:
         if ":" not in lib_id:
             raise LookupError(f"footprint id must look like 'Library:Name', got '{lib_id}'")
         nick, name = lib_id.split(":", 1)
@@ -94,7 +94,15 @@ class FootprintLibraries:
         path = os.path.join(d, f"{name}.kicad_mod") if d else None
         if not path or not os.path.isfile(path):
             raise LookupError(f"footprint '{lib_id}' not found")
-        return {"lib_id": lib_id, "exists": True, **self.details(path, pads=True)}
+        return path
+
+    def get(self, lib_id: str) -> dict:
+        return {"lib_id": lib_id, "exists": True, **self.details(self.path(lib_id), pads=True)}
+
+    def load(self, lib_id: str):
+        """The parsed ``(footprint ...)`` node of a library footprint, e.g. for ``Board.add_footprint``."""
+        with open(self.path(lib_id), encoding="utf-8") as fh:
+            return parse(fh.read()).root
 
     def search(self, query: str, library: str | None = None, limit: int = 20, pads: bool = False) -> list[dict]:
         """Match all whitespace-separated terms against the footprint id (case-insensitive, '*' wildcards allowed)."""

@@ -18,6 +18,7 @@ export const BRIDGE_FIELDS: Field[] = [
 export const POLICY_FIELDS: Field[] = [
   { key: 'approval', label: 'settings.approval', kind: 'check', on: 'ask', off: 'follow' },
   { key: 'autoErc', label: 'settings.autoErc', kind: 'check' },
+  { key: 'autoDrc', label: 'settings.autoDrc', kind: 'check' },
   { key: 'autoRender', label: 'settings.autoRender', kind: 'check' },
 ]
 
@@ -100,4 +101,5 @@ export const BridgeSettings = createSettingsCard(BRIDGE_FIELDS, bridgeSummary)
 export const PolicySettings = createSettingsCard(POLICY_FIELDS, (v, tr) => tr('settings.summaryPolicy', {
   approval: v.approval === 'ask' ? tr('common.on') : tr('common.off'),
   erc: v.autoErc === false ? tr('common.off') : tr('common.on'),
+  drc: v.autoDrc === false ? tr('common.off') : tr('common.on'),
 }))

@@ -10,10 +10,10 @@ import {
   type Block, type Context, type ImageRef, type ToolDefinition, type ToolExecution,
 } from './dsh.ts'
 import type { DoctorReport } from 'dsh-kicad-bridge'
-import { formatCheck, formatJson, type CheckReport } from './format.ts'
+import { formatBoard, formatCheck, formatEdit, formatJson, type BoardSummary, type CheckReport, type EditValue } from './format.ts'
 
-export { formatCheck, formatJson }
-export type { CheckReport }
+export { formatBoard, formatCheck, formatEdit, formatJson }
+export type { BoardSummary, CheckReport, EditValue }
 
 export const name = 'dsh-tool-kicad'
 export const inject = ['tools', 'kicad']
@@ -34,12 +34,14 @@ export const TOOL_ACCESS = {
   kicad_export: 'write',
   kicad_create_schematic: 'write',
   kicad_edit_schematic: 'write',
+  kicad_read_pcb: 'read',
+  kicad_edit_pcb: 'write',
 } as const
 
 export type KiCadToolName = keyof typeof TOOL_ACCESS
 
 /** Tools that change design files and therefore go through approval and ERC. */
-export const DESIGN_WRITE_TOOLS: readonly KiCadToolName[] = ['kicad_create_schematic', 'kicad_edit_schematic']
+export const DESIGN_WRITE_TOOLS: readonly KiCadToolName[] = ['kicad_create_schematic', 'kicad_edit_schematic', 'kicad_edit_pcb']
 
 /** Argument names holding file paths, per tool (for the policy's path guard). */
 export const PATH_ARGUMENTS: Record<KiCadToolName, readonly string[]> = {
@@ -57,9 +59,12 @@ export const PATH_ARGUMENTS: Record<KiCadToolName, readonly string[]> = {
   kicad_export: ['path', 'output'],
   kicad_create_schematic: ['path'],
   kicad_edit_schematic: ['path'],
+  kicad_read_pcb: ['path'],
+  kicad_edit_pcb: ['path'],
 }
 
 const SCH = { type: 'string', required: true, description: 'Path to a .kicad_sch file (relative to the working directory or absolute).' } as const
+const PCB = { type: 'string', required: true, description: 'Path to a .kicad_pcb file (relative to the working directory or absolute).' } as const
 const JSON_OUT = { schema: { type: 'json' }, render: (_args: unknown, value: unknown): Block[] => [{ type: 'text', text: formatJson(value) }] } as const
 
 export interface Config {
@@ -186,11 +191,12 @@ export function apply(ctx: Context, config: Config = {}): void {
     }),
     defineTool({
       name: 'kicad_drc',
-      description: "Run KiCad's Design Rules Check on a .kicad_pcb (optionally with schematic parity). KiCad's verdict is authoritative.",
+      description: "Run KiCad's Design Rules Check on a .kicad_pcb (optionally with schematic parity). KiCad's verdict is authoritative; unrouted connections count as errors. Zones are refilled first when the board has any.",
       parameters: {
         path: { type: 'string', required: true, description: 'Path to a .kicad_pcb file.' },
         severity: { type: 'string', enum: ['all', 'error', 'warning'] },
         schematic_parity: { type: 'boolean' },
+        refill_zones: { type: 'boolean', description: 'Refill zones before checking (in memory only). Default: when the board has zones.' },
       },
       output: {
         schema: { type: 'json' },
@@ -310,6 +316,58 @@ export function apply(ctx: Context, config: Config = {}): void {
         return await ctx.kicad.run('edit_schematic', { ...args, path: at(exec, args.path) }, exec.signal) as never
       },
     }),
+    defineTool({
+      name: 'kicad_read_pcb',
+      description: 'Summarize a KiCad board: outline size, copper layers and thickness, design rules and net classes (from the .kicad_pro), every footprint (reference, value, footprint, position in mm, rotation, front/back side, locked, courtyard box, pad nets), zones, nets, and KiCad DRC\'s count of unrouted connections. Start here before editing a board.',
+      parameters: {
+        path: PCB,
+        include_footprints: { type: 'boolean', description: 'Include the footprint list (default true).' },
+        include_pads: { type: 'boolean', description: 'Also list every pad with its absolute position and layers.' },
+        include_items: { type: 'boolean', description: 'Also list tracks, vias, texts and outline shapes with their uuids (for remove_item).' },
+        drc: { type: 'boolean', description: 'Run KiCad DRC for the unrouted count and verdict (default true).' },
+      },
+      output: {
+        schema: { type: 'json' },
+        render: (_args, value) => [{ type: 'text', text: formatBoard(value as unknown as BoardSummary) }],
+      },
+      isConcurrencySafe: () => true,
+      async execute(args, exec) {
+        return await ctx.kicad.run('read_pcb', { ...args, path: at(exec, args.path) }, exec.signal) as never
+      },
+    }),
+    defineTool({
+      name: 'kicad_edit_pcb',
+      description: [
+        'Apply a batch of edits to one .kicad_pcb atomically (all succeed or nothing is written); untouched text stays byte-identical. Design rules and net classes are stored in the board\'s .kicad_pro, which the same batch updates.',
+        'Millimetres, Y grows downward, rotation in degrees counter-clockwise; a pad is written "REF:PAD".',
+        'Outline: set_board_outline{width,height,corner_radius?,x?,y?} (rectangle; x,y is the top-left corner, default: the old outline\'s corner or centred on the parts) or set_board_outline{points:[[x,y],...]}; it replaces everything on Edge.Cuts. add_mounting_hole{x,y,drill?(3.2),plated?,footprint?,reference?}.',
+        'Placement: move_footprint{reference,x?,y?,rotation?,side?:front|back} (flipping to the back mirrors the part as KiCad does); move_footprints{references,dx,dy}; lock_footprint{reference,locked?} (locked parts refuse to move).',
+        'Rules: set_design_rules{min_clearance?,min_track_width?,min_via_diameter?,min_via_annular_width?,min_through_hole_diameter?,min_hole_to_hole?,min_hole_clearance?,min_copper_edge_clearance?,min_silk_clearance?,min_text_height?,...}; set_net_class{name,nets?,track_width?,clearance?,via_diameter?,via_drill?} (nets move to that class; tracks and vias on them default to its sizes).',
+        'Copper: add_track{points:[[x,y] | "REF:PAD",...],net?,layer?(F.Cu),width?} (pad endpoints snap to the pad centre; the pad must be on the track\'s net and layer); add_via{x,y,net,diameter?,drill?}; add_zone{net,layer | layers,outline?("board" | [[x,y],...]),priority?,clearance?,connect_pads?:thermal|solid|none}; add_keepout{outline,layers?,tracks?,vias?,pads?,copperpour?,footprints?} (true = not allowed).',
+        'Silkscreen: add_text{text,x,y,layer?(F.SilkS),size?,thickness?,rotation?}; set_reference_text{reference,x?,y?,size?,thickness?,rotation?,hide?} (x,y on the board).',
+        'Undo: remove_item{uuid} removes a footprint, track, via, zone, text or outline shape (uuids from kicad_read_pcb include_items).',
+        'Keep one call to at most ~30 operations. Never rewrite a .kicad_pcb by hand. DRC runs automatically afterwards when the KiCad policy is enabled.',
+      ].join(' '),
+      parameters: {
+        path: PCB,
+        operations: {
+          type: 'array',
+          required: true,
+          items: { type: 'object', additionalProperties: true, properties: { op: { type: 'string', required: true } } },
+          description: 'Ordered edit operations.',
+        },
+        dry_run: { type: 'boolean', description: 'Validate without writing.' },
+      },
+      output: {
+        schema: { type: 'json' },
+        render: (_args, value) => [{ type: 'text', text: formatEdit(value as unknown as EditValue) }],
+        presentationMeta: (_args, value) => ({ changes: (value as unknown as EditValue).changes ?? [], written: (value as unknown as EditValue).written }),
+      },
+      async execute(args, exec) {
+        if (args.operations.length === 0) throw new Error('operations must not be empty')
+        return await ctx.kicad.run('edit_pcb', { ...args, path: at(exec, args.path) }, exec.signal) as never
+      },
+    }),
   ]
   for (const tool of tools) ctx.effect(() => ctx.tools.register(tool), `kicad tool ${tool.name}`)
 }
@@ -322,26 +380,12 @@ interface RenderValue {
   note?: string
 }
 
-interface EditValue {
-  path: string
-  written: boolean
-  applied: number
-  changes: string[]
-  results?: unknown[]
-}
-
 function renderContent(value: RenderValue): Block[] {
   const lines = [`Rendered ${value.path}`, ...value.svg.map(p => `svg: ${p}`), ...(value.png ?? []).map(p => `png: ${p}`)]
   if (value.note) lines.push(value.note)
   const blocks: Block[] = [{ type: 'text', text: lines.join('\n') }]
   if (value.image) blocks.push(imageBlock(value.image))
   return blocks
-}
-
-function formatEdit(value: EditValue): string {
-  const head = value.written ? `Wrote ${value.path} (${value.applied} operations).` : `Dry run on ${value.path}: ${value.applied} operations valid, nothing written.`
-  const results = value.results?.length ? `\nResults:\n${formatJson(value.results)}` : ''
-  return `${head}\n${value.changes.map(c => `- ${c}`).join('\n')}${results}`
 }
 
 /** Replayable data for the doctor card: statuses, fixes and install plans (no paths beyond kicad-cli). */

@@ -10883,13 +10883,14 @@ var en = {
   "settings.pythonHint": "Python 3.10+; empty uses python3 (python on Windows)",
   "settings.policy": "KiCad edit policy",
   "settings.approval": "Ask before every schematic edit (otherwise edits follow the session permissions)",
-  "settings.autoErc": "Run ERC after every edit",
+  "settings.autoErc": "Run ERC after every schematic edit",
+  "settings.autoDrc": "Run DRC after every board edit",
   "settings.autoRender": "Refresh the sidebar render after every edit",
   "settings.save": "Save",
   "settings.saved": "Saved",
   "settings.rejected": "The Host refused the change",
   "settings.summaryBridge": "kicad-cli: {cli}",
-  "settings.summaryPolicy": "Approval: {approval} \xB7 auto ERC: {erc}",
+  "settings.summaryPolicy": "Approval: {approval} \xB7 auto ERC: {erc} \xB7 auto DRC: {drc}",
   "doctor.title": "KiCad environment",
   "doctor.recheck": "Check again",
   "doctor.checking": "Checking\u2026",
@@ -10974,13 +10975,14 @@ var zh = {
   "settings.pythonHint": "Python 3.10+\uFF1B\u7559\u7A7A\u4F7F\u7528 python3\uFF08Windows \u4E3A python\uFF09",
   "settings.policy": "KiCad \u4FEE\u6539\u7B56\u7565",
   "settings.approval": "\u6BCF\u6B21\u4FEE\u6539\u539F\u7406\u56FE\u524D\u90FD\u8BF7\u6C42\u5BA1\u6279\uFF08\u5173\u95ED\u65F6\u8DDF\u968F\u4F1A\u8BDD\u7684\u6743\u9650\u8BBE\u7F6E\uFF09",
-  "settings.autoErc": "\u6BCF\u6B21\u4FEE\u6539\u540E\u8FD0\u884C ERC",
+  "settings.autoErc": "\u6BCF\u6B21\u4FEE\u6539\u539F\u7406\u56FE\u540E\u8FD0\u884C ERC",
+  "settings.autoDrc": "\u6BCF\u6B21\u4FEE\u6539\u7535\u8DEF\u677F\u540E\u8FD0\u884C DRC",
   "settings.autoRender": "\u6BCF\u6B21\u4FEE\u6539\u540E\u5237\u65B0\u4FA7\u8FB9\u680F\u6E32\u67D3",
   "settings.save": "\u4FDD\u5B58",
   "settings.saved": "\u5DF2\u4FDD\u5B58",
   "settings.rejected": "Host \u62D2\u7EDD\u4E86\u8BE5\u4FEE\u6539",
   "settings.summaryBridge": "kicad-cli\uFF1A{cli}",
-  "settings.summaryPolicy": "\u5BA1\u6279\uFF1A{approval} \xB7 \u81EA\u52A8 ERC\uFF1A{erc}",
+  "settings.summaryPolicy": "\u5BA1\u6279\uFF1A{approval} \xB7 \u81EA\u52A8 ERC\uFF1A{erc} \xB7 \u81EA\u52A8 DRC\uFF1A{drc}",
   "doctor.title": "KiCad \u73AF\u5883",
   "doctor.recheck": "\u91CD\u65B0\u68C0\u67E5",
   "doctor.checking": "\u68C0\u67E5\u4E2D\u2026",
@@ -11595,6 +11597,7 @@ var BRIDGE_FIELDS = [
 var POLICY_FIELDS = [
   { key: "approval", label: "settings.approval", kind: "check", on: "ask", off: "follow" },
   { key: "autoErc", label: "settings.autoErc", kind: "check" },
+  { key: "autoDrc", label: "settings.autoDrc", kind: "check" },
   { key: "autoRender", label: "settings.autoRender", kind: "check" }
 ];
 function toOps(fields, draft, current) {
@@ -11673,7 +11676,8 @@ function createBridgeSettings(remote) {
 var BridgeSettings = createSettingsCard(BRIDGE_FIELDS, bridgeSummary);
 var PolicySettings = createSettingsCard(POLICY_FIELDS, (v4, tr2) => tr2("settings.summaryPolicy", {
   approval: v4.approval === "ask" ? tr2("common.on") : tr2("common.off"),
-  erc: v4.autoErc === false ? tr2("common.off") : tr2("common.on")
+  erc: v4.autoErc === false ? tr2("common.off") : tr2("common.on"),
+  drc: v4.autoDrc === false ? tr2("common.off") : tr2("common.on")
 }));
 
 // src/client/Viewer.tsx
