@@ -161,6 +161,17 @@ class SymbolLibraries:
                         footprint=pick(_FP), pins=len(_PIN.findall(block)), power=bool(_POWER.search(block)),
                         extends=ext.group(1) if ext else None,
                     ))
+            # Derived symbols (extends) draw their pins from the parent in the same library.
+            by_id = {e.lib_id: e for e in entries}
+            for e in entries:
+                seen = 0
+                parent = e
+                while parent.extends and seen < 8:
+                    parent = by_id.get(f"{parent.lib_id.split(':', 1)[0]}:{parent.extends}", parent)
+                    seen += 1
+                if parent is not e and e.pins == 0:
+                    e.pins = parent.pins
+                    e.power = e.power or parent.power
             self._index = entries
         return self._index
 
