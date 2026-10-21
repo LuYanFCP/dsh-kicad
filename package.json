@@ -1,7 +1,7 @@
 {
   "name": "dsh-kicad",
-  "version": "0.3.0",
-  "description": "KiCad for DeepSeek Harness: schematic tools, ERC/DRC, approval policy, skills, commands, sidebar viewer and an EDA agent preset",
+  "version": "0.4.0",
+  "description": "KiCad for DeepSeek Harness: schematic and PCB tools (sync, placement, autorouting), ERC/DRC, fab output, approval policy, skills, commands, sidebar viewer and an EDA agent preset",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -64,7 +64,9 @@
     "eda",
     "schematic",
     "pcb",
-    "erc"
+    "erc",
+    "drc",
+    "gerber"
   ],
   "repository": {
     "type": "git",

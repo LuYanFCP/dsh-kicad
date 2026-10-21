@@ -101,7 +101,7 @@ const manifest = {
   main: './lib/index.js',
   exports,
   files: ['lib', 'sidecar', 'skills', 'presets', 'locale', 'third_party', 'icon.svg', 'cordis.patch.yml', 'LICENSE', 'README.md'],
-  keywords: ['dsh', 'dsh-bundle', 'kicad', 'eda', 'schematic', 'pcb', 'erc'],
+  keywords: ['dsh', 'dsh-bundle', 'kicad', 'eda', 'schematic', 'pcb', 'erc', 'drc', 'gerber'],
   engines: bundlePkg.engines,
   peerDependencies: {
     '@deepseek-ai/cordis': '^4.0.5',
