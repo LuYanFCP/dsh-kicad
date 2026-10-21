@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode, type WheelEvent } from 'react'
 import { orderPages, parseFileAddress, renderDir, sessionFileAddress } from './address.ts'
 import { KICAD_MISSING, KiCadNotice } from './Doctor.tsx'
+import { followEnabled, setFollowEnabled } from './follow.ts'
 import { InteractiveView } from './InteractiveView.tsx'
 import type { ClientRemote, TabBodyProps } from './dsh.ts'
 import { translate, type KiCadLocaleKey } from './locales.ts'
@@ -39,6 +40,7 @@ export function createViewer(remote: ClientRemote) {
   return function KiCadViewer(props: TabBodyProps): ReactNode {
     const tr = (key: KiCadLocaleKey, vars?: Record<string, string | number>): string => translate(props.t, key, vars)
     const [mode, setMode] = useState<Mode>(() => stored<Mode>(MODE_KEY, ['interactive', 'svg'], 'interactive'))
+    const [follow, setFollow] = useState(followEnabled)
     const [theme, setTheme] = useState(() => stored(THEME_KEY, ['kicad', 'witchhazel'], 'kicad'))
     const [fallback, setFallback] = useState<string | undefined>(undefined)
     const { tab } = props.useTabInfo()
@@ -56,14 +58,21 @@ export function createViewer(remote: ClientRemote) {
         <button type="button" className="dshk-btn" aria-pressed={effective === 'svg'} data-kicad-mode="svg" onClick={() => choose('svg')}>{tr('viewer.svg')}</button>
       </span>
     )
+    const followToggle = (
+      <label className="dshk-check dshk-follow" title={tr('viewer.followHint')}>
+        <input type="checkbox" checked={follow} data-kicad-follow onChange={(e) => { setFollow(e.target.checked); setFollowEnabled(e.target.checked) }} />
+        <span>{tr('viewer.follow')}</span>
+      </label>
+    )
     if (effective === 'svg' || file?.scope !== 'session' || !file.sessionId) {
-      return <SvgView {...props} modeSwitch={modeSwitch} notice={fallback ? tr('viewer.fellBack', { message: fallback }) : undefined} />
+      return <SvgView {...props} modeSwitch={<>{modeSwitch}{followToggle}</>} notice={fallback ? tr('viewer.fellBack', { message: fallback }) : undefined} />
     }
     return (
       <div className="dshk-root" data-kicad-viewer={file.path} data-kicad-mode-active="interactive">
         <style>{CSS}</style>
         <div className="dshk-bar">
           {modeSwitch}
+          {followToggle}
           <span className="dshk-spacer" />
           <label>
             {tr('viewer.theme')}{' '}

@@ -8,6 +8,7 @@ import { useState, type ComponentType, type ReactNode } from 'react'
 import { basename } from './address.ts'
 import { CheckList, DoctorPanel, KICAD_MISSING, readReport, StatusBadge } from './Doctor.tsx'
 import type { ClientRemote, ToolViewProps } from './dsh.ts'
+import { useFollowAgent } from './follow.ts'
 import { translate, type KiCadLocaleKey } from './locales.ts'
 import { CSS } from './styles.ts'
 
@@ -30,7 +31,7 @@ function argPath(props: ToolViewProps): string {
   try {
     const live = props.block.args?.text?.('path')
     if (typeof live === 'string' && live) return live
-    const raw = props.block.call?.argsRaw
+    const raw = props.block.call?.argsRaw ?? props.block.argsRaw
     const args = raw ? JSON.parse(raw) as { path?: unknown } : undefined
     return typeof args?.path === 'string' ? args.path : ''
   } catch {
@@ -96,6 +97,7 @@ export function EditCard(props: ToolViewProps): ReactNode {
   const tr = (key: KiCadLocaleKey, vars?: Record<string, string | number>): string => translate(props.t, key, vars)
   const [open, setOpen] = useState(false)
   const path = argPath(props)
+  useFollowAgent(props, path)
   if (props.phase !== 'result') {
     return <div className="dshk-card"><style>{CSS}</style><div className="dshk-card-head dshk-muted">{tr('card.editing', { file: basename(path) })}</div></div>
   }
@@ -194,4 +196,23 @@ export function withKiCadHint(remote: ClientRemote, Card: ComponentType<ToolView
 
 function round(n: number): number {
   return Math.round(n * 100) / 100
+}
+
+/** Row for kicad_create_schematic: one line, and the new design opens in the sidebar. */
+export function CreateCard(props: ToolViewProps): ReactNode {
+  const tr = (key: KiCadLocaleKey, vars?: Record<string, string | number>): string => translate(props.t, key, vars)
+  const path = argPath(props)
+  useFollowAgent(props, path)
+  const done = props.phase === 'result' && !props.block.isError
+  return (
+    <div className="dshk-card" data-kicad-card="create">
+      <style>{CSS}</style>
+      <div className="dshk-card-head">
+        <strong>{tr('card.create')}</strong>
+        <span className="dshk-muted">{props.phase === 'result' ? (done ? tr('card.created', { file: basename(path) }) : resultText(props).split('\n')[0]) : tr('card.creating', { file: basename(path) })}</span>
+        <span className="dshk-spacer" />
+        {done && path && <span className="dshk-muted dshk-code" role="link" onClick={() => props.openFile?.(path)}>{basename(path)}</span>}
+      </div>
+    </div>
+  )
 }
