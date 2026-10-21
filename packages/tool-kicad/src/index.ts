@@ -9,6 +9,7 @@ import {
   attachments, defineTool, imageBlock, imageCapable, resolveIn, sessionCwd,
   type Block, type Context, type ImageRef, type ToolDefinition, type ToolExecution,
 } from './dsh.ts'
+import type { DoctorReport } from 'dsh-kicad-bridge'
 import { formatCheck, formatJson, type CheckReport } from './format.ts'
 
 export { formatCheck, formatJson }
@@ -19,6 +20,7 @@ export const inject = ['tools', 'kicad']
 
 /** Whether a tool only reads the design (`read`) or writes files (`write`). */
 export const TOOL_ACCESS = {
+  kicad_doctor: 'read',
   kicad_read_schematic: 'read',
   kicad_list_components: 'read',
   kicad_get_symbol_pins: 'read',
@@ -41,6 +43,7 @@ export const DESIGN_WRITE_TOOLS: readonly KiCadToolName[] = ['kicad_create_schem
 
 /** Argument names holding file paths, per tool (for the policy's path guard). */
 export const PATH_ARGUMENTS: Record<KiCadToolName, readonly string[]> = {
+  kicad_doctor: [],
   kicad_read_schematic: ['path'],
   kicad_list_components: ['path'],
   kicad_get_symbol_pins: ['path'],
@@ -69,6 +72,20 @@ export function apply(ctx: Context, config: Config = {}): void {
   const at = (exec: Pick<ToolExecution, 'agent'>, path: string): string => resolveIn(sessionCwd(ctx, exec), path)
 
   const tools: ToolDefinition[] = [
+    defineTool({
+      name: 'kicad_doctor',
+      description: 'Check whether this machine can run the KiCad tools: kicad-cli present and KiCad 8+, symbol and footprint libraries, Python 3.10+, optional PNG rasterizer and kicad-python. Each check has a status and a fix; when KiCad is missing or too old the result lists install commands for this platform. Use it when a kicad_* tool fails with a KiCad/Python problem, then tell the user the fix. Do not install software yourself: the user installs KiCad (the KiCad doctor panel has an Install button, or /kicad-install).',
+      parameters: {},
+      output: {
+        schema: { type: 'json' },
+        render: (_args, value) => [{ type: 'text', text: (value as unknown as DoctorReport).text }],
+        presentationMeta: (_args, value) => doctorMeta(value as unknown as DoctorReport) as never,
+      },
+      isConcurrencySafe: () => true,
+      async execute(_args, exec) {
+        return await ctx.kicad.doctor(exec.signal) as never
+      },
+    }),
     defineTool({
       name: 'kicad_read_schematic',
       description: 'Summarize a KiCad schematic: title block, counts, components (reference, value, lib_id, footprint, position in mm), net labels, power nets and sub-sheets. Start here before editing.',
@@ -322,6 +339,22 @@ function formatEdit(value: EditValue): string {
   const head = value.written ? `Wrote ${value.path} (${value.applied} operations).` : `Dry run on ${value.path}: ${value.applied} operations valid, nothing written.`
   const results = value.results?.length ? `\nResults:\n${formatJson(value.results)}` : ''
   return `${head}\n${value.changes.map(c => `- ${c}`).join('\n')}${results}`
+}
+
+/** Replayable data for the doctor card: statuses, fixes and install plans (no paths beyond kicad-cli). */
+export function doctorMeta(report: DoctorReport): Record<string, unknown> {
+  return {
+    kind: 'doctor',
+    ok: report.ok,
+    status: report.status,
+    summary: report.summary,
+    kicad: report.kicad,
+    checks: report.checks.map(c => ({ id: c.id, label: c.label, status: c.status, required: c.required, summary: c.summary, ...(c.fix ? { fix: c.fix } : {}) })),
+    install: report.install.map(o => ({
+      id: o.id, label: o.label, command: o.command, needs_root: o.needs_root, runnable: o.runnable,
+      available: o.available, recommended: o.recommended, note: o.note, ...(o.url ? { url: o.url } : {}),
+    })),
+  }
 }
 
 /** Bounded, replayable data for the conversation card. */

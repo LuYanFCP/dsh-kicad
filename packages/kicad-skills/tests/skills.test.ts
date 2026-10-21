@@ -74,3 +74,68 @@ describe('/kicad-design', () => {
     expect(names).toContain('kicad-design-brief')
   })
 })
+
+describe('/kicad-doctor and /kicad-install', () => {
+  const option = (id: string, extra: Record<string, unknown> = {}) => ({
+    id, label: id, steps: [[id]], command: `${id} install kicad`, needs_root: false, runnable: true, available: true, recommended: false, note: '', ...extra,
+  })
+  const missing = {
+    ok: false, status: 'missing', summary: 'KiCad (kicad-cli) is not installed or was not found.', text: 'x',
+    kicad: { cli: null, source: null, version: null, minimum: '8.0' },
+    checks: [{ id: 'kicad_cli', label: 'kicad-cli', status: 'error', required: true, summary: 'kicad-cli was not found.', fix: 'Install it.' }],
+    install: [option('dnf', { needs_root: true, runnable: false, command: 'sudo dnf install -y kicad' }), option('flatpak', { recommended: true })],
+  }
+  function fakeCtx(report: Record<string, unknown>) {
+    const started: string[] = []
+    let job: Record<string, unknown> | undefined
+    const ctx = {
+      get: () => undefined,
+      kicad: {
+        doctor: async () => report,
+        install: async (id: string) => {
+          const o = (report.install as Array<{ id: string, needs_root: boolean, command: string }>).find(x => x.id === id)
+          if (!o) throw new Error('unknown install option')
+          if (o.needs_root) throw new Error(`needs administrator rights:\n${o.command}`)
+          started.push(id)
+          job = { id: 1, option: id, label: id, command: o.command, state: 'running', phase: 'installing', step: 1, steps: 1, startedAt: 0, log: ['$ x'] }
+          return job
+        },
+        installer: { get job() { return job }, cancel: () => job?.state === 'running' },
+      },
+    }
+    return { ctx: ctx as never, started }
+  }
+
+  it('/kicad-doctor prints each check with its fix, or JSON for the UI', async () => {
+    const { ctx } = fakeCtx(missing)
+    const command = skills.createCommands(ctx).find(c => c.name === 'kicad-doctor')!
+    const text = (await command.handler(invocation('')) as { text: string }).text
+    expect(text).toContain('✗ **kicad-cli**: kicad-cli was not found.')
+    expect(text).toContain('fix: Install it.')
+    expect(text).toContain('/kicad-install')
+    const json = JSON.parse((await command.handler(invocation('--json')) as { text: string }).text)
+    expect(json.status).toBe('missing')
+  })
+
+  it('/kicad-install lists the options and needs --yes to run one', async () => {
+    const { ctx, started } = fakeCtx(missing)
+    const plan = await skills.installCommand(ctx, '')
+    expect(plan).toContain('sudo dnf install -y kicad')
+    expect(plan).toContain('needs administrator rights: run it yourself')
+    expect(plan).toContain('`/kicad-install flatpak --yes` runs:')
+    expect(await skills.installCommand(ctx, 'flatpak')).toMatch(/This will run:[\s\S]*flatpak install kicad[\s\S]*--yes/)
+    expect(started).toEqual([])
+    await expect(skills.installCommand(ctx, 'dnf --yes')).rejects.toThrow(/administrator rights/)
+    expect(JSON.parse(await skills.installCommand(ctx, 'status --json'))).toEqual({ job: null })
+    const run = JSON.parse(await skills.installCommand(ctx, 'start flatpak --yes --json'))
+    expect(run.job.option).toBe('flatpak')
+    expect(started).toEqual(['flatpak'])
+    expect(await skills.installCommand(ctx, 'status')).toMatch(/^flatpak: running — step 1\/1/)
+    expect(JSON.parse(await skills.installCommand(ctx, 'cancel --json')).cancelled).toBe(true)
+  })
+
+  it('/kicad-install has nothing to do when KiCad is ready', async () => {
+    const { ctx } = fakeCtx({ ...missing, ok: true, status: 'ok', summary: 'Ready: KiCad 10.0.7.', install: [] })
+    expect(await skills.installCommand(ctx, '')).toBe('Ready: KiCad 10.0.7.\nNothing to install.')
+  })
+})
