@@ -389,7 +389,11 @@ class Schematic:
         lib_props = {p.value(0): p for p in lib.lists("property")}
         prefix = (lib_props["Reference"].value(1) if "Reference" in lib_props else "U") or "U"
         if is_power:
-            prefix = "#PWR"
+            # A power symbol whose reference lacks '#' is a real part to KiCad: it enters the netlist without a
+            # footprint and breaks schematic parity. Use the library's prefix (#PWR, #FLG) and keep the '#'.
+            prefix = prefix if prefix.startswith("#") else "#" + (prefix.rstrip("?") or "PWR")
+            if reference and not reference.startswith("#"):
+                reference = "#" + reference
         if not reference or reference.endswith("?"):
             reference = self.next_reference(prefix if not reference else reference[:-1])
         elif any(s.reference == reference for s in self.symbols()) and unit == 1:

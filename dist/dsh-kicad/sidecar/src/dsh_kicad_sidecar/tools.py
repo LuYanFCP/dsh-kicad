@@ -15,6 +15,7 @@ from .fab import EXTRAS, apply_preset, export_fab, list_presets, preset_names
 from .kicad_cli import KiCadCli, KiCadCliError, has_zones, parse_version, MIN_KICAD, svg_to_png
 from .schematic import OPERATIONS, Schematic, SchematicError, new_schematic_text
 from .pcb import OPERATIONS as PCB_OPERATIONS, Board, PcbError
+from .pcb_sync import update_pcb
 from .footprints import FootprintLibraries, default_footprint_dirs
 from . import geometry
 from .symbols import LibraryError, SymbolLibraries, default_symbol_dirs
@@ -172,6 +173,20 @@ TOOL_SPECS: list[ToolSpec] = [
              _obj({"path": {"type": "string", "description": "The .kicad_pcb or .kicad_pro of the project."},
                    "preset": {"type": "string", "enum": preset_names()},
                    "dry_run": {"type": "boolean", "default": False}}, []), writes=True),
+    ToolSpec("update_pcb", "Update a board from its schematic, headless (KiCad's Update PCB from Schematic). Creates "
+             "<schematic name>.kicad_pcb when missing (the installed KiCad's empty board, default stackup, parts packed inside a "
+             "placeholder outline). Refuses, writing nothing, with every REF:PIN that cannot be placed: symbols without a "
+             "footprint, footprints in no library, pins without a pad. On an existing board, placed parts keep position, rotation "
+             "and side; new parts are staged right of the outline; references, values, fields and nets follow the schematic "
+             "(renamed nets carry their tracks); footprints without a symbol are flagged, or deleted with delete_removed. "
+             "Untouched text stays byte-identical. Ends with KiCad's DRC including schematic parity.",
+             _obj({"schematic": SCH,
+                   "pcb": {"type": "string", "description": "The board (default: <schematic name>.kicad_pcb next to the schematic, which is where KiCad looks)."},
+                   "delete_removed": {"type": "boolean", "default": False, "description": "Delete footprints whose symbol is gone (locked ones stay)."},
+                   "dry_run": {"type": "boolean", "default": False, "description": "Report the changes without writing."},
+                   "copper_layers": {"type": "integer", "enum": [2, 4], "default": 2, "description": "Copper layers of a new board."},
+                   "drc": {"type": "boolean", "default": True, "description": "Run KiCad DRC with schematic parity afterwards."}},
+                  ["schematic"]), writes=True),
     ToolSpec("ipc_status", "Probe a running KiCad GUI through the IPC API (requires the 'ipc' extra and KiCad's API server enabled).", _obj({}, [])),
 ]
 
@@ -379,6 +394,23 @@ class Toolbox:
             files = [] if args.get("dry_run") else b.save()
         return {"path": full, "written": not args.get("dry_run"), "files": files, "applied": len(ops), "changes": b.changes,
                 "results": [r for r in results if r["result"] is not None]}
+
+    def tool_update_pcb(self, args):
+        schematic = self.resolve(args["schematic"], ".kicad_sch")
+        pcb = self.resolve(args["pcb"], ".kicad_pcb", must_exist=False) if args.get("pcb") else os.path.splitext(schematic)[0] + ".kicad_pcb"
+        layers = args.get("copper_layers", 2)
+        if layers not in (2, 4):
+            raise ToolError("copper_layers must be 2 or 4")
+        with self.lock(pcb):
+            return update_pcb(self.cli, schematic, pcb, delete_removed=bool(args.get("delete_removed")),
+                              dry_run=bool(args.get("dry_run")), copper_layers=layers, drc=args.get("drc", True) is not False,
+                              on_created=self.board_created)
+
+    def board_created(self, board: str) -> list[str]:
+        """Hook run after update_pcb writes a new board; returns change lines. A fab-preset step plugs in here
+        (``fab.apply_preset(board, name)``, e.g. from a ``preset`` argument) so a new board starts with the fab
+        house's rules instead of KiCad's defaults."""
+        return []
 
     def tool_render(self, args):
         path = self.resolve(args["path"], (".kicad_sch", ".kicad_pcb"))

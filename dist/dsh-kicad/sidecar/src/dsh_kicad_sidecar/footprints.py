@@ -42,22 +42,12 @@ class FootprintLibraries:
         self._index: list[dict] | None = None
 
     def libraries(self) -> dict[str, str]:
-        """Nickname → .pretty directory; the project fp-lib-table shadows global libraries."""
+        """Nickname → .pretty directory, resolved like KiCad (and schematic → board sync): the project
+        fp-lib-table, the user's global table, the stock table, then stock libraries no table lists."""
         if self._libs is None:
-            libs: dict[str, str] = {}
-            for d in reversed(self.global_dirs):
-                for path in glob.glob(os.path.join(d, "*.pretty")):
-                    libs[os.path.basename(path)[:-len(".pretty")]] = path
-            table = os.path.join(self.project_dir or "", "fp-lib-table")
-            if self.project_dir and os.path.isfile(table):
-                with open(table, encoding="utf-8") as fh:
-                    for lib in parse(fh.read()).root.lists("lib"):
-                        name, uri = lib.child_value("name"), lib.child_value("uri")
-                        if name and uri:
-                            uri = uri.replace("${KIPRJMOD}", self.project_dir)
-                            if os.path.isdir(uri):
-                                libs[name] = uri
-            self._libs = libs
+            from .lib_tables import LibTable  # deferred: lib_tables imports this module
+
+            self._libs = dict(LibTable("fp", self.project_dir, stock_dirs=self.global_dirs).libraries())
         return self._libs
 
     def index(self) -> list[dict]:

@@ -46,7 +46,7 @@ var MAX_LISTED = 60;
 function formatCheck(report) {
   const label = report.kind.toUpperCase();
   const verdict = report.passed ? "PASSED" : "FAILED";
-  const head = `${label} by KiCad ${report.kicad_version ?? ""}`.trim() + `${report.path ? ` on ${report.path}` : ""}: ${verdict} \u2014 ${report.counts.error} error(s), ${report.counts.warning} warning(s)` + (report.unrouted !== void 0 ? `, ${report.unrouted} unrouted` : "") + (report.counts.exclusion ? `, ${report.counts.exclusion} excluded` : "") + (report.schematic_parity_error ? `
+  const head = `${label} by KiCad ${report.kicad_version ?? ""}`.trim() + `${report.path ? ` on ${report.path}` : ""}: ${verdict} \u2014 ${report.counts.error} error(s), ${report.counts.warning} warning(s)` + (report.unrouted !== void 0 ? `, ${report.unrouted} unrouted` : "") + (report.parity !== void 0 ? `, ${report.parity} schematic parity issue(s)` : "") + (report.counts.exclusion ? `, ${report.counts.exclusion} excluded` : "") + (report.schematic_parity_error ? `
 Schematic parity was NOT checked: ${report.schematic_parity_error}` : "");
   const active = report.violations.filter((v) => !v.excluded);
   if (active.length === 0) return head;
@@ -63,6 +63,26 @@ Results:
 ${formatJson(value.results)}` : "";
   return `${head}
 ${value.changes.map((c) => `- ${c}`).join("\n")}${results}`;
+}
+var MAX_CHANGES = 80;
+function formatSync(v) {
+  const counts = Object.entries(v.counts).map(([kind, n]) => `${kind} ${n}`).join(", ");
+  const head = v.dry_run ? `Dry run, nothing written: ${v.changes.length ? `${v.created ? "creating" : "updating"} ${v.pcb} from ${v.schematic} would make ${v.changes.length} change(s) (${counts}).` : `${v.pcb} is already in sync with ${v.schematic}.`}` : v.written ? `${v.created ? "Created" : "Updated"} ${v.pcb} from ${v.schematic}: ${v.changes.length} change(s) (${counts}).` : `${v.pcb} is in sync with ${v.schematic}: nothing to change, nothing written.`;
+  const lines = [head, ...v.changes.slice(0, MAX_CHANGES).map((c) => `- ${c}`)];
+  if (v.changes.length > MAX_CHANGES) lines.push(`\u2026 ${v.changes.length - MAX_CHANGES} more`);
+  if (v.flagged.length) lines.push(`Footprints without a symbol, kept (${v.flagged.length}):`, ...v.flagged.map((f) => `- ${f}`));
+  if (v.staged.length) {
+    lines.push(`Staged right of the board outline, to be placed: ${v.staged.map((s) => `${s.reference} @ (${round(s.at[0])}, ${round(s.at[1])})`).join(", ")}`);
+  }
+  const o = v.board.outline;
+  lines.push(`Board: ${v.board.footprints} footprint(s), ${v.board.copper_layers.length} copper layers, format ${v.board.format}` + (o ? `, outline (${round(o[0])}, ${round(o[1])})\u2013(${round(o[2])}, ${round(o[3])})` : ", no outline"));
+  lines.push(...v.notes ?? []);
+  if (v.parity) {
+    const types = Object.entries(v.parity.by_type).map(([t, n]) => `${t}\xD7${n}`).join(", ");
+    const extra = v.parity.by_type.extra_footprint ? " Footprints without a symbol go with delete_removed: true." : "";
+    lines.push(v.parity.total === 0 ? "Schematic parity (KiCad DRC): 0 issues." : `Schematic parity (KiCad DRC): ${v.parity.total} issue(s) (${types}).${extra} Details: kicad_drc with schematic_parity.`);
+  }
+  return lines.join("\n");
 }
 var KEY_RULES = [
   "min_clearance",
@@ -187,9 +207,10 @@ var TOOL_ACCESS = {
   kicad_create_schematic: "write",
   kicad_edit_schematic: "write",
   kicad_read_pcb: "read",
-  kicad_edit_pcb: "write"
+  kicad_edit_pcb: "write",
+  kicad_update_pcb: "write"
 };
-var DESIGN_WRITE_TOOLS = ["kicad_create_schematic", "kicad_edit_schematic", "kicad_edit_pcb", "kicad_fab_preset"];
+var DESIGN_WRITE_TOOLS = ["kicad_create_schematic", "kicad_edit_schematic", "kicad_edit_pcb", "kicad_update_pcb", "kicad_fab_preset"];
 var PATH_ARGUMENTS = {
   kicad_doctor: [],
   kicad_read_schematic: ["path"],
@@ -208,7 +229,8 @@ var PATH_ARGUMENTS = {
   kicad_create_schematic: ["path"],
   kicad_edit_schematic: ["path"],
   kicad_read_pcb: ["path"],
-  kicad_edit_pcb: ["path"]
+  kicad_edit_pcb: ["path"],
+  kicad_update_pcb: ["schematic", "pcb"]
 };
 var FAB_PRESETS = ["jlcpcb", "pcbway"];
 var FAB_EXTRAS = ["ipc2581", "odb", "step"];
@@ -566,6 +588,34 @@ function apply(ctx, config = {}) {
         if (args.operations.length === 0) throw new Error("operations must not be empty");
         return await ctx.kicad.run("edit_pcb", { ...args, path: at(exec, args.path) }, exec.signal);
       }
+    }),
+    defineTool({
+      name: "kicad_update_pcb",
+      description: [
+        `Update PCB from Schematic, headless: create or update the board so it matches the schematic, as KiCad's "Update PCB from Schematic" does. Run it after the schematic passes ERC and every board symbol has a footprint, and again after every schematic change.`,
+        "A new board (<schematic name>.kicad_pcb, the file KiCad pairs with the schematic) gets KiCad's empty board, a default 2-layer stackup (copper_layers: 4 for four), every footprint packed in rows inside a placeholder outline, and KiCad's default design rules.",
+        'It refuses, writing nothing, with every REF:PIN that cannot go on the board: a symbol without a footprint (power symbols need a "#" reference), a footprint in no library, a pin without a pad of that number. Fix those in the schematic (set_footprint, or a footprint whose pads match the pins) and run it again.',
+        "On an existing board, placed footprints keep their position, rotation, side and lock; new ones are staged right of the outline for you to place (kicad_edit_pcb move_footprint); references, values, fields and pad nets follow the schematic; a renamed net keeps its tracks, vias and zones; a changed footprint is swapped in place; footprints whose symbol is gone are listed, and deleted only with delete_removed: true. Untouched text stays byte-identical; a second run changes nothing.",
+        "The result ends with KiCad's schematic parity count: the board matches the schematic only at 0. Use dry_run to preview."
+      ].join(" "),
+      parameters: {
+        schematic: SCH,
+        pcb: { type: "string", description: "The board (default: <schematic name>.kicad_pcb next to the schematic, where KiCad looks for it). Created when missing." },
+        delete_removed: { type: "boolean", description: "Delete footprints whose symbol is gone (default false: they are only listed). Locked ones stay." },
+        dry_run: { type: "boolean", description: "List the changes without writing." },
+        copper_layers: { type: "integer", enum: [2, 4], description: "Copper layers of a new board (default 2)." }
+      },
+      output: {
+        schema: { type: "json" },
+        render: (_args, value) => [{ type: "text", text: formatSync(value) }]
+      },
+      async execute(args, exec) {
+        return await ctx.kicad.run("update_pcb", {
+          ...args,
+          schematic: at(exec, args.schematic),
+          ...args.pcb ? { pcb: at(exec, args.pcb) } : {}
+        }, exec.signal);
+      }
     })
   ];
   for (const tool of tools) ctx.effect(() => ctx.tools.register(tool), `kicad tool ${tool.name}`);
@@ -650,6 +700,7 @@ export {
   formatFabGate,
   formatJson,
   formatPreset,
+  formatSync,
   inject,
   name
 };

@@ -207,6 +207,9 @@ class KiCadCli:
         failure = parity_failure(proc.stdout + proc.stderr) if schematic_parity else None
         if failure:
             result["schematic_parity_error"] = failure
+        elif schematic_parity:
+            # KiCad 10 reports parity findings as warnings, so "0 errors" says nothing about parity: count them.
+            result["parity"] = sum(1 for v in result["violations"] if v.get("category") == "schematic_parity" and not v.get("excluded"))
         return result
 
     # ---- exports -------------------------------------------------------------------

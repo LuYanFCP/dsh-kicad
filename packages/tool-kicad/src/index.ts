@@ -10,10 +10,10 @@ import {
   type Block, type Context, type ImageRef, type ToolDefinition, type ToolExecution,
 } from './dsh.ts'
 import type { DoctorReport } from 'dsh-kicad-bridge'
-import { formatBoard, formatCheck, formatEdit, formatFab, formatFabGate, formatJson, formatPreset, type BoardSummary, type CheckReport, type EditValue, type FabResult, type PresetResult } from './format.ts'
+import { formatBoard, formatCheck, formatEdit, formatFab, formatFabGate, formatJson, formatPreset, formatSync, type BoardSummary, type CheckReport, type EditValue, type FabResult, type PresetResult, type SyncValue } from './format.ts'
 
-export { formatBoard, formatCheck, formatEdit, formatFab, formatFabGate, formatJson, formatPreset }
-export type { BoardSummary, CheckReport, EditValue, FabResult, PresetResult }
+export { formatBoard, formatCheck, formatEdit, formatFab, formatFabGate, formatJson, formatPreset, formatSync }
+export type { BoardSummary, CheckReport, EditValue, FabResult, PresetResult, SyncValue }
 
 export const name = 'dsh-tool-kicad'
 export const inject = ['tools', 'kicad']
@@ -38,12 +38,13 @@ export const TOOL_ACCESS = {
   kicad_edit_schematic: 'write',
   kicad_read_pcb: 'read',
   kicad_edit_pcb: 'write',
+  kicad_update_pcb: 'write',
 } as const
 
 export type KiCadToolName = keyof typeof TOOL_ACCESS
 
 /** Tools that change design files and therefore go through approval and ERC. */
-export const DESIGN_WRITE_TOOLS: readonly KiCadToolName[] = ['kicad_create_schematic', 'kicad_edit_schematic', 'kicad_edit_pcb', 'kicad_fab_preset']
+export const DESIGN_WRITE_TOOLS: readonly KiCadToolName[] = ['kicad_create_schematic', 'kicad_edit_schematic', 'kicad_edit_pcb', 'kicad_update_pcb', 'kicad_fab_preset']
 
 /** Argument names holding file paths, per tool (for the policy's path guard). */
 export const PATH_ARGUMENTS: Record<KiCadToolName, readonly string[]> = {
@@ -65,6 +66,7 @@ export const PATH_ARGUMENTS: Record<KiCadToolName, readonly string[]> = {
   kicad_edit_schematic: ['path'],
   kicad_read_pcb: ['path'],
   kicad_edit_pcb: ['path'],
+  kicad_update_pcb: ['schematic', 'pcb'],
 }
 
 /** Fab house presets shipped with the sidecar (`presets/<name>.json` + `.kicad_dru`). */
@@ -425,6 +427,32 @@ export function apply(ctx: Context, config: Config = {}): void {
       async execute(args, exec) {
         if (args.operations.length === 0) throw new Error('operations must not be empty')
         return await ctx.kicad.run('edit_pcb', { ...args, path: at(exec, args.path) }, exec.signal) as never
+      },
+    }),
+    defineTool({
+      name: 'kicad_update_pcb',
+      description: [
+        'Update PCB from Schematic, headless: create or update the board so it matches the schematic, as KiCad\'s "Update PCB from Schematic" does. Run it after the schematic passes ERC and every board symbol has a footprint, and again after every schematic change.',
+        'A new board (<schematic name>.kicad_pcb, the file KiCad pairs with the schematic) gets KiCad\'s empty board, a default 2-layer stackup (copper_layers: 4 for four), every footprint packed in rows inside a placeholder outline, and KiCad\'s default design rules.',
+        'It refuses, writing nothing, with every REF:PIN that cannot go on the board: a symbol without a footprint (power symbols need a "#" reference), a footprint in no library, a pin without a pad of that number. Fix those in the schematic (set_footprint, or a footprint whose pads match the pins) and run it again.',
+        'On an existing board, placed footprints keep their position, rotation, side and lock; new ones are staged right of the outline for you to place (kicad_edit_pcb move_footprint); references, values, fields and pad nets follow the schematic; a renamed net keeps its tracks, vias and zones; a changed footprint is swapped in place; footprints whose symbol is gone are listed, and deleted only with delete_removed: true. Untouched text stays byte-identical; a second run changes nothing.',
+        'The result ends with KiCad\'s schematic parity count: the board matches the schematic only at 0. Use dry_run to preview.',
+      ].join(' '),
+      parameters: {
+        schematic: SCH,
+        pcb: { type: 'string', description: 'The board (default: <schematic name>.kicad_pcb next to the schematic, where KiCad looks for it). Created when missing.' },
+        delete_removed: { type: 'boolean', description: 'Delete footprints whose symbol is gone (default false: they are only listed). Locked ones stay.' },
+        dry_run: { type: 'boolean', description: 'List the changes without writing.' },
+        copper_layers: { type: 'integer', enum: [2, 4], description: 'Copper layers of a new board (default 2).' },
+      },
+      output: {
+        schema: { type: 'json' },
+        render: (_args, value) => [{ type: 'text', text: formatSync(value as unknown as SyncValue) }],
+      },
+      async execute(args, exec) {
+        return await ctx.kicad.run('update_pcb', {
+          ...args, schematic: at(exec, args.schematic), ...(args.pcb ? { pcb: at(exec, args.pcb) } : {}),
+        }, exec.signal) as never
       },
     }),
   ]

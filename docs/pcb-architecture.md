@@ -160,42 +160,54 @@ Run on the KiCad-saved board above (zone filled, plus a track on `/PB4_LED`):
 |---|---|---|
 | `netlist.py` | landed here | `read_netlist(cli, schematic) -> Netlist`, built from `kicad-cli sch export netlist --format kicadsexpr`. `NetlistComponent`: `reference`, `value`, `footprint`, `lib_id`, `path`, `unit_paths`, `sheet_name`, `sheet_file`, `fields`, `flags`, `fp_filters`, `units`, `pins` (number → `NetlistPin(net, function, type)`), `on_board`. `Netlist.nets`: `NetlistNet(name, code, net_class, nodes)`. |
 | `lib_tables.py` | landed here | `LibTable("fp" \| "sym", project_dir, major).resolve("Lib:Name")`, `.libraries()`, `.problems` (see Footprint resolution). |
-| `pcb.py` | #11 | Lossless board model on `sexpr.py` (contract below). |
-| `pcb_sync.py` | #10 | `create_board`, `plan_sync`, `apply_sync`, `instantiate_footprint`; builds on `pcb.py`. |
-| `tools.py` | #10 | registers `kicad_update_pcb` (only #10 registers tools). |
+| `pcb.py` | #11 | Lossless board model on `sexpr.py` (what the sync uses: below). |
+| `pcb_sync.py` | #10 (landed) | `create_board`, `plan_sync`, `apply_sync`, `instantiate_footprint`, `update_pcb` (the tool); builds on `pcb.py`. |
+| `tools.py` | #10 (landed) | registers `update_pcb` (`kicad_update_pcb` on the TS side). |
 
-`spike/pcb/option_a.py` (`board_shell`, `stackup`, `instantiate`) and `spike/pcb/sync.py` are the reference
-implementations to port. They are not wired into any tool.
+`spike/pcb/option_a.py` and `spike/pcb/sync.py` were the reference implementations; `pcb_sync.py` ports them.
 
-#### What `pcb_sync.py` needs from `pcb.py` (#11)
+#### What `pcb_sync.py` uses from `pcb.py`
 
-- `Board.load(path)` / `Board.save()`: lossless. Untouched text is byte-identical, and new nodes are
-  formatted by `sexpr.dumps`.
-- `board.version`: the format date. `board.numbered_nets`: true when the board has a top-level net table.
-- `board.footprints()`: views with `.node`, `.reference`, `.path`, `.lib_id`, `.uuid`, `.pads()`,
-  `.property(name)`.
-- `board.add_footprint(node)`: inserts at the uuid-sorted position among footprints (KiCad's save order).
-  `board.remove(node)`.
-- `board.net_node(name)`: a `(net …)` node in this board's syntax. `board.ensure_net(name)`: on numbered
-  boards, appends `(net <next code> "name")` to the table. `board.rename_net(old, new)`: pads, tracks, arcs,
-  vias, zones (`net_name` too) and the table.
-- `board.outline()`: the Edge.Cuts bounding box, used to stage new parts.
-- Footprint transforms for #11/#12 follow the rotation and flip rules in Evidence: pad/text angles absolute,
-  positions local. Implement flip last and check it against a pcbnew round trip.
+The plan above was written before #11 landed; `pcb.py` is the contract now. The sync uses `Board(path, text=…)`
+(lossless, `save()` writes the board and only writes the `.kicad_pro` when rules changed, which the sync never
+does), `version`, `numbered_nets`, `footprints()` / `Footprint` (`reference`, `lib_id`, `uuid`, `at`, `side`,
+`locked`, `pads()`, `courtyard()`), `ensure_net`, `net_nodes`, `outline()`, `copper_layers()`, `remove_item`,
+`insert_item` and `_place` (rotation and flip of a swapped footprint). #10 added to `pcb.py`, with tests:
 
-### Creating a board (`create_board(project_dir)`)
+- `Board.rename_net(old, new)`: pads, tracks, arcs, vias, zones (`net_name` too) and the net table of
+  numbered boards; when `new` exists the nets merge (numbered: the old code's items move to the new code).
+- `insert_item` puts footprints where KiCad saves them. KiCad's order is `BOARD_ITEM::ptr_cmp`: by layer
+  first (front footprints, then back ones), then by uuid, not by uuid alone.
+- `attr_flags` / `set_attr_flags`: footprint attributes in KiCad's order (`smd`/`through_hole`, `board_only`,
+  `exclude_from_pos_files`, `exclude_from_bom`, `allow_missing_courtyard`, `dnp`, `allow_soldermask_bridges`).
+- `add_mounting_hole` marks holes `board_only`. Without it, a hole added by `kicad_edit_pcb` is an
+  `extra_footprint` to the parity check, and the sync would flag it.
 
-1. Write the stub `(kicad_pcb (version 20240108) (generator "dsh-kicad"))` to `<project>.kicad_pcb`, then
+`sexpr.prettify` / `sexpr.kicad_layout` port KiCad's writer layout (`Prettify` in
+`common/io/kicad/kicad_io_utils.cpp`): a token list wraps at its first space past column 72, `(xy …)` runs share
+a line up to column 99. `sexpr.dumps` alone keeps long lists on one line, so a 48-pin part's
+`(pins "1" … "48")` or a long `fp_poly` would be rewrapped by KiCad's next save. Every node the sync adds is
+laid out with it. It is a fixed point on every KiCad-saved board and schematic tested (KiCad 9 and 10 formats).
+
+### Creating a board (`create_board(cli, path, copper_layers)`)
+
+1. Write the stub `(kicad_pcb (version 20240108) (generator "dsh-kicad"))` in a scratch directory, then
    run `KiCadCli.upgrade(path)` (`kicad-cli pcb upgrade --force`). 20240108 is KiCad 8's own format, so the
-   stub works for every supported KiCad (8+). The result is the installed KiCad's empty board.
-2. Insert the default 2-layer stackup into `(setup)`: 1.6 mm board, F/B.Cu 0.035, core 1.51 FR4
-   (εr 4.5, tan δ 0.02), mask 0.01, silk and paste layers, `copper_finish "None"`. KiCad re-saves it
-   unchanged.
+   stub works for every supported KiCad (8+). The result is the installed KiCad's empty board. Four copper
+   layers: the stub carries format 20240108's full layer table with `In1.Cu`/`In2.Cu`, and KiCad converts it
+   to its own numbering (10.0.7: the 2-layer table plus `(4 "In1.Cu" signal)`, `(6 "In2.Cu" signal)`).
+2. Insert the default stackup into `(setup)`, KiCad's `BOARD_STACKUP::BuildDefaultStackupList`: 1.6 mm board,
+   35 µm copper, 10 µm mask, and FR4 (εr 4.5, tan δ 0.02) dielectrics sharing the rest evenly: one 1.51 mm core
+   for 2 layers; core / prepreg / core of 0.48 mm for 4. Silk and paste layers, `copper_finish "None"`. KiCad
+   re-saves it unchanged.
 3. Design rules stay in `.kicad_pro` (KiCad's place since v6). #10 does not write rules: KiCad's defaults
    above apply until #14's fab presets write `board.design_settings` (and, if needed, a `.kicad_dru`).
    #10 must not rewrite `.kicad_pro`.
-4. Add an Edge.Cuts `gr_rect` around the staged parts (3 mm margin) so DRC has an outline. #11/#12 own the
-   real outline.
+4. Pack the footprints in rows by reference (row width max(50 mm, 1.5 × √area), 2 mm gaps, courtyard and
+   fab extents) and add an Edge.Cuts `gr_rect` around them (3 mm margin) so DRC has an outline. #11/#12 own
+   the real outline and placement.
+5. Hook: `Toolbox.board_created(board)` runs after a new board is written. #14's `fab.apply_preset` plugs in
+   there; until then it does nothing.
 
 ### Footprint resolution
 
@@ -213,16 +225,21 @@ environment, then `kicad_common.json` `environment.vars`, then KiCad's defaults 
 `KICADn_SYMBOL_DIR`, `KICADn_3DMODEL_DIR` → the installed libraries). Unreadable or missing rows go to
 `.problems` instead of failing.
 
-Follow-up for #10: `FootprintLibraries.libraries()` (used by `kicad_find_footprint`) still globs stock
-dirs plus the project table. Switch it to `LibTable` so search and sync agree.
+`FootprintLibraries.libraries()` (`kicad_search_footprints`, `add_mounting_hole`) now uses `LibTable` too
+(#10), so search and sync agree on which footprints exist.
 
 ### Pre-sync check (before anything is written)
 
-Report all of these together, then stop:
+Report all of these together, then stop (`SyncRefused`; the tool lists the `REF:PIN`s):
+- an unannotated symbol (`R?`);
 - an on-board symbol without a footprint (with a hint when it is a power symbol whose reference lacks `#`);
-- a footprint id that does not resolve (list the tables searched);
-- a schematic pin without a pad of that number. KiCad's parity reports "No pad found for pin X", unless the
-  net is `unconnected-…` with pin type `no_connect`.
+- a footprint id that does not resolve (the message names the tables searched);
+- a schematic pin without a pad of that number. KiCad's parity reports "No pad found for pin X" for every such
+  pin, `no_connect` pins on `unconnected-…` nets included: the CM5 demo's J701 M2–M4 are exactly that, and
+  parity lists them. (The plan's exception for them was wrong.)
+
+A footprint already on the board with the symbol's footprint id is checked against its own pads, not the
+library's: KiCad keeps a placed footprint as it is, and its library may not be installed.
 
 Numbered copper pads without a pin are fine: they stay netless, and parity only complains when such a pad
 has a net.
@@ -237,10 +254,30 @@ From the parsed `.kicad_mod`:
 - order the properties Reference, Value, Datasheet, Description, then the rest;
 - add `(property ki_fp_filters "…")`, `(path …)`, `(sheetname …)`, `(sheetfile …)` and
   `(units (unit (name …) (pins …)) …)` before `(attr)`;
-- map the symbol flags onto `(attr …)`: `dnp`, `exclude_from_bom`, `exclude_from_pos_files`. The spike
-  copied the library's `attr`; the fixture has no flagged parts;
-- give every property, graphic, text, pad and zone a fresh uuid, replacing library uuids;
+- map the symbol flags onto `(attr …)`: `dnp`, `exclude_from_bom`, `exclude_from_pos_files` (all three are in
+  the netlist; parity checks `dnp` and `exclude_from_bom`);
+- give every property, graphic, text, pad, zone, group, dimension and point a fresh uuid, replacing library
+  uuids; group members follow their items' new uuids;
 - assign pad nets (next section).
+
+What the implementation adds, each found by a KiCad re-save that changed bytes:
+- **KiCad loads the library first.** The footprints a sync places are re-saved by `kicad-cli fp upgrade
+  --force` in a scratch directory (one call per sync). That is the content KiCad itself would put on the board:
+  `point` items before pads, `(duplicate_pad_numbers_are_jumpers no)`, retired tokens of older files dropped
+  (`(tenting …)` on pads of a 9.99-era project library). If it fails, the library text is used as it is.
+- **Board-only details.** Pads with `(remove_unused_layers yes)` get `(zone_layer_connections)`; inner copper
+  layers the board lacks are dropped from pads and footprint zones (`In1.Cu` … `In30.Cu` on a 2-layer board),
+  and a zone left on one layer is written `(layer …)`. A zone left on no layer (the SODIMM card edge's
+  inner-layer keepouts) is not placed: KiCad would write it as `(layer "UNDEFINED")`, and `kicad-cli` 10.0.7
+  crashes (SIGSEGV) reading that back. Footprint zones are then ordered by priority and layer ids, KiCad's
+  `cmp_zones` keys, keeping the library's order otherwise.
+- **Order.** The body follows KiCad's writer: settings and `attr`, graphics, points, pads, zones, groups,
+  embedded files, models. The library file is in KiCad's order already, but KiCad breaks some ties by uuid:
+  identical items, text boxes / dimensions / barcodes / tables on one layer, groups over the same layers.
+  Those runs are re-sorted by the new uuids. A dimension's text repeats the dimension's uuid.
+- **Fields.** Library fields the symbol lacks (`KiLib_Generator`, on 12,045 stock footprints) are dropped,
+  as KiCad's updater drops footprint fields not on the symbol.
+- The whole footprint is laid out with `kicad_layout` at depth 1.
 
 Uuids are `uuid5(namespace, f"{symbol path}#{n}")`, so the same input gives the same file. This is what
 makes golden tests and the byte-identity checks possible.
@@ -264,34 +301,46 @@ makes golden tests and the byte-identity checks possible.
   2. otherwise its reference matches a component that is not linked yet. Rewrite the path and report
      "relinked";
   3. otherwise it is extra.
-- Footprints with `(attr board_only)` are never extra.
+- Footprints with `(attr board_only)` take no part: never linked, never extra (mounting holes from
+  `kicad_edit_pcb`).
 
 ### Format and version
 
 - **New boards:** the native format of the installed KiCad, via the upgrade stub. Library content comes
   from the installed libraries, so it matches.
 - **Existing boards:** keep the board's version and syntax.
-  - Newer than the installed KiCad's native version (`kicad-cli pcb upgrade` reports what it writes):
-    refuse.
-  - Older (for example a KiCad 8 board opened with KiCad 10): run `kicad-cli pcb upgrade` first, as one
-    reported change, then edit. KiCad would upgrade it on the next save anyway, and footprints from the
-    installed libraries may use tokens the old version string does not cover.
+  - Newer than the installed KiCad's native version (the upgraded stub's version, cached): refuse.
+  - Older (for example a KiCad 9 board opened with KiCad 10): plan on an upgraded copy (`kicad-cli pcb
+    upgrade` in a scratch directory). If the sync changes something, the upgrade is the first reported change
+    and the upgraded, synced board is written; if not, the file is left alone (no write, a note says KiCad
+    upgrades it on its next save). KiCad would upgrade it on the next save anyway, and footprints from the
+    installed libraries use tokens the old version string does not cover.
+  - `plan_sync`/`apply_sync` called directly keep an older board's format (numbered nets, no `units`); a test
+    has KiCad 10 judge such a 20241229 board: parity 0.
 - **Never** run `upgrade` on an already-native board as part of an edit: it rewrites the whole file.
 
 ### Incremental update and idempotency (`kicad_update_pcb`)
 
-`plan_sync(board, netlist, libs) -> SyncPlan` is pure and doubles as the dry run. `apply_sync(plan)`
-edits the tree. Change kinds:
+`plan_sync(board, netlist, libraries, delete_removed, cli) -> SyncPlan` only reads (the board, the netlist,
+the libraries, and `fp upgrade` in a scratch directory) and doubles as the dry run. Each `Change` has a kind,
+a line of text and the edit; `apply_sync(plan)` runs the edits in order. `update_pcb(cli, schematic, pcb?, …)`
+is the tool: it creates or loads the board, plans, applies, saves, then runs KiCad's DRC with schematic parity.
+Change kinds:
 
-| Change | Edit |
+| Kind | Edit |
 |---|---|
-| `add` | instantiate; stage in a column right of the outline (#12 places it); insert in uuid order |
-| `remove` | delete the footprint (KiCad's "delete extra footprints"); its tracks remain and DRC reports them |
-| `relink` | rewrite `(path …)` |
-| `update_field` | Reference, Value, symbol fields, `sheetname`/`sheetfile`, attr flags: one atom each |
-| `update_pad` | `(net …)`, `(pinfunction …)`, `(pintype …)` of one pad |
-| `rename_net` | when every pad of an old board net now sits on one new schematic net; tracks, arcs, vias and zones follow |
-| `swap_footprint` | footprint id changed: re-instantiate and keep `at`, rotation, side, `locked`, uuid and path; the user's text positions are not kept |
+| `created` / `upgraded` | a new board / an older board upgraded first |
+| `added` | instantiate; on a board with neither footprints nor outline, packed in rows inside a placeholder outline; otherwise staged in a column 5 mm right of the outline and of every part (#12 places it); inserted in KiCad's save order |
+| `removed` | only with `delete_removed`: delete the footprint (KiCad's "delete extra footprints"); its tracks remain and DRC reports them. Without it the footprint is listed in `flagged` and parity reports `extra_footprint`. Locked ones stay either way |
+| `relinked` | rewrite (or add) `(path …)` |
+| `field` | Reference, Value, symbol fields (added hidden on Fab when missing), `ki_fp_filters`, `sheetname`/`sheetfile`, the KiCad 10 unit/pin map: one atom or node each |
+| `attr` | `dnp`, `exclude_from_bom`, `exclude_from_pos_files` from the symbol |
+| `pad` | `(net …)`, `(pinfunction …)`, `(pintype …)` of one pad, written where KiCad writes them |
+| `net_renamed` | when every pad of an old board net now sits on one new schematic net and the old name is gone; tracks, arcs, vias and zones follow |
+| `swapped` | footprint id changed: re-instantiate and keep `at`, rotation, side, `locked`, uuid and path; the user's text positions are not kept (checked against KiCad's pad positions on a rotated, flipped, locked part) |
+
+Fields on the board that the symbol lacks are kept on existing footprints: parity ignores them, and they may be
+the user's (StickHub's footprints carry `MPN`, `USD_per_1` that its symbols do not).
 
 Rules:
 - Edits rewrite only the atoms or nodes they change. A second run on unchanged inputs produces no changes
@@ -300,7 +349,9 @@ Rules:
 - The tool is a write tool: dsh approval, writes confined to the working directory.
 - After applying, run `kicad-cli pcb drc --schematic-parity`. Return the change list plus the parity
   counts: missing, extra, net and field mismatches must all be 0. Count `schematic_parity` entries, not
-  errors.
+  errors. `KiCadCli.drc(…, schematic_parity=True)` returns that count as `parity`, the tool returns
+  `parity: {total, by_type}` and the report, and the policy's automatic DRC reuses the report instead of a
+  second run ("…, 39 unrouted, 0 schematic parity issue(s)").
 - When zones exist, follow with `--refill-zones --save-board` (or leave it to #11/#13's fill step).
 
 ### What #13 (routing) needs
@@ -335,12 +386,21 @@ Rules:
 
 - **KiCad 8/9 not tested end to end.** Only KiCad 10.0.7 is installed. The numbered-net path was checked
   by having KiCad 10 read a 20241229 board (parity 0, identical nets after upgrade), not with KiCad 8/9
-  themselves. The upgrade-stub shell avoids the KiCad 8 layer-numbering difference.
+  themselves. The upgrade-stub shell avoids the KiCad 8 layer-numbering difference; the 4-layer stub's
+  layer table is format 20240108's.
 - **Undocumented format.** Field ordering, pen defaults and uuid ordering were matched empirically. A
-  KiCad point release can change them. Keep the byte-identity check (`kicad-cli pcb upgrade --force` +
-  `cmp`) as a test in #10 so a drift shows up as a test failure, not as diff noise for users.
-- **Footprint swap and flip** are designed but were not prototyped.
+  KiCad point release can change them. `tests/test_pcb_sync.py` keeps the byte-identity check
+  (`kicad-cli pcb upgrade --force` + compare) on usb_attiny, the 4-layer board, four demo projects and a
+  resync, so a drift shows up as a test failure, not as diff noise for users.
+- **Item order inside rotated or flipped footprints.** KiCad sorts a footprint's graphics by absolute
+  geometry when it saves, so a footprint rotated or flipped after placement (`kicad_edit_pcb`
+  `move_footprint`, or a sync swapping a footprint that sits rotated or on the back) gets its graphics
+  reordered by KiCad's next save. The content is the same; only the order changes. New and staged footprints
+  sit at 0° on the front and are not affected.
+- **Swap** is implemented and checked against KiCad's pad positions; text positions the user changed on the
+  old footprint are not carried over.
 - **Specctra without pcbnew** means writing a DSN/SES codec. If #13 judges that too costly, routing works
   only where `doctor` finds a pcbnew-capable Python.
-- **Schematic annotation:** the eval produced non-`#` power-flag references. Until `add_symbol` is fixed,
-  #10's pre-sync check is what catches it.
+- **Schematic annotation:** the eval produced non-`#` power-flag references. `add_symbol` now gives power
+  symbols the library's `#` prefix (`#FLG`, `#PWR`) and adds `#` to a given reference that lacks it (#10);
+  the pre-sync check still names any other non-`#` power symbol.

@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { type Context, Service } from '@deepseek-ai/cordis'
@@ -107,11 +107,46 @@ describe('dsh-kicad-policy', () => {
     expect(text(again)).not.toMatch(/Automatic DRC/)
   })
 
+  it('board sync is a design write: guarded, and asked for under approval: ask', async () => {
+    const schematic = fixtureProject('usb_attiny')
+    const board = schematic.replace(/\.kicad_sch$/, '.kicad_pcb')
+    const guarded = await bootKiCad([toolKiCad], [policy, config()])
+    const outside = await runTool(guarded, 'kicad_update_pcb', { schematic })
+    expect(text(outside)).toMatch(/kicad_update_pcb may only write inside the project directory/)
+    const elsewhere = await runTool(guarded, 'kicad_update_pcb', { schematic: '/etc/x.kicad_sch', pcb: '/etc/x.kicad_pcb' })
+    expect(text(elsewhere)).toMatch(/may only write inside the project directory/)
+    const asking = await bootKiCad([toolKiCad], [policy, config({ approval: 'ask', extraRoots: [dirname(schematic)] })])
+    const asked = await runTool(asking, 'kicad_update_pcb', { schematic })
+    expect(asked.isError).toBe(true)
+    expect(existsSync(board)).toBe(false)
+  })
+
+  it.runIf(hasKiCadCli())('appends KiCad DRC with the schematic parity count after a board sync (autoDrc)', async () => {
+    const schematic = fixtureProject('usb_attiny')
+    const ctx = await bootKiCad([toolKiCad], [policy, config({ extraRoots: [dirname(schematic)] })])
+    const synced = await runTool(ctx, 'kicad_update_pcb', { schematic })
+    expect(synced.isError).toBeFalsy()
+    // KiCad 10 files parity findings as warnings: the verdict counts them on their own.
+    expect(text(synced)).toMatch(/Automatic DRC by KiCad .*FAILED — 39 error\(s\), 0 warning\(s\), 39 unrouted, 0 schematic parity issue\(s\)/)
+    expect(policy.projectContext(dirname(schematic), undefined)).toContain('- boards: usb_attiny.kicad_pcb')
+    // A flagged footprint (its symbol removed) shows up in the parity count.
+    await runTool(ctx, 'kicad_edit_schematic', { path: schematic, operations: [{ op: 'remove_symbol', reference: 'R5' }] })
+    const flagged = await runTool(ctx, 'kicad_update_pcb', { schematic })
+    expect(text(flagged)).toMatch(/1 schematic parity issue\(s\)[\s\S]*extra_footprint/)
+    const off = await bootKiCad([toolKiCad], [policy, config({ autoDrc: false, extraRoots: [dirname(schematic)] })])
+    const quiet = await runTool(off, 'kicad_update_pcb', { schematic, delete_removed: true })
+    expect(text(quiet)).toContain('- removed R5')
+    expect(text(quiet)).not.toMatch(/Automatic DRC/)
+  })
+
   it('describes edits for the approval card', () => {
     const d = policy.describeEdit('kicad_edit_schematic', { path: '/p/a.kicad_sch', operations: [{ op: 'add_symbol' }, { op: 'add_symbol' }, { op: 'connect_pins' }] })
     expect(d.displayReason).toEqual({ en: 'Edit a.kicad_sch: 3 operation(s) — add_symbol×2, connect_pins', zh: '修改 a.kicad_sch：3 项操作 — add_symbol×2, connect_pins' })
     const preset = policy.describeEdit('kicad_fab_preset', { path: '/p/board.kicad_pcb', preset: 'jlcpcb' })
     expect(preset).toEqual({ reason: 'apply jlcpcb design rules to /p/board.kicad_pcb', displayReason: { en: 'Apply jlcpcb design rules to board.kicad_pcb', zh: '将 jlcpcb 设计规则应用到 board.kicad_pcb' } })
+    const sync = policy.describeEdit('kicad_update_pcb', { schematic: '/p/a.kicad_sch', delete_removed: true })
+    expect(sync.displayReason).toEqual({ en: 'Update board a.kicad_pcb from a.kicad_sch, deleting footprints whose symbol is gone', zh: '根据 a.kicad_sch 更新电路板 a.kicad_pcb，并删除原理图中已不存在的封装' })
+    expect(sync.reason).toBe('update a.kicad_pcb from /p/a.kicad_sch (delete_removed)')
   })
 
   it('project context lists KiCad files and the last ERC', () => {

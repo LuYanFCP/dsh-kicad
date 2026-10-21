@@ -334,3 +334,21 @@ def test_power_symbol_on_a_wired_pin_branches_off_the_wire(project):
     s.save()
     nets = _nets(KiCadCli(), path)
     assert {("C1", "2"), ("C2", "2")} <= nets["GND"] and ("C1", "1") in nets["+3V3"]
+
+
+@needs_symbols
+def test_power_symbols_always_get_a_hash_reference(project):
+    """A power symbol annotated without '#' is a real part to KiCad (a netlist entry with no footprint, so
+    schematic parity fails): the library's own prefix is used, and a given prefix or reference gains the '#'."""
+    path = project("blank")
+    s = Schematic(path)
+    refs = [s.add_symbol("power:PWR_FLAG", 50.8, 50.8 + 5.08 * i, reference=ref)["reference"]
+            for i, ref in enumerate(["FLG?", "FLG7", None, "#FLG?"])]
+    assert refs == ["#FLG1", "#FLG7", "#FLG2", "#FLG3"]
+    gnd = [s.add_symbol("power:GND", 76.2, 50.8 + 5.08 * i, reference=ref)["reference"] for i, ref in enumerate([None, "PWR?"])]
+    assert gnd == ["#PWR1", "#PWR2"]
+    assert s.add_symbol("Device:R", 101.6, 50.8, reference="R?")["reference"] == "R1"  # ordinary parts are untouched
+    with pytest.raises(SchematicError, match="#FLG7 already exists"):
+        s.add_symbol("power:PWR_FLAG", 50.8, 76.2, reference="FLG7")
+    s.save()
+    assert {sym.reference for sym in Schematic(path).symbols()} == {"#FLG1", "#FLG7", "#FLG2", "#FLG3", "#PWR1", "#PWR2", "R1"}
