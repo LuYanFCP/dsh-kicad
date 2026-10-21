@@ -49,8 +49,8 @@
         "zh": "KiCad 原理图助手"
       },
       "description": {
-        "en": "AI electronics design with KiCad: describe the circuit board you want in one sentence (/kicad-design) and the agent asks a few questions, writes the spec and draws the schematic; approve each edit, KiCad ERC after every change, interactive KiCanvas schematic/PCB viewer, /erc /drc /bom, EDA preset. Beginner friendly; MCU, USB-C power, LED and button circuits built in. Checks your KiCad installation and offers an Install KiCad button when it is missing.",
-        "zh": "用 AI 做电子电路设计（KiCad）：一句话说出你想做的电路板（/kicad-design），agent 会问几个问题、写好设计规格并画出原理图；每次修改先审批、改完自动跑 KiCad ERC，内置 KiCanvas 原理图/PCB 交互查看器、/erc /drc /bom 和 EDA 预设。适合新手，内置单片机、USB-C 供电、LED 和按键等常用电路。会检查本机 KiCad 环境，缺失时提供“安装 KiCad”按钮。"
+        "en": "AI electronics design with KiCad: describe the circuit board you want in one sentence (/kicad-design) and the agent asks a few questions, writes the spec and draws the schematic, laid out in titled functional blocks. Watch the schematic grow live in the sidebar while the agent works; edits follow the session's permissions, KiCad ERC after every change, interactive KiCanvas schematic/PCB viewer, /erc /drc /bom, EDA preset. Beginner friendly; MCU, USB-C power, LED and button circuits built in. Checks your KiCad installation and offers an Install KiCad button when it is missing.",
+        "zh": "用 AI 做电子电路设计（KiCad）：一句话说出你想做的电路板（/kicad-design），agent 会问几个问题、写好设计规格并画出按功能分块、带标题框的原理图。agent 工作时右侧栏实时显示原理图的进展；修改遵循会话权限，改完自动跑 KiCad ERC，内置 KiCanvas 原理图/PCB 交互查看器、/erc /drc /bom 和 EDA 预设。适合新手，内置单片机、USB-C 供电、LED 和按键等常用电路。会检查本机 KiCad 环境，缺失时提供“安装 KiCad”按钮。"
       },
       "icon": "icons/dsh-kicad.svg",
       "author": "LuYanFCP",
@@ -69,6 +69,19 @@
         ]
       },
       "versions": [
+        {
+          "version": "0.3.0",
+          "publishTimestamp": 1792577050,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/LuYanFCP/dsh-kicad",
+            "commit": "3c81fb0c3383366b8f892ba57f1251a5d18396ef",
+            "path": "dist/dsh-kicad"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.2 <0.3.0-0"
+          }
+        },
         {
           "version": "0.2.0",
           "publishTimestamp": 1792571300,
