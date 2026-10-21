@@ -7,6 +7,7 @@ import glob
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -15,38 +16,78 @@ import xml.etree.ElementTree as ET
 from collections import Counter
 from typing import Any
 
-__all__ = ["KiCadCli", "KiCadCliError", "find_kicad_cli", "svg_to_png"]
+__all__ = ["KiCadCli", "KiCadCliError", "find_kicad_cli", "locate_kicad_cli", "parse_version", "svg_to_png", "MIN_KICAD"]
 
 
 class KiCadCliError(RuntimeError):
     pass
 
 
-def find_kicad_cli(explicit: str | None = None) -> list[str] | None:
-    """Return the argv prefix that runs kicad-cli, or None."""
-    for candidate in (explicit, os.environ.get("KICAD_CLI")):
+FLATPAK_APP = "org.kicad.KiCad"
+
+
+def flatpak_argv(flatpak: str) -> list[str]:
+    """kicad-cli inside the Flatpak; the sandbox gets the host files and /tmp (kicad-cli writes reports there)."""
+    return [flatpak, "run", "--filesystem=host", "--filesystem=/tmp", "--command=kicad-cli", FLATPAK_APP]
+
+
+def install_dirs() -> list[str]:
+    """Places installers put kicad-cli that are often missing from PATH (GUI-started processes, services)."""
+    home = os.path.expanduser("~")
+    local = os.environ.get("LOCALAPPDATA", os.path.join(home, "AppData", "Local"))
+    return [
+        "/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli",
+        os.path.join(home, "Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli"),
+        *sorted(glob.glob(r"C:\Program Files\KiCad\*\bin\kicad-cli.exe"), reverse=True),
+        *sorted(glob.glob(os.path.join(local, "Programs", "KiCad", "*", "bin", "kicad-cli.exe")), reverse=True),
+        "/snap/bin/kicad.kicad-cli",
+    ]
+
+
+def locate_kicad_cli(explicit: str | None = None) -> tuple[list[str] | None, str | None, list[str]]:
+    """Find kicad-cli. Returns ``(argv, source, problems)``.
+
+    ``source`` is one of ``setting``, ``env``, ``path``, ``install_dir``, ``flatpak``; ``problems`` lists
+    configured candidates that do not exist (the search then continues, so a stale setting is reported, not fatal).
+    """
+    problems: list[str] = []
+    for candidate, source in ((explicit, "setting"), (os.environ.get("KICAD_CLI"), "env")):
         if candidate:
             if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-                return [candidate]
+                return [candidate], source, problems
             found = shutil.which(candidate)
             if found:
-                return [found]
+                return [found], source, problems
+            problems.append(f"{'the kicadCli setting' if source == 'setting' else '$KICAD_CLI'} points to {candidate!r}, which is not an executable")
     found = shutil.which("kicad-cli")
     if found:
-        return [found]
-    fixed = [
-        "/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli",
-        *sorted(glob.glob(r"C:\Program Files\KiCad\*\bin\kicad-cli.exe"), reverse=True),
-    ]
-    for path in fixed:
+        return [found], "path", problems
+    for path in install_dirs():
         if os.path.isfile(path):
-            return [path]
+            return [path], "install_dir", problems
     flatpak = shutil.which("flatpak")
     if flatpak and sys.platform.startswith("linux"):
-        probe = subprocess.run([flatpak, "info", "org.kicad.KiCad"], capture_output=True, text=True)
-        if probe.returncode == 0:
-            return [flatpak, "run", "--command=kicad-cli", "org.kicad.KiCad"]
-    return None
+        try:
+            probe = subprocess.run([flatpak, "info", FLATPAK_APP], capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.TimeoutExpired):
+            probe = None
+        if probe is not None and probe.returncode == 0:
+            return flatpak_argv(flatpak), "flatpak", problems
+    return None, None, problems
+
+
+def find_kicad_cli(explicit: str | None = None) -> list[str] | None:
+    """Return the argv prefix that runs kicad-cli, or None."""
+    return locate_kicad_cli(explicit)[0]
+
+
+def parse_version(text: str | None) -> tuple[int, ...] | None:
+    """``"10.0.7"`` (or any text containing a dotted version) → ``(10, 0, 7)``."""
+    match = re.search(r"(\d+)\.(\d+)(?:\.(\d+))?", text or "")
+    return tuple(int(g) for g in match.groups() if g is not None) if match else None
+
+
+MIN_KICAD = (8, 0)
 
 
 def _clean_stderr(text: str) -> str:
@@ -57,18 +98,32 @@ def _clean_stderr(text: str) -> str:
 
 class KiCadCli:
     def __init__(self, executable: str | None = None, timeout: float = 180.0):
-        self.argv = find_kicad_cli(executable)
+        self.executable = executable
         self.timeout = timeout
         self._version: str | None = None
+        self.argv: list[str] | None = None
+        self.source: str | None = None
+        self.problems: list[str] = []
+        self.locate()
+
+    def locate(self) -> list[str] | None:
+        """(Re)run the search, e.g. after KiCad was installed while the sidecar was running."""
+        argv, self.source, self.problems = locate_kicad_cli(self.executable)
+        if argv != self.argv:
+            self._version = None
+        self.argv = argv
+        return argv
 
     @property
     def available(self) -> bool:
         return self.argv is not None
 
     def _require(self) -> list[str]:
-        if self.argv is None:
-            raise KiCadCliError("kicad-cli not found; install KiCad 8+ or set KICAD_CLI / the bridge 'kicadCli' setting")
-        return self.argv
+        if self.argv is None and self.locate() is None:
+            from .doctor import install_hint  # deferred: doctor imports this module
+
+            raise KiCadCliError(missing_message(self.problems, install_hint()))
+        return self.argv  # type: ignore[return-value]
 
     def run(self, *args: str, cwd: str | None = None, check: bool = True) -> subprocess.CompletedProcess:
         argv = [*self._require(), *args]
@@ -76,16 +131,32 @@ class KiCadCli:
             proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=self.timeout)
         except subprocess.TimeoutExpired as exc:
             raise KiCadCliError(f"kicad-cli timed out after {self.timeout}s: {' '.join(args[:3])}") from exc
+        except OSError as exc:
+            # The binary vanished (uninstalled) or is not runnable: search again next time.
+            self.argv = None
+            raise KiCadCliError(f"kicad-cli could not be started ({exc}). Run /kicad-doctor (or the kicad_doctor tool) to check the installation.") from exc
         if check and proc.returncode != 0:
-            raise KiCadCliError(f"kicad-cli {' '.join(args[:3])} failed ({proc.returncode}): {_clean_stderr(proc.stderr + proc.stdout)}")
+            message = f"kicad-cli {' '.join(args[:3])} failed ({proc.returncode}): {_clean_stderr(proc.stderr + proc.stdout)}"
+            if args and args[0] != "version":
+                version = parse_version(self.version_or_none())
+                if version is not None and version < MIN_KICAD:
+                    message += (f"\nThis kicad-cli is KiCad {self.version_or_none()}; the KiCad tools need KiCad "
+                                f"{MIN_KICAD[0]} or newer. Run /kicad-doctor (or the kicad_doctor tool) for upgrade options.")
+            raise KiCadCliError(message)
         return proc
 
     def version(self) -> str | None:
-        if self.argv is None:
+        if self.argv is None and self.locate() is None:
             return None
         if self._version is None:
             self._version = self.run("version").stdout.strip()
         return self._version
+
+    def version_or_none(self) -> str | None:
+        try:
+            return self.version()
+        except KiCadCliError:
+            return None
 
     # ---- checks --------------------------------------------------------------------
     def erc(self, schematic: str, severity: str = "all") -> dict[str, Any]:
@@ -174,6 +245,12 @@ class KiCadCli:
     def upgrade(self, path: str) -> None:
         kind = "pcb" if path.endswith(".kicad_pcb") else "sch"
         self.run(kind, "upgrade", "--force", path, cwd=os.path.dirname(path))
+
+
+def missing_message(problems: list[str], hint: str) -> str:
+    lead = "KiCad is not installed or kicad-cli was not found (KiCad 8+ is required)."
+    tail = "Then run /kicad-doctor (or the kicad_doctor tool) to check again; no restart is needed."
+    return " ".join([lead, *(p[0].upper() + p[1:] + "." for p in problems), hint, tail])
 
 
 # ---- report shaping -------------------------------------------------------------------
