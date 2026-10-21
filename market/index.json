@@ -1,30 +1,86 @@
 {
   "format": 1,
-  "title": { "en": "dsh-kicad plugins", "zh": "dsh-kicad 插件" },
-  "description": { "en": "KiCad (EDA) plugins for DeepSeek Harness", "zh": "DeepSeek Harness 的 KiCad（EDA）插件" },
+  "title": {
+    "en": "dsh-kicad plugins",
+    "zh": "dsh-kicad 插件"
+  },
+  "description": {
+    "en": "KiCad (EDA) plugins for DeepSeek Harness",
+    "zh": "DeepSeek Harness 的 KiCad（EDA）插件"
+  },
   "metadata": {
-    "categories": { "eda": { "title": { "en": "Electronics design", "zh": "电子设计" } } },
-    "labels": { "kicad": { "title": "KiCad" }, "preview": { "title": { "en": "Preview", "zh": "预览" } } }
+    "categories": {
+      "eda": {
+        "title": {
+          "en": "Electronics design",
+          "zh": "电子设计"
+        }
+      }
+    },
+    "labels": {
+      "kicad": {
+        "title": "KiCad"
+      },
+      "preview": {
+        "title": {
+          "en": "Preview",
+          "zh": "预览"
+        }
+      },
+      "schematic": {
+        "title": {
+          "en": "Schematic",
+          "zh": "原理图"
+        }
+      },
+      "beginner": {
+        "title": {
+          "en": "Beginner friendly",
+          "zh": "新手友好"
+        }
+      }
+    }
   },
   "plugins": [
     {
-      "name": "dsh-kicad-bundle",
-      "title": "KiCad",
+      "name": "dsh-kicad",
+      "title": {
+        "en": "KiCad",
+        "zh": "KiCad 原理图助手"
+      },
       "description": {
-        "en": "Design and check KiCad schematics with the agent: kicad_* tools, approval and automatic ERC, skills, /erc /drc /bom, a schematic viewer and an EDA preset.",
-        "zh": "让 agent 设计与检查 KiCad 原理图：kicad_* 工具、审批与自动 ERC、技能、/erc /drc /bom、原理图查看器和 EDA 预设。"
+        "en": "AI electronics design with KiCad: describe the circuit board you want in one sentence (/kicad-design) and the agent asks a few questions, writes the spec and draws the schematic; approve each edit, KiCad ERC after every change, interactive KiCanvas schematic/PCB viewer, /erc /drc /bom, EDA preset. Beginner friendly; MCU, USB-C power, LED and button circuits built in.",
+        "zh": "用 AI 做电子电路设计（KiCad）：一句话说出你想做的电路板（/kicad-design），agent 会问几个问题、写好设计规格并画出原理图；每次修改先审批、改完自动跑 KiCad ERC，内置 KiCanvas 原理图/PCB 交互查看器、/erc /drc /bom 和 EDA 预设。适合新手，内置单片机、USB-C 供电、LED 和按键等常用电路。"
       },
       "icon": "icons/dsh-kicad.svg",
       "author": "LuYanFCP",
       "homepage": "https://github.com/LuYanFCP/dsh-kicad#readme",
-      "repository": { "url": "https://github.com/LuYanFCP/dsh-kicad", "directory": "packages/kicad-bundle" },
-      "metadata": { "category": "eda", "labels": ["kicad", "preview"] },
+      "repository": {
+        "url": "https://github.com/LuYanFCP/dsh-kicad",
+        "directory": "dist/dsh-kicad"
+      },
+      "metadata": {
+        "category": "eda",
+        "labels": [
+          "kicad",
+          "schematic",
+          "beginner",
+          "preview"
+        ]
+      },
       "versions": [
         {
           "version": "0.1.0",
-          "publishTimestamp": 1792557427,
-          "source": { "type": "npm" },
-          "engines": { "dsh": ">=0.2.1-rc.2 <0.3.0-0" }
+          "publishTimestamp": 1792565680,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/LuYanFCP/dsh-kicad",
+            "commit": "b9cd783467043becb812faa7c2a4d350d22dd565",
+            "path": "dist/dsh-kicad"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.2 <0.3.0-0"
+          }
         }
       ]
     }

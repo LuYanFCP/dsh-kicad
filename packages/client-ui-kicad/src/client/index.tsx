@@ -18,7 +18,8 @@ export { readCheckMeta } from './Cards.tsx'
 export { toOps } from './Settings.tsx'
 
 export const TAB_ID = 'dsh-client-ui-kicad'
-export const BUNDLE = 'dsh-kicad-bundle'
+/** Package names the bundle ships under: the monorepo bundle and the single-package distribution. */
+export const BUNDLES = ['dsh-kicad-bundle', 'dsh-kicad'] as const
 
 // Remote namespaces are services of their own and must be injected explicitly.
 export const inject = ['slots', 'locale', 'sidebarRightTabs', 'remote', 'remote.workspaceFiles', 'remote.commands']
@@ -42,9 +43,11 @@ export function apply(ctx: ClientContext): void {
       { name: 'tool.call.toolview', key: tool, locale: NS }, view as ComponentType<never>,
     )), `kicad: ${tool} row`)
   }
-  for (const [row, view] of [['kicad-bridge', BridgeSettings], ['kicad-policy', PolicySettings]] as const) {
-    ctx.effect(() => ctx.slots.inject('plugins.row.config', () => ctx.slots.register(
-      { name: 'plugins.row.config', key: `${BUNDLE}#${row}`, locale: NS }, view as ComponentType<never>,
-    )), `kicad: ${row} settings`)
+  for (const bundle of BUNDLES) {
+    for (const [row, view] of [['kicad-bridge', BridgeSettings], ['kicad-policy', PolicySettings]] as const) {
+      ctx.effect(() => ctx.slots.inject('plugins.row.config', () => ctx.slots.register(
+        { name: 'plugins.row.config', key: `${bundle}#${row}`, locale: NS }, view as ComponentType<never>,
+      )), `kicad: ${bundle}#${row} settings`)
+    }
   }
 }

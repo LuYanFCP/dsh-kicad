@@ -10,3 +10,6 @@ __pycache__/
 coverage/
 *.kicad_prl
 fp-info-cache
+
+# The Git-installable distribution must ship its built code.
+!/dist/dsh-kicad/lib/
