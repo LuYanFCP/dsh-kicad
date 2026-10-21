@@ -382,6 +382,107 @@ Rules:
 - Footprint `attr` flags (`dnp`, `exclude_from_bom`, `exclude_from_pos_files`) come from the symbols via
   sync, so the BOM and position files follow the schematic.
 
+## Placement (#12)
+
+`placement.py` gets a synced board from rows of parts to an initial placement ready for routing, without the
+model computing coordinates. Two operations of `kicad_edit_pcb` (atomic with the rest of the batch, then the
+policy's automatic DRC):
+
+| Operation | What it does |
+|---|---|
+| `auto_place{groups?, references?, outline?, gap?=1, group_gap?=2.5, margin?=1}` | Lays out every unlocked footprint, or only `references` (parts `kicad_update_pcb` staged) around the others. `outline`: `fit` sizes a rectangle to the parts (default when the board has no outline or only the sync's placeholder, recognised by its uuid), `keep` places inside the current outline (default otherwise) and refuses, writing nothing, with the size the parts need when they do not fit. `groups:[{title, references}]` overrides the schematic's blocks. |
+| `place_block{title \| references, x, y, width?, height?, face?}` | Lays out one block with its box's top-left corner at x, y, or inside that rectangle (laid out again to fit, refused with the needed size otherwise). A block holding a connector faces `face` (default: the nearest outline side) and sits against that side of the rectangle. Overlaps with parts outside the block are reported, not refused. |
+
+Python API for #13 and the PCB eval (#15): `auto_place(board, …)`, `place_block(board, …)`,
+`check_placement(board)` and `ratsnest_length(board)` on a `pcb.Board`; `placement.apply(board, op)` runs an op
+dict. `kicad_read_pcb` returns `check_placement` as `placement` (its text adds a "Placement:" line), and
+`kicad_render{view: "3d"}` renders `kicad-cli pcb render` (top or bottom) so an image-capable model can look at
+the result.
+
+**Groups.** The schematic paired with the board (`<board name>.kicad_sch`, sub-sheets too) supplies its
+functional blocks: `Schematic.blocks()`, the `add_block` frames and the parts inside them. Parts outside every
+block are grouped by sheet when the design has several, otherwise by connectivity: every IC and connector
+gathers the parts wired to it through signal nets (a pull-up joins the part it pulls up, not the rail), then
+through any net but ground; decoupling capacitors and crystals go with their IC.
+
+**Layout.** One greedy packer at two levels. Inside a group the first part goes first (the IC with most pads;
+in a group holding a connector, its connectors in a row whose edges lie on one line, facing down), then
+repeatedly the part most tied to what is placed goes, in the best of four rotations, to the free spot touching
+a placed part (or centred where its connections pull it) with the lowest cost: for each pad, the weighted
+distance to the nearest placed pad on its net, plus pulls between specific pads, plus 0.6 × the growth of
+the bounding box's half perimeter. Net weights: 1 for nets of up to 3 pads, 2/(n−1) above, × 0.5 on power
+rails and × 0.3 on ground (poured later). A final pass re-places every part once the others are known. Then
+the groups are placed the same way as rigid blocks: inner groups grow from the one most wired to the
+others, groups holding a connector go on the board edge (every side tried, sliding along it), and inner
+groups are re-placed once the edges are claimed. Gaps: 1 mm between courtyards in a group, 2.5 mm between
+groups, +1 mm around power parts.
+
+**Heuristics.**
+- *Connectors on the edge, facing out.* A connector's mating side is its footprint's "PCB Edge" mark
+  (a `Dwgs.User`/`Cmts.User` line next to a "PCB Edge" text, as the USB-C and micro-B footprints draw), which
+  is put exactly on the board edge; the courtyard beyond the mark overhangs the board, as the library intends
+  (0.5 mm for the GCT USB4125). Without a mark, the side where the courtyard reaches ≥ 1.5 mm beyond the
+  pads and ≥ 1 mm more than on any other side (right-angle headers, barrel jacks, USB-B, side-entry JST)
+  faces out, its body flush with the edge and its pads at least the copper-to-edge clearance inside
+  (`min_copper_edge_clearance` of the board, else KiCad's 0.5 mm). Vertical headers lie along the edge.
+- *Decoupling.* A capacitor between an IC's power rail and ground belongs to that IC: the smallest values
+  first, a bulk capacitor (≥ 1 µF) on a regulator's output to the regulator, the others to the parts that
+  draw from the rail, spread over ICs with the fewest capacitors so far. It is pulled to the IC's pins on
+  that rail (weight 4) and on ground (2), and placed right after its IC.
+- *Crystal.* A crystal (`Y…`, `Crystal`/`Oscillator` libraries) is pulled to the IC sharing its signal nets
+  (4), its load capacitors to it (3).
+- *Power parts* (a `power_out` pin, TO-220/252/263, D(2)PAK, SOT-223, PowerPAK…, inductors ≥ 16 mm²) keep
+  1 mm more room.
+- *Mounting holes.* The first four unlocked holes go to the corners of a fitted outline, which grows until
+  they are free; more are packed like other parts. Inside a kept outline holes stay where they are.
+
+**Outline.** `fit`: every side is the outermost part plus `margin`, except a side with connectors, which runs
+along their edge marks (groups there are moved out onto it); the board's top-left corner stays where the old
+outline's was (the sync puts it at (97, 97)). `keep`: the layout is redone for the outline's aspect, with more
+compaction, then 0.6× and 0.35× the gaps (noted in the result) until it fits; it is centred and the connector
+groups are moved onto the outline's edges. Failing that, the groups are packed inside the outline directly
+(connector groups first); locked parts and the `references` mode always take that path. Polygon outlines are
+fitted by their bounding box and checked corner by corner.
+
+**Silkscreen.** Parts are packed by courtyard plus silkscreen (footprint artwork such as a cathode "K"
+included). References and values shown on silkscreen that land on a pad, other silkscreen or off the board are
+moved next to their part (horizontal first, then vertical, on its body last), so KiCad's `silk_over_copper`
+and `silk_overlap` stay clear; when no spot is free they move off pads only.
+
+**Checks and metric.** `check_placement`: courtyard overlaps (boxes, same side), footprints outside the
+outline (courtyard boxes; KiCad's DRC reports neither a part fully outside the board nor one half outside
+without copper there), connectors overhanging by design (`overhang`), reference text over pads, and the
+ratsnest. `ratsnest_length`: per net, the minimum spanning tree over its pad centres (what KiCad draws before
+routing), summed in mm. Measured with KiCad 10.0.7 (`tests/test_placement.py` holds the usb-attiny85 numbers;
+random = mean of footprints dropped at random positions and rotations inside the same outline):
+
+| Board | Parts | Sync's rows | Random | `auto_place` | KiCad DRC after (besides unrouted) |
+|---|---|---|---|---|---|
+| usb_attiny_blocks (5 blocks) | 15 | 411.8 mm | 345 mm | 214.4 mm | none |
+| usb_attiny (no blocks) | 15 | 411.8 mm | 347 mm | 212.2 mm | none |
+| ecc83-pp demo | 15 | 503.1 mm | 420 mm | 247.5 mm | none |
+| StickHub demo | 94 | 3143.7 mm | 2392 mm | 974.7 mm | none |
+| complex_hierarchy demo | 68 | 3186.4 mm | 3745 mm | 1124.6 mm | 2 `silk_overlap` |
+| pic_programmer demo (+ 6 mounting holes) | 63 | 5212.3 mm | 5297 mm | 1563.8 mm | 1 `clearance` inside JP1 (on the unplaced board too) |
+
+189 footprints place in 2.7 s. On usb-attiny85 both variants give 0 courtyard overlaps, every footprint inside
+the outline, the USB-C's edge mark on the board edge, 0 parity issues and the same 39 unrouted connections.
+
+**What #13 gets.** A board with an outline, parts at least 1 mm apart (2.5 mm between blocks) and at least
+`margin` from the edge, connectors on it, everything still on its side (placement never flips), positions on a
+0.05 mm grid when the outline was fitted. Placement and routing are independent: `auto_place` ignores existing tracks (they are left
+where they were, so place before routing), and `ratsnest_length` measures pads only.
+
+**Placement risks.**
+- The metric is straight-line and ignores routability: 1 mm gaps suit two-layer boards of small parts; dense
+  boards may need `gap`/`group_gap` raised before routing.
+- Connector faces come from the "PCB Edge" mark or the body's reach; a footprint with neither (screw
+  terminals) lies along the edge but may face inward.
+- Inside a block the first IC keeps rotation 0 and the rest is greedy: good, not optimal. Blocks are turned
+  but never mirrored, and nothing goes to the back side.
+- Silkscreen text extents are estimated (0.9 × size per character), not measured with KiCad's font.
+- Rotated footprints are reordered by KiCad's next save (see Open risks); content is unchanged.
+
 ## Open risks
 
 - **KiCad 8/9 not tested end to end.** Only KiCad 10.0.7 is installed. The numbered-net path was checked

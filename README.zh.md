@@ -111,6 +111,10 @@ dsh plugin --profile web add "git+https://github.com/LuYanFCP/dsh-kicad.git#<com
 4. `/erc`、`/drc`、`/bom` 不经过模型直接运行。
 5. 设置位于 **Plugins → KiCad → KiCad bridge / KiCad policy**。
 
+### 电路板布局
+
+`kicad_update_pcb` 生成电路板后，一个 `kicad_edit_pcb` 操作 `auto_place` 即可按原理图的功能块（`add_block` 画的框；没有功能块时按图纸页，再不然按网络连接）完成布局：同一功能块的元件放在一起，连接器放在板边并朝外（封装上的 "PCB Edge" 标记落在板边），去耦电容紧靠其 IC 的电源引脚，晶振紧靠其 IC，功率器件周围留出空间，板框按元件大小确定（已画好的板框则保留，元件放在其中）。`place_block` 把单个功能块放到指定位置或矩形内。之后 `kicad_read_pcb` 报告 courtyard 重叠、板框外的封装和飞线总长，`kicad_render` 加 `view: "3d"` 可查看效果。在 usb-attiny85 电路板上：无 courtyard 重叠，所有封装都在板框内，USB-C 位于板边，飞线总长 214 mm，随机摆放为 345 mm（[详情](docs/pcb-architecture.md#placement-12)）。
+
 ### 制板输出
 
 `/kicad-fab [board.kicad_pcb] [--preset jlcpcb|pcbway] [--force] [--step] [--ipc2581] [--odb]`（agent 使用 `kicad_export_fab`）先由 KiCad 判定电路板：存在 DRC 错误、未布通的连接、原理图一致性（parity）问题（原理图与电路板在同一目录时检查），或在指定预设时违反该板厂的工艺限制，都会拒绝导出，且不写任何文件。`--force` 强制导出，结果和 `fab-manifest.json` 会注明这一点。

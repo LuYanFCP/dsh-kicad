@@ -153,6 +153,22 @@ describe('dsh-tool-kicad', () => {
     expect(existsSync(schematic.replace(/\.kicad_sch$/, '.kicad_pcb'))).toBe(false)
   })
 
+  it.runIf(hasKiCadCli())('places a synced board by functional block, then checks it', async () => {
+    const ctx = await bootKiCad([toolKiCad])
+    const schematic = fixtureProject('usb_attiny_blocks')
+    const path = schematic.replace(/\.kicad_sch$/, '.kicad_pcb')
+    expect((await runTool(ctx, 'kicad_update_pcb', { schematic })).isError).toBeFalsy()
+    const placed = await runTool(ctx, 'kicad_edit_pcb', { path, operations: [{ op: 'auto_place' }] })
+    expect(placed.isError).toBeFalsy()
+    expect(text(placed)).toMatch(/- auto_place: 15 footprint\(s\) in 5 group\(s\): .*USB INPUT \(J1, R4, R5\) on the \w+ edge/)
+    expect(text(placed)).toMatch(/"courtyard_overlaps": \[\],\s+"outside_outline": \[\]/)
+    const read = await runTool(ctx, 'kicad_read_pcb', { path, drc: false })
+    expect(text(read)).toMatch(/Placement: ratsnest [\d.]+ mm; no courtyard overlaps, every footprint inside the outline; J1 on the \w+ edge/)
+    const view = await runTool(ctx, 'kicad_render', { path, view: '3d', width: 640 })
+    expect(view.isError).toBeFalsy()
+    expect(text(view)).toMatch(/png: .*usb_attiny_blocks-3d-top\.png/)
+  })
+
   it('searches symbol libraries', async () => {
     const ctx = await bootKiCad([toolKiCad])
     const result = await runTool(ctx, 'kicad_search_symbols', { query: 'resistor', library: 'Device', limit: 5 })

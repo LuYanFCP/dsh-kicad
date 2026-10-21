@@ -113,6 +113,16 @@ function formatBoard(b) {
     const types = Object.entries(b.drc.by_type).filter(([t]) => t !== "unconnected_items").map(([t, n]) => `${t}\xD7${n}`);
     lines.push(`DRC by KiCad ${b.drc.kicad_version ?? ""}: ${b.drc.unrouted} unrouted connection(s), ${b.drc.errors - b.drc.unrouted} other error(s), ${b.drc.warnings} warning(s)${types.length ? ` (${types.join(", ")})` : ""}`);
   }
+  if (b.placement) {
+    const p = b.placement;
+    const issues = [
+      p.courtyard_overlaps.length ? `courtyards overlap: ${p.courtyard_overlaps.map(([a, c]) => `${a}/${c}`).join(", ")}` : "",
+      p.outside_outline.length ? `outside the outline: ${p.outside_outline.join(", ")}` : "",
+      p.reference_over_pads.length ? `reference over pads: ${p.reference_over_pads.join(", ")}` : ""
+    ].filter(Boolean);
+    const edge = Object.entries(p.overhang).map(([ref, o2]) => `${ref} on the ${o2.side} edge`);
+    lines.push(`Placement: ratsnest ${p.ratsnest_mm} mm; ${issues.length ? issues.join("; ") : "no courtyard overlaps, every footprint inside the outline"}${edge.length ? `; ${edge.join(", ")}` : ""}`);
+  }
   if (b.footprints) {
     lines.push(`Footprints (${b.footprints.length}): reference value footprint @ position rotation side`);
     for (const f of b.footprints) {
@@ -374,11 +384,13 @@ function apply(ctx, config = {}) {
     }),
     defineTool({
       name: "kicad_render",
-      description: "Render a schematic (all sheets) or board with kicad-cli. Returns SVG/PNG paths under <project>/.dsh-kicad/render/ and, when the model accepts images, the first page as an image.",
+      description: `Render a schematic (all sheets) or board with kicad-cli. Returns SVG/PNG paths under <project>/.dsh-kicad/render/ and, when the model accepts images, the first page as an image. For a board, view "3d" renders KiCad's 3D view (PNG): use it to check a placement.`,
       parameters: {
         path: { type: "string", required: true, description: "A .kicad_sch or .kicad_pcb file." },
         pages: { type: "string", description: "Comma-separated page numbers (schematic only)." },
-        width: { type: "integer", description: "PNG width in pixels (default 1600)." }
+        width: { type: "integer", description: "PNG width in pixels (default 1600)." },
+        view: { type: "string", enum: ["2d", "3d"], description: 'Boards: "3d" renders the 3D view as PNG instead of the 2D plot (default "2d").' },
+        side: { type: "string", enum: ["top", "bottom"], description: "Board side of the 3D view (default top)." }
       },
       output: {
         schema: {
@@ -403,14 +415,16 @@ function apply(ctx, config = {}) {
           path,
           format: wantImage ? "png" : "svg",
           pages: args.pages,
-          width: args.width ?? 1600
+          width: args.width ?? 1600,
+          ...args.view ? { view: args.view } : {},
+          ...args.side ? { side: args.side } : {}
         }, exec.signal);
         const value = { path: rendered.path, svg: rendered.svg, ...rendered.png ? { png: rendered.png } : {} };
         if (wantImage && rendered.png?.[0]) {
           const data = await readFile(rendered.png[0]);
           value.image = await attachments(ctx).saveImage({ data: new Uint8Array(data), mediaType: "image/png", name: basename(rendered.png[0]) });
         } else if (!wantImage) {
-          value.note = "The current model does not accept images (or no attachment store is mounted); open the SVG in the KiCad sidebar viewer.";
+          value.note = args.view === "3d" ? "The current model does not accept images (or no attachment store is mounted); the PNG is on disk." : "The current model does not accept images (or no attachment store is mounted); open the SVG in the KiCad sidebar viewer.";
         }
         return value;
       }
@@ -539,7 +553,7 @@ function apply(ctx, config = {}) {
     }),
     defineTool({
       name: "kicad_read_pcb",
-      description: "Summarize a KiCad board: outline size, copper layers and thickness, design rules and net classes (from the .kicad_pro), every footprint (reference, value, footprint, position in mm, rotation, front/back side, locked, courtyard box, pad nets), zones, nets, and KiCad DRC's count of unrouted connections. Start here before editing a board.",
+      description: "Summarize a KiCad board: outline size, copper layers and thickness, design rules and net classes (from the .kicad_pro), every footprint (reference, value, footprint, position in mm, rotation, front/back side, locked, courtyard box, pad nets), zones, nets, placement checks (courtyard overlaps, footprints outside the outline, reference text over pads, total ratsnest length) and KiCad DRC's count of unrouted connections. Start here before editing a board.",
       parameters: {
         path: PCB,
         include_footprints: { type: "boolean", description: "Include the footprint list (default true)." },
@@ -563,6 +577,7 @@ function apply(ctx, config = {}) {
         'Millimetres, Y grows downward, rotation in degrees counter-clockwise; a pad is written "REF:PAD".',
         "Outline: set_board_outline{width,height,corner_radius?,x?,y?} (rectangle; x,y is the top-left corner, default: the old outline's corner or centred on the parts) or set_board_outline{points:[[x,y],...]}; it replaces everything on Edge.Cuts. add_mounting_hole{x,y,drill?(3.2),plated?,footprint?,reference?}.",
         "Placement: move_footprint{reference,x?,y?,rotation?,side?:front|back} (flipping to the back mirrors the part as KiCad does); move_footprints{references,dx,dy}; lock_footprint{reference,locked?} (locked parts refuse to move).",
+        `Automatic placement: auto_place{} lays out every unlocked footprint from the schematic's functional blocks (add_block frames; without them its sheets, else net connectivity): each block stays together, connectors sit on the board edge facing out, decoupling capacitors at their IC's power pins, crystals at their IC; the outline is sized to fit unless you drew one, which the parts must then fit (outline: "fit" | "keep" forces either); references:[...] places only those, e.g. parts kicad_update_pcb staged; groups:[{title,references}] overrides the blocks; gap?/group_gap?/margin? in mm. place_block{title | references, x, y, width?, height?, face?:left|right|top|bottom} lays out one block with its top-left corner at x,y or inside that rectangle. Both report the ratsnest length before/after and the placement checks; run them on a new board before routing, then check with kicad_render (view "3d").`,
         "Rules: set_design_rules{min_clearance?,min_track_width?,min_via_diameter?,min_via_annular_width?,min_through_hole_diameter?,min_hole_to_hole?,min_hole_clearance?,min_copper_edge_clearance?,min_silk_clearance?,min_text_height?,...}; set_net_class{name,nets?,track_width?,clearance?,via_diameter?,via_drill?} (nets move to that class; tracks and vias on them default to its sizes).",
         `Copper: add_track{points:[[x,y] | "REF:PAD",...],net?,layer?(F.Cu),width?} (pad endpoints snap to the pad centre; the pad must be on the track's net and layer); add_via{x,y,net,diameter?,drill?}; add_zone{net,layer | layers,outline?("board" | [[x,y],...]),priority?,clearance?,connect_pads?:thermal|solid|none}; add_keepout{outline,layers?,tracks?,vias?,pads?,copperpour?,footprints?} (true = not allowed).`,
         "Silkscreen: add_text{text,x,y,layer?(F.SilkS),size?,thickness?,rotation?}; set_reference_text{reference,x?,y?,size?,thickness?,rotation?,hide?} (x,y on the board).",
@@ -595,7 +610,7 @@ function apply(ctx, config = {}) {
         `Update PCB from Schematic, headless: create or update the board so it matches the schematic, as KiCad's "Update PCB from Schematic" does. Run it after the schematic passes ERC and every board symbol has a footprint, and again after every schematic change.`,
         "A new board (<schematic name>.kicad_pcb, the file KiCad pairs with the schematic) gets KiCad's empty board, a default 2-layer stackup (copper_layers: 4 for four), every footprint packed in rows inside a placeholder outline, and KiCad's default design rules.",
         'It refuses, writing nothing, with every REF:PIN that cannot go on the board: a symbol without a footprint (power symbols need a "#" reference), a footprint in no library, a pin without a pad of that number. Fix those in the schematic (set_footprint, or a footprint whose pads match the pins) and run it again.',
-        "On an existing board, placed footprints keep their position, rotation, side and lock; new ones are staged right of the outline for you to place (kicad_edit_pcb move_footprint); references, values, fields and pad nets follow the schematic; a renamed net keeps its tracks, vias and zones; a changed footprint is swapped in place; footprints whose symbol is gone are listed, and deleted only with delete_removed: true. Untouched text stays byte-identical; a second run changes nothing.",
+        "On an existing board, placed footprints keep their position, rotation, side and lock; new ones are staged right of the outline for you to place (kicad_edit_pcb auto_place with their references, or move_footprint); references, values, fields and pad nets follow the schematic; a renamed net keeps its tracks, vias and zones; a changed footprint is swapped in place; footprints whose symbol is gone are listed, and deleted only with delete_removed: true. Untouched text stays byte-identical; a second run changes nothing.",
         "The result ends with KiCad's schematic parity count: the board matches the schematic only at 0. Use dry_run to preview."
       ].join(" "),
       parameters: {

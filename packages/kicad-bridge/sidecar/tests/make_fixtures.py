@@ -5,6 +5,7 @@ fixture also needs KiCad's pcbnew Python module, i.e. KiCad's Python).
 """
 import json
 import os
+import shutil
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -51,6 +52,32 @@ def erc_errors():
 
 def blank():
     project("blank")
+
+
+def usb_attiny_blocks():
+    """usb_attiny with functional block frames (USB INPUT, PWR SUPPLY, MCU, ISP, UI) for block placement.
+
+    Made from the usb_attiny fixture with the schematic editor's own operations: the power LED (R1, D1) moves
+    next to the regulator, then five frames are drawn around the parts. ERC and the netlist stay the same
+    (tests/test_placement.py checks both)."""
+    src = os.path.join(HERE, "fixtures", "usb_attiny")
+    d = os.path.join(HERE, "fixtures", "usb_attiny_blocks")
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, "usb_attiny_blocks.kicad_sch")
+    shutil.copyfile(os.path.join(src, "usb_attiny.kicad_sch"), path)
+    with open(os.path.join(src, "usb_attiny.kicad_pro")) as fh:
+        pro = json.load(fh)
+    pro.setdefault("meta", {})["filename"] = "usb_attiny_blocks.kicad_pro"
+    with open(os.path.join(d, "usb_attiny_blocks.kicad_pro"), "w") as fh:
+        json.dump(pro, fh, indent=2)
+        fh.write("\n")
+    s = Schematic(path)
+    s.move_symbols(["R1", "D1"], dx=-38.1, dy=0)
+    for title, x, y, w, h in [("USB INPUT", 25.4, 38.1, 55.88, 58.42), ("PWR SUPPLY", 81.28, 30.48, 46.99, 66.04),
+                              ("MCU", 139.7, 66.04, 71.12, 58.42), ("ISP", 228.6, 66.04, 38.1, 58.42),
+                              ("UI", 152.4, 132.08, 76.2, 30.48)]:
+        s.add_block(title, x=x, y=y, width=w, height=h)
+    s.save()
 
 
 def rc_board():
@@ -103,4 +130,5 @@ if __name__ == "__main__":
     erc_errors()
     blank()
     rc_board()
+    usb_attiny_blocks()
     print("fixtures written")
