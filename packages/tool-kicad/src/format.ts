@@ -129,6 +129,37 @@ export interface SimModelValue {
   truncated: boolean
 }
 
+export interface McuFinding {
+  severity: 'error' | 'warning' | 'info'
+  rule: string
+  pin: string
+  pin_name: string
+  gpio: number | null
+  net: string
+  message: string
+  fix?: string
+}
+
+/** What kicad_check_mcu returns (the sidecar's check_mcu tool). */
+export interface McuCheckValue {
+  path: string
+  mcus: Array<{
+    reference: string
+    lib_id: string
+    value: string
+    provider: string | null
+    status: 'checked' | 'cannot_verify'
+    findings?: McuFinding[]
+    errors?: number
+    warnings?: number
+    reason?: string
+  }>
+  requirements: Array<{ target: string, needs: string[], pin?: string, gpio?: number, passed: boolean | null, reason?: string }>
+  /** true: no error and every requirement holds; false: an error or a failed requirement; null: nothing was covered by a provider. */
+  passed: boolean | null
+  providers: string[]
+}
+
 /** What kicad_autoroute returns (the sidecar's autoroute tool). */
 export interface AutorouteValue {
   pcb: string
@@ -319,6 +350,31 @@ export function formatSimulate(v: SimulateValue): string {
   if (v.monte_carlo) lines.push(...formatMonteCarlo(v.monte_carlo))
   lines.push(...v.notes, ...(v.warnings ?? []).map(w => `ngspice: ${w}`))
   lines.push(`Netlist and log: ${v.netlist}`)
+  return lines.join('\n')
+}
+
+const MARK = { error: '✗', warning: '!', info: 'i' } as const
+
+/** The MCU wiring check as the model reads it: the verdict, each finding with its fix, and what could not be verified. */
+export function formatMcu(v: McuCheckValue): string {
+  if (v.mcus.length === 0) return `MCU check on ${v.path}: no microcontroller found in the schematic.`
+  const verdict = v.passed === null ? 'CANNOT VERIFY (no MCU is covered by a provider)' : v.passed ? 'PASSED' : 'FAILED'
+  const lines = [`MCU check on ${v.path}: ${verdict}.`]
+  for (const m of v.mcus) {
+    if (m.status === 'cannot_verify') {
+      lines.push(`${m.reference} ${m.value} (${m.lib_id}): CANNOT VERIFY — ${m.reason}`)
+      continue
+    }
+    lines.push(`${m.reference} ${m.value} (provider ${m.provider}): ${m.errors} error(s), ${m.warnings} warning(s)`)
+    for (const f of m.findings ?? []) lines.push(`  ${MARK[f.severity]} ${f.severity} ${f.pin}${f.pin_name ? ` ${f.pin_name}` : ''}: ${f.message}${f.fix ? ` → ${f.fix}` : ''}`)
+  }
+  if (v.requirements.length) {
+    lines.push('Requirements:')
+    for (const r of v.requirements) {
+      const mark = r.passed === null ? '?' : r.passed ? '✓' : '✗'
+      lines.push(`  ${mark} ${r.target} needs ${r.needs.join(' + ')}${r.pin ? ` (${r.pin})` : ''}${r.reason ? `: ${r.reason}` : ''}`)
+    }
+  }
   return lines.join('\n')
 }
 

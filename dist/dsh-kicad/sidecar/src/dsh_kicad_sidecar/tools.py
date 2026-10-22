@@ -22,7 +22,8 @@ from .placement import OPERATIONS as PLACE_OPERATIONS, apply as apply_placement,
 from .board3d import QUALITIES, SIDES, export_glb, render_args, render_name
 from .autoroute import DEFAULT_TIMEOUT, MAX_TIMEOUT, autoroute
 from .freerouting import Cancelled, locate as locate_freerouting
-from . import simmodels, spice
+from . import mcu, simmodels, spice
+from .spice import SimulationError
 from .footprints import FootprintLibraries, default_footprint_dirs
 from . import geometry
 from .symbols import LibraryError, SymbolLibraries, default_symbol_dirs
@@ -211,6 +212,17 @@ TOOL_SPECS: list[ToolSpec] = [
              "below a folder, optionally filtered by a part of the model name. Read-only.",
              _obj({"path": {"type": "string", "description": "A model file, or a folder to search (e.g. the project folder)."},
                    "name": {"type": "string", "description": "Only models whose name contains this text (case-insensitive)."}}, ["path"])),
+    ToolSpec("check_mcu", "Static check of how each microcontroller is wired, from KiCad's netlist and a per-family pin table (MCU providers; covered now: "
+             "ESP32 classic modules and PICO). Finds strapping pins held at the wrong level at reset (ESP32 GPIO0/2/12), reserved flash/PSRAM pins in use, "
+             "input-only pins used to drive or left floating, an EN pin without pull-up, a thin supply decoupling; and judges requirements "
+             "{net|pin, needs: output|input|adc|adc1|adc2|dac|touch|boot_free} against the GPIO the signal is on. An MCU no provider covers is reported "
+             "as cannot_verify, never as passing. A project can add its own provider as <family>.mcu.json next to the schematic. Read-only.",
+             _obj({"path": SCH,
+                   "reference": {"type": "string", "description": "Only this MCU (e.g. U1)."},
+                   "requirements": {"type": "array", "items": {"type": "object"}, "description": (
+                       "What the firmware needs from the board, e.g. [{net: 'VBAT_SENSE', needs: 'adc1'}, {pin: 'U1:IO25', needs: ['output', 'dac']}]. "
+                       "needs: output (not input-only), input, adc (adc1 or adc2), adc1 (usable with WiFi), adc2, dac, touch, boot_free (not a strapping pin).")}},
+                  ["path"])),
     ToolSpec("export_netlist", "Write a netlist file with kicad-cli.",
              _obj({"path": SCH, "output": {"type": "string"},
                    "format": {"type": "string", "enum": ["kicadsexpr", "kicadxml", "cadstar", "orcadpcb2", "spice", "spicemodel", "pads", "allegro"], "default": "kicadsexpr"}},
@@ -608,6 +620,14 @@ class Toolbox:
         if spec or args.get("save_spec"):
             result["spec"] = {"path": spec_path, "loaded": sorted(set(spec) - set(given)) if spec else [], "saved": bool(args.get("save_spec"))}
         return result
+
+    def tool_check_mcu(self, args):
+        path = self.resolve(args["path"], ".kicad_sch")
+        try:
+            result = mcu.check_schematic(self.cli.netlist(path), os.path.dirname(path), args.get("requirements"), args.get("reference"))
+        except (mcu.McuError, SimulationError) as exc:
+            raise ToolError(str(exc)) from exc
+        return {"path": path, **result}
 
     def tool_sim_model(self, args):
         path = self.resolve(args["path"])

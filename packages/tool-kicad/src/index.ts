@@ -10,10 +10,10 @@ import {
   type Block, type Context, type ImageRef, type ToolDefinition, type ToolExecution,
 } from './dsh.ts'
 import type { DoctorReport } from 'dsh-kicad-bridge'
-import { eng, formatAutoroute, formatBoard, formatCheck, formatEdit, formatFab, formatFabGate, formatJson, formatPreset, formatSimModel, formatSimulate, formatSync, type AutorouteValue, type BoardSummary, type CheckReport, type EditValue, type FabResult, type MonteCarlo, type PresetResult, type SimAssertion, type SimModelValue, type SimulateValue, type SyncValue } from './format.ts'
+import { eng, formatAutoroute, formatBoard, formatCheck, formatEdit, formatFab, formatFabGate, formatJson, formatMcu, formatPreset, formatSimModel, formatSimulate, formatSync, type AutorouteValue, type BoardSummary, type CheckReport, type EditValue, type FabResult, type McuCheckValue, type McuFinding, type MonteCarlo, type PresetResult, type SimAssertion, type SimModelValue, type SimulateValue, type SyncValue } from './format.ts'
 
-export { eng, formatAutoroute, formatBoard, formatCheck, formatEdit, formatFab, formatFabGate, formatJson, formatPreset, formatSimModel, formatSimulate, formatSync }
-export type { AutorouteValue, BoardSummary, CheckReport, EditValue, FabResult, MonteCarlo, PresetResult, SimAssertion, SimModelValue, SimulateValue, SyncValue }
+export { eng, formatAutoroute, formatBoard, formatCheck, formatEdit, formatFab, formatFabGate, formatJson, formatMcu, formatPreset, formatSimModel, formatSimulate, formatSync }
+export type { AutorouteValue, BoardSummary, CheckReport, EditValue, FabResult, McuCheckValue, McuFinding, MonteCarlo, PresetResult, SimAssertion, SimModelValue, SimulateValue, SyncValue }
 
 export const name = 'dsh-tool-kicad'
 export const inject = ['tools', 'kicad']
@@ -33,6 +33,7 @@ export const TOOL_ACCESS = {
   kicad_render: 'read',
   kicad_simulate: 'read',
   kicad_sim_model: 'read',
+  kicad_check_mcu: 'read',
   kicad_export: 'write',
   kicad_export_fab: 'write',
   kicad_fab_preset: 'write',
@@ -64,6 +65,7 @@ export const PATH_ARGUMENTS: Record<KiCadToolName, readonly string[]> = {
   kicad_render: ['path'],
   kicad_simulate: ['path', 'output_dir', 'spec'],
   kicad_sim_model: ['path'],
+  kicad_check_mcu: ['path'],
   kicad_export: ['path', 'output'],
   kicad_export_fab: ['pcb', 'output_dir'],
   kicad_fab_preset: ['path'],
@@ -335,6 +337,28 @@ export function apply(ctx: Context, config: Config = {}): void {
       isConcurrencySafe: () => true,
       async execute(args, exec) {
         return await ctx.kicad.run('sim_model', { ...args, path: at(exec, args.path) }, exec.signal) as never
+      },
+    }),
+    defineTool({
+      name: 'kicad_check_mcu',
+      description: [
+        'Check how each microcontroller is wired, from KiCad\'s netlist and a per-family pin table (MCU providers), and let the tool judge it: strapping pins held at the wrong level at reset (ESP32 GPIO0, GPIO2, GPIO12), reserved flash/PSRAM pins in use, input-only GPIOs left floating or used to drive, an EN pin without pull-up, thin supply decoupling.',
+        'requirements states what the firmware needs from the board, one per signal: [{net: "VBAT_SENSE", needs: "adc1"}, {pin: "U1:IO25", needs: ["output", "dac"]}]; needs is output (not input-only), input, adc, adc1 (usable with WiFi), adc2, dac, touch or boot_free (not a strapping pin). Derive them from what the user says the board must do, then choose GPIOs that satisfy them before checking.',
+        'Covered now: classic ESP32 modules and PICO (a project can add its own provider as <family>.mcu.json next to the schematic). An MCU no provider covers comes back as CANNOT VERIFY: say so to the user, do not call that design checked.',
+        'This is a static wiring check, not a firmware simulation: it cannot tell what the firmware does with a pin. Report the tool\'s verdict and fixes; run it after placing or changing an MCU, and fix every error before calling the design done.',
+      ].join(' '),
+      parameters: {
+        path: SCH,
+        reference: { type: 'string', description: 'Only this MCU, e.g. U1.' },
+        requirements: { type: 'array', items: { type: 'object', additionalProperties: true, properties: { needs: { type: 'string' } } }, description: 'What the firmware needs from the board, as described above.' },
+      },
+      output: {
+        schema: { type: 'json' },
+        render: (_args, value) => [{ type: 'text', text: formatMcu(value as unknown as McuCheckValue) }],
+      },
+      isConcurrencySafe: () => true,
+      async execute(args, exec) {
+        return await ctx.kicad.run('check_mcu', { ...args, path: at(exec, args.path) }, exec.signal) as never
       },
     }),
     defineTool({
