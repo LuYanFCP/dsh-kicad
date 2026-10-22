@@ -29,6 +29,19 @@ function eng(value) {
   const [scale, prefix] = PREFIXES.find(([s]) => abs >= s * 0.9995) ?? PREFIXES[PREFIXES.length - 1];
   return `${Number((value / scale).toPrecision(3))}${prefix}`;
 }
+function formatMonteCarlo(mc) {
+  const spread = Object.entries(mc.tolerances).map(([ref, pct]) => `${ref} \xB1${pct}%`).join(", ");
+  const lines = [`Monte Carlo: ${mc.passed ? "PASSED" : "FAILED"} \u2014 ${mc.runs} runs (seed ${mc.seed}, ${mc.distribution}; varied ${spread}); an assertion must hold in ${Math.round(mc.min_pass_rate * 100)}% of the runs.`];
+  for (const a of mc.assertions) {
+    const bounds = [a.min_required !== null ? `\u2265 ${eng(a.min_required)}${a.unit}` : "", a.max_required !== null ? `\u2264 ${eng(a.max_required)}${a.unit}` : ""].filter(Boolean).join(" and ");
+    lines.push(`${a.passed ? "\u2713" : "\u2717"} ${a.name}: holds in ${a.passes}/${a.runs} runs; ${eng(a.min)}${a.unit} \u2026 ${eng(a.mean)}${a.unit} (mean) \u2026 ${eng(a.max)}${a.unit} (required ${bounds})`);
+    if (a.first_failure) {
+      const f = a.first_failure;
+      lines.push(`    first failure: run ${f.run}, ${eng(f.value)}${a.unit} with ${Object.entries(f.varied).map(([k, x]) => `${k} = ${eng(x)}`).join(", ")}`);
+    }
+  }
+  return lines;
+}
 function formatSimulate(v) {
   const held = v.assertions.filter((a) => a.passed).length;
   const head = v.passed === null ? `SPICE by ngspice ${v.ngspice ?? ""} on ${v.path}: no assertions given, results only.`.replace("  ", " ") : `SPICE by ngspice ${v.ngspice ?? ""} on ${v.path}: ${v.passed ? "PASSED" : "FAILED"} \u2014 ${held}/${v.assertions.length} assertion(s) hold.`.replace("  ", " ");
@@ -50,6 +63,8 @@ function formatSimulate(v) {
   }
   if (v.ignored.length)
     lines.push(`Not simulated (no SPICE model, left out of the circuit): ${v.ignored.join(", ")}.`);
+  if (v.monte_carlo)
+    lines.push(...formatMonteCarlo(v.monte_carlo));
   lines.push(...v.notes, ...(v.warnings ?? []).map((w) => `ngspice: ${w}`));
   lines.push(`Netlist and log: ${v.netlist}`);
   return lines.join("\n");

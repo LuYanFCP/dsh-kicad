@@ -11,7 +11,7 @@ import uuid as uuidlib
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from . import geometry, routing
+from . import geometry, routing, simmodels
 from .sexpr import Atom, Document, SList, L, S, dumps, fmt_num, parse
 from .symbols import SymbolLibraries, clone
 
@@ -485,6 +485,53 @@ class Schematic:
                     if ref is not None:
                         ref.items[1] = Atom(value, True)
         self.changes.append(f"set {reference}.{name} = {value!r}")
+
+    def set_sim_model(self, reference: str, library: str | None = None, name: str | None = None, pins: Any = None,
+                      device: str | None = None, params: str | None = None) -> dict[str, Any]:
+        """Bind a SPICE model to a symbol: from a model library (``library`` + ``name``: a .subckt or .model, pins matched by
+        name or by ``pins``), or a built-in device (``device`` such as D, with ``params``). Writes the hidden Sim.* properties."""
+        units = self.symbol_units(reference)
+        if not units:
+            raise SchematicError(f"no symbol with reference '{reference}' in {os.path.basename(self.path)}")
+        lib = self.lib_symbol(units[0].lib_id)
+        symbol_pins: dict[str, dict[str, Any]] = {}
+        for pin in geometry.library_pins(lib) if lib is not None else []:
+            if pin.number and pin.body_style in (0, 1):
+                symbol_pins.setdefault(pin.number, {"number": pin.number, "name": "" if pin.name == "~" else pin.name})
+        pin_list = list(symbol_pins.values())
+        existing = {p.value(0): p.value(1) for p in units[0].node.lists("property")}
+        notes: list[str] = []
+        try:
+            if library or name:
+                if not (library and name):
+                    raise SchematicError("set_sim_model needs library and name together (or device alone for a built-in device)")
+                path, value = simmodels.library_reference(self.path, library)
+                model = simmodels.load_model(path, name)
+                sim_pins, mapping, notes = simmodels.plan_pins(pin_list, model, pins)
+                props = {"Sim.Library": value, "Sim.Name": model["name"], "Sim.Pins": sim_pins,
+                         "Sim.Device": "SUBCKT" if model["kind"] == "subckt" else model["type"]}
+                result: dict[str, Any] = {"reference": reference, "library": value, "name": model["name"], "device": props["Sim.Device"],
+                                          "kind": model["kind"], "pins": sim_pins, "mapping": mapping}
+            elif device:
+                props = {"Sim.Device": device}
+                result = {"reference": reference, "device": device}
+                kind = simmodels.DEVICE_PINS.get(device.upper())
+                if kind and not existing.get("Sim.Pins"):
+                    sim_pins, mapping, notes = simmodels.plan_pins(pin_list, {"name": device, "kind": "model", "type": device.upper()}, pins)
+                    props["Sim.Pins"] = sim_pins
+                    result.update(pins=sim_pins, mapping=mapping)
+            else:
+                raise SchematicError("set_sim_model needs library + name, or device")
+        except simmodels.ModelError as exc:
+            raise SchematicError(f"{reference}: {exc}") from exc
+        if params is not None:
+            props["Sim.Params"] = params
+            result["params"] = params
+        for key, value in props.items():
+            self.set_property(reference, key, value, hide=True)
+        if notes:
+            result["notes"] = notes
+        return result
 
     def remove_symbol(self, reference: str) -> None:
         units = self.symbol_units(reference)
@@ -1104,6 +1151,7 @@ def _pin_pair(value: str) -> tuple[str, str]:
 OPERATIONS: dict[str, Callable[..., Any]] = {
     "add_symbol": lambda s, lib_id, x, y, **kw: s.add_symbol(lib_id, x, y, **kw),
     "set_property": lambda s, reference, name, value, hide=None: s.set_property(reference, name, value, hide),
+    "set_sim_model": lambda s, reference, **kw: s.set_sim_model(reference, **kw),
     "set_value": lambda s, reference, value: s.set_property(reference, "Value", value),
     "set_footprint": lambda s, reference, footprint: s.set_property(reference, "Footprint", footprint),
     "remove_symbol": lambda s, reference: s.remove_symbol(reference),

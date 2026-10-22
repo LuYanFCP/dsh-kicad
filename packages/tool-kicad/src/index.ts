@@ -10,10 +10,10 @@ import {
   type Block, type Context, type ImageRef, type ToolDefinition, type ToolExecution,
 } from './dsh.ts'
 import type { DoctorReport } from 'dsh-kicad-bridge'
-import { eng, formatAutoroute, formatBoard, formatCheck, formatEdit, formatFab, formatFabGate, formatJson, formatPreset, formatSimulate, formatSync, type AutorouteValue, type BoardSummary, type CheckReport, type EditValue, type FabResult, type PresetResult, type SimAssertion, type SimulateValue, type SyncValue } from './format.ts'
+import { eng, formatAutoroute, formatBoard, formatCheck, formatEdit, formatFab, formatFabGate, formatJson, formatPreset, formatSimModel, formatSimulate, formatSync, type AutorouteValue, type BoardSummary, type CheckReport, type EditValue, type FabResult, type MonteCarlo, type PresetResult, type SimAssertion, type SimModelValue, type SimulateValue, type SyncValue } from './format.ts'
 
-export { eng, formatAutoroute, formatBoard, formatCheck, formatEdit, formatFab, formatFabGate, formatJson, formatPreset, formatSimulate, formatSync }
-export type { AutorouteValue, BoardSummary, CheckReport, EditValue, FabResult, PresetResult, SimAssertion, SimulateValue, SyncValue }
+export { eng, formatAutoroute, formatBoard, formatCheck, formatEdit, formatFab, formatFabGate, formatJson, formatPreset, formatSimModel, formatSimulate, formatSync }
+export type { AutorouteValue, BoardSummary, CheckReport, EditValue, FabResult, MonteCarlo, PresetResult, SimAssertion, SimModelValue, SimulateValue, SyncValue }
 
 export const name = 'dsh-tool-kicad'
 export const inject = ['tools', 'kicad']
@@ -32,6 +32,7 @@ export const TOOL_ACCESS = {
   kicad_drc: 'read',
   kicad_render: 'read',
   kicad_simulate: 'read',
+  kicad_sim_model: 'read',
   kicad_export: 'write',
   kicad_export_fab: 'write',
   kicad_fab_preset: 'write',
@@ -62,6 +63,7 @@ export const PATH_ARGUMENTS: Record<KiCadToolName, readonly string[]> = {
   kicad_drc: ['path'],
   kicad_render: ['path'],
   kicad_simulate: ['path', 'output_dir'],
+  kicad_sim_model: ['path'],
   kicad_export: ['path', 'output'],
   kicad_export_fab: ['pcb', 'output_dir'],
   kicad_fab_preset: ['path'],
@@ -286,7 +288,8 @@ export function apply(ctx: Context, config: Config = {}): void {
         'Analyses: op (DC operating point, the default), tran {stop, step?} (transient), ac {start, stop, points?} (frequency sweep; needs a source with an ac magnitude). Probes: V(net), V(netA,netB), I(R1|C1|L1|D1|V1); ngspice sign: a source that supplies current reads negative, so use abs: true.',
         'assertions: [{probe, min?, max?, equals? with tol or tol_pct, name?, analysis?, measure?, at?, from?, to?, ref?, abs?}]. Numbers take SPICE suffixes (10k, 100n, 3.3, 20m). Measures: op value; tran final|initial|max|min|mean|rms|pp|at (at = time, from/to a window); ac gain_db|phase_deg (at = frequency)|peak_gain_db|lowpass_cutoff_hz|highpass_cutoff_hz (ref: e.g. V(IN) for gain relative to the input).',
         'Turn each requirement into an assertion (e.g. 3V3 rail: {probe: "V(3V3)", min: 3.2, max: 3.4}; LED current: {probe: "I(D1)", min: "5m", max: "15m", abs: true}); on a failure change the circuit and run again. Report the tool\'s verdict, not your own.',
-        'Every simulated part needs a SPICE model: R, C, L work from the value; a diode or LED needs the hidden property Sim.Device = D (LED: also Sim.Params "is=1e-18 n=2 rs=3"), otherwise the tool refuses; ICs without a model are left out and listed (use Sim.Library/Sim.Name for a vendor model). The circuit needs a ground net (a power:GND symbol) and, for tran/ac, a source.',
+        'Tolerance: add monte_carlo to learn whether the requirements still hold when parts vary (e.g. 5% resistors); it reports pass counts and the spread per assertion, with the first failing draw.',
+        'Every simulated part needs a SPICE model: R, C, L work from the value; a diode or LED needs set_sim_model {reference, device: "D", params: "is=1e-18 n=2 rs=3" for an LED}, otherwise the tool refuses; ICs, regulators and transistors need a vendor model: find it with kicad_sim_model and bind it with kicad_edit_schematic set_sim_model (it maps the pins and checks them); parts without a model are left out and listed. The circuit needs a ground net (a power:GND symbol) and, for tran/ac, a source.',
         'Needs ngspice: when it is missing the error says how to install it; tell the user (kicad_doctor lists the commands), never install anything yourself.',
       ].join(' '),
       parameters: {
@@ -298,6 +301,11 @@ export function apply(ctx: Context, config: Config = {}): void {
         },
         assertions: { type: 'array', items: { type: 'object', additionalProperties: true, properties: { probe: { type: 'string', required: true } } }, description: 'The requirements to verify, as described above.' },
         probes: { type: 'array', items: { type: 'string' }, description: 'Extra currents to record, e.g. I(R1); node voltages are always recorded.' },
+        monte_carlo: {
+          type: 'object',
+          additionalProperties: true,
+          description: 'Tolerance analysis (needs assertions): {runs? 2-500 (default 50), seed? (default 1, repeatable), tolerances? {R: 5, C: 10, L: 10, R1: "1%", V1: 2} in percent (a part letter or a reference; defaults R 5, C 10, L 10), distribution? uniform | gaussian (3σ = tolerance), min_pass_rate? 0-1 (default 1: every run must pass)}. Repeats the run with those values drawn at random and reports how often each assertion holds.',
+        },
         timeout: { type: 'number', description: 'Seconds ngspice may run (default 60, at most 600).' },
       },
       output: {
@@ -308,6 +316,22 @@ export function apply(ctx: Context, config: Config = {}): void {
       async execute(args, exec) {
         const seconds = Math.min(Math.max(Number(args.timeout ?? 60), 1), 600)
         return await ctx.kicad.run('simulate', { ...args, path: at(exec, args.path) }, exec.signal, { timeoutMs: seconds * 1000 + 60_000 }) as never
+      },
+    }),
+    defineTool({
+      name: 'kicad_sim_model',
+      description: 'List the SPICE models in a model file (.lib .mod .sub .cir .sp .spi .ckt .cmp .mdl .inc) or in every model file below a folder, optionally filtered by part of the model name: each .subckt with its pin names and the comment above it, each .model with its device type. Use it to find the model for a part and to see its pins before binding it with kicad_edit_schematic set_sim_model {reference, library, name, pins?}. Models come from files the user has (vendor downloads); do not invent them.',
+      parameters: {
+        path: { type: 'string', required: true, description: 'A model file, or a folder to search (e.g. the project folder).' },
+        name: { type: 'string', description: 'Only models whose name contains this text (case-insensitive).' },
+      },
+      output: {
+        schema: { type: 'json' },
+        render: (_args, value) => [{ type: 'text', text: formatSimModel(value as unknown as SimModelValue) }],
+      },
+      isConcurrencySafe: () => true,
+      async execute(args, exec) {
+        return await ctx.kicad.run('sim_model', { ...args, path: at(exec, args.path) }, exec.signal) as never
       },
     }),
     defineTool({
@@ -404,6 +428,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         'Layout by function: set_page{paper?,title?,date?,rev?,company?,comments?}; add_block{title, references:[...] (frame encloses those parts with their wiring) | x,y,width,height} draws a dashed frame with a bold title;',
         'move_block{title, dx,dy | x,y} moves the frame with the parts inside and their wiring; move_symbols{references,dx,dy} moves parts with their wires, labels and power symbols (refuses if that would tear a wire to a part left behind);',
         'add_text{text,x,y,size?,bold?}; add_rectangle{x,y,width,height,style?}.',
+        'SPICE models for kicad_simulate: set_sim_model{reference, library, name, pins?} binds a .subckt or .model from a model file (library relative to the project; find them with kicad_sim_model), matching symbol pins to model pins by name and refusing when it cannot, so give pins {"1":"GND","2":"OUT"} (symbol pin → model pin) when the names differ; set_sim_model{reference, device:"D", params:"is=1e-18 n=2 rs=3"} sets a built-in device (diode, LED) without a file.',
         'Rotation is counter-clockwise: Device:R/C/L at 0° are vertical with pin 1 on top; at 90° horizontal with pin 1 on the left; add_symbol results list the placed pin positions.',
         'Wire parts that work together with connect_pins (chain a net with several pins: A-B, then B-C); use power symbols for rails and labels between blocks or across the page. A connect_pins result with a note took a detour: move, rotate or mirror a part so the pins face each other, or use labels. Keep one call to at most ~20 operations; split bigger changes. Never rewrite or recreate a .kicad_sch to fix layout — remove and re-add the affected items.',
         'ERC runs automatically afterwards when the KiCad policy is enabled.',

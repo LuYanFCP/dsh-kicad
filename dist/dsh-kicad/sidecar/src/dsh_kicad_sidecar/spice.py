@@ -439,8 +439,10 @@ def _analysis_command(spec: dict[str, Any]) -> tuple[str, str]:
 
 
 def simulate(cli: Any, schematic: str, out_dir: str, analyses: list[dict[str, Any]] | None, assertions: list[dict[str, Any]] | None,
-             ngspice: str, timeout: float = DEFAULT_TIMEOUT, probes: list[str] | None = None) -> dict[str, Any]:
-    """Export the netlist, run ``analyses`` (default: one operating point) and judge ``assertions``."""
+             ngspice: str, timeout: float = DEFAULT_TIMEOUT, probes: list[str] | None = None,
+             monte_carlo: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Export the netlist, run ``analyses`` (default: one operating point) and judge ``assertions``; with ``monte_carlo``
+    run it again with the R, C, L (and source) values drawn within their tolerances and report how often each assertion holds."""
     specs = analyses or [{"type": "op"}]
     commands = [_analysis_command(s) for s in specs]
     order = [kind for kind, _ in commands]
@@ -449,15 +451,19 @@ def simulate(cli: Any, schematic: str, out_dir: str, analyses: list[dict[str, An
     stem = os.path.splitext(os.path.basename(schematic))[0]
     os.makedirs(out_dir, exist_ok=True)
     raw_netlist = os.path.join(out_dir, f"{stem}.net.cir")
-    cli.export_netlist_file(schematic, raw_netlist, "spice")
+    exported = cli.run("sch", "export", "netlist", "--format", "spice", "-o", raw_netlist, schematic, cwd=os.path.dirname(schematic), check=False)
+    output = exported.stdout + "\n" + exported.stderr
+    problems = [l.strip() for l in output.splitlines() if re.search(r"error|cannot|could not", l, re.I) and "assert" not in l.lower()]
+    if exported.returncode != 0 or problems:
+        raise SimulationError("KiCad could not build the SPICE netlist:\n" + "\n".join(dict.fromkeys(problems[:6] or output.strip().splitlines()[-4:])) +
+                              "\nCheck Sim.Library / Sim.Name (kicad_sim_model lists what a model file holds).")
     with open(raw_netlist, encoding="utf-8") as fh:
         lines, ignored, modelless = prepare_netlist(fh.read())
     if modelless:
         raise SimulationError(
             f"{', '.join(modelless)} {'has' if len(modelless) == 1 else 'have'} no SPICE model: without Sim.Device KiCad wires a diode's nodes "
-            "in symbol pin order (K before A), the reverse of SPICE's, so the result would be wrong. Set the hidden property Sim.Device to D "
-            "on it (kicad_edit_schematic set_property; for an LED also Sim.Params, e.g. \"is=1e-18 n=2 rs=3\"), or Sim.Library and Sim.Name "
-            "for a vendor model.")
+            "in symbol pin order (K before A), the reverse of SPICE's, so the result would be wrong. Bind a model with kicad_edit_schematic "
+            "set_sim_model: {reference, device: \"D\"} (for an LED also params: \"is=1e-18 n=2 rs=3\"), or {reference, library, name} for a vendor model.")
     notes: list[str] = []
     nodes = netlist_nodes(lines)
     if not any(n in ("0", "gnd") for n in nodes):
@@ -477,6 +483,30 @@ def simulate(cli: Any, schematic: str, out_dir: str, analyses: list[dict[str, An
         if p.kind == "i" and p.names[0].lower() not in elements:
             raise SimulationError(f"{p.text}: no element {p.names[0]} in the circuit (elements: {', '.join(sorted(e.upper() for e in elements))})")
 
+    if monte_carlo is not None and not assertions:
+        raise SimulationError("monte_carlo judges how often each assertion holds: give assertions")
+    cwd = os.path.dirname(schematic)
+    results, log_text, deck, log = _run_deck(ngspice, lines, stem, out_dir, commands, order, saves, cwd, timeout)
+    summary = {"analyses": [_summarize(kind, results[kind], nodes) for kind in order]}
+    judged = [evaluate(a, results, set(nodes), order) for a in assertions or []]
+    out: dict[str, Any] = {
+        "path": schematic, "ngspice": ngspice_version(ngspice), "netlist": deck, "log": log, **summary,
+        "assertions": judged, "passed": all(a["passed"] for a in judged) if judged else None,
+        "ignored": ignored, "notes": notes,
+    }
+    warnings = _warnings(log_text)
+    if warnings:
+        out["warnings"] = warnings
+    if monte_carlo is not None:
+        mc = _monte_carlo(ngspice, lines, stem, out_dir, commands, order, saves, cwd, timeout, nodes, assertions or [], monte_carlo)
+        out["monte_carlo"] = mc
+        out["passed"] = bool(out["passed"] and mc["passed"])
+    return out
+
+
+def _run_deck(ngspice: str, lines: list[str], stem: str, out_dir: str, commands: list[tuple[str, str]], order: list[str],
+              saves: list[str], cwd: str, timeout: float) -> tuple[dict[str, dict[str, Any]], str, str, str]:
+    """Write the deck (netlist + control block) into ``out_dir``, run ngspice, and parse each analysis' rawfile."""
     deck = os.path.join(out_dir, f"{stem}.cir")
     log = os.path.join(out_dir, f"{stem}.log")
     raws = {kind: os.path.join(out_dir, f"{stem}.{kind}.raw") for kind in order}
@@ -489,13 +519,13 @@ def simulate(cli: Any, schematic: str, out_dir: str, analyses: list[dict[str, An
     for kind, command in commands:
         control += [command, f"write {_quote(raws[kind])} all"]
     control += ["quit", ".endc", ".end", ""]
-    body = [line for line in lines]
+    body = list(lines)
     if body and not body[0].lower().startswith(".title") and not body[0].startswith("*"):
         body.insert(0, f".title {stem}")
     with open(deck, "w", encoding="utf-8") as fh:
         fh.write("\n".join(body + control))
     try:
-        proc = subprocess.run([ngspice, "-b", "-o", log, deck], cwd=os.path.dirname(schematic), capture_output=True, text=True,
+        proc = subprocess.run([ngspice, "-b", "-o", log, deck], cwd=cwd, capture_output=True, text=True,
                               timeout=min(max(timeout, 1.0), MAX_TIMEOUT), stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired as exc:
         raise SimulationError(f"ngspice did not finish within {timeout:g} s (a transient with a very small step, or a circuit that does not converge); "
@@ -506,18 +536,120 @@ def simulate(cli: Any, schematic: str, out_dir: str, analyses: list[dict[str, An
     missing = [k for k, p in raws.items() if not os.path.isfile(p)]
     if missing:
         raise SimulationError(_failure(log_text, missing, deck))
-    results = {kind: parse_raw(_read(path)) for kind, path in raws.items()}
-    summary = {"analyses": [_summarize(kind, results[kind], nodes) for kind in order]}
-    judged = [evaluate(a, results, set(nodes), order) for a in assertions or []]
-    out: dict[str, Any] = {
-        "path": schematic, "ngspice": ngspice_version(ngspice), "netlist": deck, "log": log, **summary,
-        "assertions": judged, "passed": all(a["passed"] for a in judged) if judged else None,
-        "ignored": ignored, "notes": notes,
-    }
-    warnings = _warnings(log_text)
-    if warnings:
-        out["warnings"] = warnings
-    return out
+    return {kind: parse_raw(_read(path)) for kind, path in raws.items()}, log_text, deck, log
+
+
+# ---- Monte Carlo -----------------------------------------------------------------------------
+DEFAULT_TOLERANCES = {"R": 5.0, "C": 10.0, "L": 10.0}  # percent: ordinary 5 % resistors, 10 % capacitors and inductors
+MAX_RUNS = 500
+DEFAULT_RUNS = 50
+
+
+def _percent(value: Any, what: str) -> float:
+    if isinstance(value, str) and value.strip().endswith("%"):
+        value = value.strip()[:-1]
+    pct = parse_value(value, what)
+    if not 0 <= pct <= 100:
+        raise SimulationError(f"{what} {value!r} must be between 0 and 100 (percent)")
+    return pct
+
+
+def varying_elements(lines: list[str]) -> dict[str, tuple[int, int, float]]:
+    """``{REF: (line index, token index, nominal)}`` for what a Monte Carlo run can vary: the value of R, C and L, and the DC level of V and I sources."""
+    found: dict[str, tuple[int, int, float]] = {}
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if not s or s[0] in ".*+":
+            continue
+        tokens = s.split()
+        letter = tokens[0][0].upper()
+        index = None
+        if letter in "RCL" and len(tokens) >= 4:
+            index = 3
+        elif letter in "VI":
+            index = next((j + 1 for j, t in enumerate(tokens) if t.upper() == "DC" and j + 1 < len(tokens)), None)
+        if index is None:
+            continue
+        try:
+            found[tokens[0].upper()] = (i, index, parse_value(tokens[index]))
+        except SimulationError:
+            continue  # a model name or an expression: not a plain number
+    return found
+
+
+def _monte_carlo(ngspice: str, lines: list[str], stem: str, out_dir: str, commands: list[tuple[str, str]], order: list[str], saves: list[str],
+                 cwd: str, timeout: float, nodes: dict[str, str], assertions: list[dict[str, Any]], spec: dict[str, Any]) -> dict[str, Any]:
+    import random
+    import tempfile
+    import time
+
+    runs = int(spec.get("runs", DEFAULT_RUNS))
+    if not 2 <= runs <= MAX_RUNS:
+        raise SimulationError(f"monte_carlo runs must be between 2 and {MAX_RUNS}")
+    seed = int(spec.get("seed", 1))
+    distribution = spec.get("distribution", "uniform")
+    if distribution not in ("uniform", "gaussian"):
+        raise SimulationError("monte_carlo distribution must be uniform (within ±tolerance) or gaussian (3σ = tolerance)")
+    min_rate = float(spec.get("min_pass_rate", 1.0))
+    if not 0 < min_rate <= 1:
+        raise SimulationError("monte_carlo min_pass_rate must be in (0, 1]")
+    tolerances = {k: v for k, v in DEFAULT_TOLERANCES.items()}
+    for key, value in (spec.get("tolerances") or {}).items():
+        tolerances[str(key).upper()] = _percent(value, f"tolerance for {key}")
+    elements = varying_elements(lines)
+    plan: dict[str, float] = {}  # REF → percent
+    for ref in elements:
+        pct = tolerances.get(ref, tolerances.get(ref[0]))
+        if pct:
+            plan[ref] = pct
+    for key in tolerances:
+        if len(key) > 1 and key not in elements:
+            raise SimulationError(f"tolerance for {key}: no such element with a plain value in the circuit "
+                                  f"(variable: {', '.join(sorted(elements)) or 'none'})")
+    if not plan:
+        raise SimulationError("monte_carlo found nothing to vary: no R, C or L value (or V/I DC level) has a tolerance")
+    rng = random.Random(seed)
+    stats: list[dict[str, Any]] = [{"values": [], "passes": 0, "first_failure": None} for _ in assertions]
+    started = time.monotonic()
+    done = 0
+    with tempfile.TemporaryDirectory(prefix="mc-", dir=out_dir) as scratch:
+        for run in range(1, runs + 1):
+            remaining = timeout - (time.monotonic() - started)
+            if remaining <= 0:
+                raise SimulationError(f"Monte Carlo used the whole {timeout:g} s budget after {done} of {runs} runs; raise timeout or lower runs")
+            varied: dict[str, float] = {}
+            current = list(lines)
+            for ref, pct in plan.items():
+                i, j, nominal = elements[ref]
+                spread = pct / 100
+                delta = rng.uniform(-spread, spread) if distribution == "uniform" else max(-spread, min(spread, rng.gauss(0, spread / 3)))
+                varied[ref] = nominal * (1 + delta)
+                tokens = current[i].split()
+                tokens[j] = repr(varied[ref])
+                current[i] = " ".join(tokens)
+            results, _, _, _ = _run_deck(ngspice, current, stem, scratch, commands, order, saves, cwd, min(remaining, MAX_TIMEOUT))
+            done += 1
+            for slot, assertion in zip(stats, assertions):
+                judged = evaluate(assertion, results, set(nodes), order)
+                slot["values"].append(judged["value"])
+                slot["judged"] = judged
+                if judged["passed"]:
+                    slot["passes"] += 1
+                elif slot["first_failure"] is None:
+                    slot["first_failure"] = {"run": run, "value": judged["value"], "varied": {k: float(f"{v:.6g}") for k, v in varied.items()}}
+    rows = []
+    for slot in stats:
+        values = slot["values"]
+        judged = slot["judged"]
+        mean = sum(values) / len(values)
+        stdev = math.sqrt(sum((v - mean) ** 2 for v in values) / (len(values) - 1))
+        rate = slot["passes"] / runs
+        rows.append({"name": judged["name"], "probe": judged["probe"], "unit": judged["unit"], "min_required": judged["min"], "max_required": judged["max"],
+                     "passes": slot["passes"], "runs": runs, "pass_rate": rate, "min": min(values), "mean": mean, "max": max(values), "stdev": stdev,
+                     "passed": rate >= min_rate, **({"first_failure": slot["first_failure"]} if slot["first_failure"] else {})})
+    return {"runs": runs, "seed": seed, "distribution": distribution, "min_pass_rate": min_rate,
+            "tolerances": {k: v for k, v in sorted(plan.items())}, "varied": sorted(plan),
+            "assertions": rows, "passed": all(r["passed"] for r in rows)}
 
 
 def _quote(path: str) -> str:
@@ -554,10 +686,10 @@ def _failure(log: str, missing: list[str], deck: str) -> str:
 def _summarize(kind: str, raw: dict[str, Any], nodes: dict[str, str]) -> dict[str, Any]:
     vectors = raw["vectors"]
     if kind == "op":  # an operating point has no scale: every vector is a result
-        names = list(vectors)
+        names = [n for n in vectors if "." not in n]  # x1.n1, b.x1.b1#branch: a subcircuit's insides
         values = {_label(n, nodes): _real(vectors[n][0]) for n in names}
         return {"type": "op", "values": values}
-    names = [n for n in vectors if n != raw["scale_name"]]
+    names = [n for n in vectors if n != raw["scale_name"] and "." not in n]
     if kind == "tran":
         signals = {}
         for n in names[:60]:

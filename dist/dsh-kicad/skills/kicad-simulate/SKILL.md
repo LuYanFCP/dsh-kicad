@@ -23,8 +23,8 @@ ERC says the schematic is wired correctly; `kicad_simulate` says whether it **be
   - `VPULSE`: `y1=0 y2=3.3 td=0 tr=1n tf=1n tw=5m per=10m` (a button press, a clock).
   - `IDC`: a current load.
 - **R, C, L**: simulated from their Value (`10k`, `100n`, `4.7u`).
-- **Diode and LED**: set the hidden property `Sim.Device` = `D` (`set_property` with `hide: true`); for an LED also `Sim.Params` = `is=1e-18 n=2 rs=3` (about 2 V at 10 mA). Without `Sim.Device` the tool refuses, because KiCad would wire the diode backwards.
-- **Regulators, op-amps, transistors, ICs**: they need a vendor model: set `Sim.Library` (a `.lib`/`.mod` file) and `Sim.Name` (its model). Parts without any model are left out of the circuit and listed in the result; a requirement that depends on them cannot be verified: say so.
+- **Diode and LED**: `set_sim_model {reference, device: "D"}` (an LED also `params: "is=1e-18 n=2 rs=3"`, about 2 V at 10 mA). Without it the tool refuses, because KiCad would wire the diode backwards.
+- **Regulators, op-amps, transistors, ICs** need a vendor model, from a file the user has (never invent one): `kicad_sim_model {path: <project folder or file>, name?}` lists the `.subckt` (with pins and the comment above) and `.model` entries; then `set_sim_model {reference, library: "models/x.lib", name: "LDO33", pins?}`. Pins are matched to the model's by name; when they differ the op refuses and shows both lists, so give `pins: {"1": "GND", "2": "OUT", "3": "IN"}` (symbol pin → model pin), reading the model's comment for which is which. KiCad trusts a wrong mapping, so check it against the datasheet. Parts without any model are left out of the circuit and listed in the result; a requirement that depends on them cannot be verified: say so.
 - Connectors and test points need nothing. Mark parts you do not simulate clearly in your answer.
 
 ## Assertions
@@ -44,12 +44,17 @@ ERC says the schematic is wired correctly; `kicad_simulate` says whether it **be
 
 Net names are the names on the schematic (`V(3V3)`, not `/3V3`); `V(a,b)` is the difference; `I()` works for R, C, L, D and V parts. Run `tran` and `ac` together by listing both in `analyses`; then name the `analysis` in each assertion.
 
+## Tolerances (Monte Carlo)
+
+A requirement that holds only for nominal parts is not met. Add `monte_carlo: {runs: 50}` (needs assertions): it repeats the run with R, C, L (defaults ±5 %, ±10 %, ±10 %) and, if you name them, supply levels drawn at random, then reports per assertion how many runs held, the min/mean/max and the first failing draw. `tolerances: {R: 1, "C1": "20%", V1: 2}` (percent; a part letter or a reference) sets the spread, `min_pass_rate` (default 1: every run) accepts a share below 100 %, `seed` makes it repeatable. On a failure, tighten the parts that drive the result (the first failing draw shows them), widen the design margin, or ask whether the requirement is meant to cover tolerance. Op-amp, LDO and transistor parameters are not varied, only the values listed.
+
 ## When it fails to run
 
 | Message | Fix |
 |---|---|
 | no ground | add a `power:GND` symbol to the circuit |
-| no SPICE model / `Sim.Device` | set it as above |
+| no SPICE model (diode) | `set_sim_model` as above |
+| KiCad could not build the netlist | `Sim.Library` / `Sim.Name` is wrong: check with `kicad_sim_model` |
 | singular matrix / no DC path | a net has no DC path to ground (a capacitor-only net, a floating pin): connect it or add a large resistor to ground |
 | unknown subcircuit/model | the part's `Sim.Library` / `Sim.Name` is wrong or missing |
 | did not finish in time | `tran` with a tiny step over a long time: raise `step` or shorten `stop` |

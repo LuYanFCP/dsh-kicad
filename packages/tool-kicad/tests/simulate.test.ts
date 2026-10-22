@@ -1,10 +1,10 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync } from 'node:fs'
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import * as toolKiCad from '../src/index.ts'
-import { eng, formatSimulate, type SimulateValue } from '../src/index.ts'
+import { eng, formatSimModel, formatSimulate, type SimModelValue, type SimulateValue } from '../src/index.ts'
 import { bootKiCad, disposeAll, hasKiCadCli, runTool, text } from '../../../test/harness.ts'
 
 afterEach(disposeAll)
@@ -48,6 +48,55 @@ describe('formatSimulate', () => {
   })
 })
 
+describe('formatSimulate with Monte Carlo and formatSimModel', () => {
+  it('reports pass counts, the spread and the first failing draw', () => {
+    const out = formatSimulate(value({
+      monte_carlo: {
+        runs: 50, seed: 1, distribution: 'uniform', min_pass_rate: 1, tolerances: { R1: 5, R2: 5 }, varied: ['R1', 'R2'], passed: false,
+        assertions: [{
+          name: 'V(MID)', probe: 'V(MID)', unit: 'V', min_required: 2.4, max_required: 2.6, passes: 41, runs: 50, pass_rate: 0.82,
+          min: 2.37, mean: 2.5, max: 2.63, stdev: 0.05, passed: false, first_failure: { run: 3, value: 2.62, varied: { R1: 950, R2: 1040 } },
+        }],
+      },
+    }))
+    expect(out).toContain('Monte Carlo: FAILED — 50 runs (seed 1, uniform; varied R1 ±5%, R2 ±5%)')
+    expect(out).toContain('✗ V(MID): holds in 41/50 runs; 2.37V … 2.5V (mean) … 2.63V (required ≥ 2.4V and ≤ 2.6V)')
+    expect(out).toContain('first failure: run 3, 2.62V with R1 = 950, R2 = 1.04k')
+  })
+
+  it('lists models with their pins', () => {
+    const v: SimModelValue = {
+      path: '/p', models: 2, truncated: false,
+      files: [{ file: '/p/ldo.lib', models: [{ name: 'LDO33', kind: 'subckt', pins: ['IN', 'GND', 'OUT'], comment: 'Pins: IN GND OUT' }, { name: 'D1N4148', kind: 'model', type: 'D' }] }],
+    }
+    const out = formatSimModel(v)
+    expect(out).toContain('.subckt LDO33 IN GND OUT   — Pins: IN GND OUT')
+    expect(out).toContain('.model D1N4148 D')
+    expect(out).toContain('set_sim_model')
+    expect(formatSimModel({ path: '/p', models: 0, truncated: false, files: [] })).toBe('No .subckt or .model found in /p.')
+  })
+})
+
+describe('kicad_sim_model and set_sim_model', () => {
+  it.runIf(hasKiCadCli())('finds a model, binds it to a symbol and refuses a pin mapping it cannot make', async () => {
+    const ctx = await bootKiCad([toolKiCad])
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-kicad-sim-model-'))
+    writeFileSync(join(dir, 'ldo.lib'), '* Pins: IN GND OUT\n.subckt LDO33 IN GND OUT\nB1 n1 GND V=min(V(IN,GND)-0.3,3.3)\nRs n1 OUT 0.1\n.ends LDO33\n')
+    const path = join(dir, 'm.kicad_sch')
+    await ctx.kicad.run('create_schematic', { path })
+    await ctx.kicad.run('edit_schematic', { path, operations: [{ op: 'add_symbol', lib_id: 'Regulator_Linear:AMS1117-3.3', x: 101.6, y: 38.1, reference: 'U1', value: 'AMS1117-3.3' }] })
+    const found = await runTool(ctx, 'kicad_sim_model', { path: dir, name: 'ldo' })
+    expect(found.isError).toBeFalsy()
+    expect(text(found)).toContain('.subckt LDO33 IN GND OUT')
+    const refused = await runTool(ctx, 'kicad_edit_schematic', { path, operations: [{ op: 'set_sim_model', reference: 'U1', library: 'ldo.lib', name: 'LDO33' }] })
+    expect(refused.isError).toBe(true)
+    expect(text(refused)).toMatch(/cannot match model LDO33's pins IN, OUT/)
+    await ctx.kicad.run('edit_schematic', { path, operations: [{ op: 'set_sim_model', reference: 'U1', library: 'ldo.lib', name: 'LDO33', pins: { 1: 'GND', 2: 'OUT', 3: 'IN' } }] })
+    const comps = await ctx.kicad.run<{ components: Array<{ reference: string, properties?: Record<string, string> }> }>('read_schematic', { path })
+    expect(comps.components.find(c => c.reference === 'U1')?.properties).toMatchObject({ 'Sim.Library': 'ldo.lib', 'Sim.Name': 'LDO33', 'Sim.Pins': '1=GND 2=OUT 3=IN', 'Sim.Device': 'SUBCKT' })
+  })
+})
+
 describe('kicad_simulate', () => {
   it.runIf(hasKiCadCli() && hasNgspice())('verifies an LED circuit against its requirements through the tool pipeline', async () => {
     const ctx = await bootKiCad([toolKiCad])
@@ -78,5 +127,36 @@ describe('kicad_simulate', () => {
     const out = text(result)
     expect(out).toContain('FAILED — 2/3 assertion(s) hold')
     expect(out).toContain('✗ LED stays dark (wrong)')
+  })
+
+  it.runIf(hasKiCadCli() && hasNgspice())('runs a tolerance analysis and reports it', async () => {
+    const ctx = await bootKiCad([toolKiCad])
+    const path = join(mkdtempSync(join(tmpdir(), 'dsh-kicad-sim-mc-')), 'div.kicad_sch')
+    await ctx.kicad.run('create_schematic', { path })
+    await ctx.kicad.run('edit_schematic', {
+      path,
+      operations: [
+        { op: 'add_symbol', lib_id: 'Simulation_SPICE:VDC', x: 50.8, y: 50.8, reference: 'V1', value: '5', properties: { 'Sim.Params': 'dc=5' } },
+        { op: 'add_symbol', lib_id: 'Device:R', x: 76.2, y: 38.1, reference: 'R1', value: '1k' },
+        { op: 'add_symbol', lib_id: 'Device:R', x: 76.2, y: 63.5, reference: 'R2', value: '1k' },
+        { op: 'connect_pin_to_net', pin: 'V1:1', net: 'VCC', kind: 'label' },
+        { op: 'connect_pin_to_net', pin: 'V1:2', net: 'GND', kind: 'power' },
+        { op: 'connect_pin_to_net', pin: 'R1:1', net: 'VCC', kind: 'label' },
+        { op: 'connect_pins', a: 'R1:2', b: 'R2:1' },
+        { op: 'connect_pin_to_net', pin: 'R2:1', net: 'MID', kind: 'label' },
+        { op: 'connect_pin_to_net', pin: 'R2:2', net: 'GND', kind: 'power' },
+      ],
+    })
+    const result = await runTool(ctx, 'kicad_simulate', {
+      path,
+      assertions: [{ probe: 'V(MID)', equals: 2.5, tol_pct: 0.5, name: 'mid within 0.5%' }],
+      monte_carlo: { runs: 20, seed: 3 },
+    })
+    expect(result.isError).toBeFalsy()
+    const out = text(result)
+    expect(out).toContain('FAILED')
+    expect(out).toMatch(/Monte Carlo: FAILED — 20 runs \(seed 3, uniform; varied R1 ±5%, R2 ±5%\)/)
+    expect(out).toMatch(/✗ mid within 0.5%: holds in \d+\/20 runs/)
+    expect(out).toContain('first failure: run')
   })
 })
