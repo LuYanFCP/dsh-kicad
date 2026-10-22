@@ -1,8 +1,8 @@
-/** /erc, /drc, /bom, /kicad-fab and /kicad-render: direct UI commands that never involve the model. */
+/** /erc, /drc, /bom, /simulate, /kicad-fab and /kicad-render: direct UI commands that never involve the model. */
 import { readdirSync, realpathSync } from 'node:fs'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { DoctorReport, InstallJob, InstallOption } from 'dsh-kicad-bridge'
-import { FAB_EXTRAS, formatCheck, formatFab, type CheckReport, type FabResult } from 'dsh-tool-kicad'
+import { FAB_EXTRAS, formatCheck, formatFab, formatSimulate, type CheckReport, type FabResult, type SimulateValue } from 'dsh-tool-kicad'
 import { agentCwd, followup, type CommandDefinition, type CommandInvocation, type CommandResult, type Context } from './dsh.ts'
 
 /** The design file a command targets: the argument, else the project's root schematic / board. */
@@ -69,6 +69,15 @@ export function createCommands(ctx: Context): CommandDefinition[] {
         const bom = await ctx.kicad.run<{ rows: Array<Record<string, string>>, columns: string[] }>(
           'export_bom', { path: targetFile(cwd, inv.rawInput, '.kicad_sch') }, inv.signal)
         return formatBom(bom.columns, bom.rows)
+      }),
+    },
+    {
+      name: 'simulate',
+      description: 'Simulate the project schematic with ngspice (DC operating point) and show every net voltage; the agent adds assertions for requirements',
+      input: { hint: '[path/to/file.kicad_sch]' },
+      handler: wrap(async (inv, cwd) => {
+        const result = await ctx.kicad.run<SimulateValue>('simulate', { path: targetFile(cwd, inv.rawInput, '.kicad_sch') }, inv.signal, { timeoutMs: 120_000 })
+        return formatSimulate(result)
       }),
     },
     {

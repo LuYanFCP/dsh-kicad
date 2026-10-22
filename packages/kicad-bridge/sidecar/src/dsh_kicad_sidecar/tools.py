@@ -21,6 +21,7 @@ from .placement import OPERATIONS as PLACE_OPERATIONS, apply as apply_placement,
 from .board3d import QUALITIES, SIDES, export_glb, render_args, render_name
 from .autoroute import DEFAULT_TIMEOUT, MAX_TIMEOUT, autoroute
 from .freerouting import Cancelled, locate as locate_freerouting
+from . import spice
 from .footprints import FootprintLibraries, default_footprint_dirs
 from . import geometry
 from .symbols import LibraryError, SymbolLibraries, default_symbol_dirs
@@ -171,6 +172,30 @@ TOOL_SPECS: list[ToolSpec] = [
              "reports the board outline, the footprint references (node names of their 3D models) and models KiCad could not find.",
              _obj({"path": PCB, "force": {"type": "boolean", "default": False, "description": "Export again even when the cached scene is current."}},
                   ["path"]), writes=True),
+    ToolSpec("simulate", "Verify a schematic's behaviour with SPICE: KiCad exports the netlist (symbols' Sim.* properties, Simulation_SPICE sources), "
+             "ngspice runs it headless (op = DC operating point, tran = transient, ac = frequency sweep) and every assertion is judged on the "
+             "numbers, never by the model. Probes: V(net), V(netA,netB), I(R1|C1|L1|D1|V1) (ngspice sign: a source that supplies current reads "
+             "negative, use abs). Needs ngspice (kicad_doctor says how to install it) and a ground net. Results and the netlist are kept in "
+             "<project>/.dsh-kicad/sim/<name>/.",
+             _obj({"path": SCH,
+                   "analyses": {"type": "array", "maxItems": 3, "description": "Default: one operating point. At most one of each type.",
+                                "items": {"type": "object", "properties": {
+                                    "type": {"type": "string", "enum": list(spice.ANALYSES)},
+                                    "stop": {"type": ["number", "string"], "description": "tran: end time in s (e.g. 10m); ac: last frequency in Hz (e.g. 1Meg)."},
+                                    "step": {"type": ["number", "string"], "description": "tran: time step (default stop/1000)."},
+                                    "start": {"type": ["number", "string"], "description": "ac: first frequency (Hz), e.g. 10."},
+                                    "points": {"type": "integer", "description": "ac: points per decade/octave (default 20)."},
+                                    "sweep": {"type": "string", "enum": ["dec", "oct", "lin"], "default": "dec"}},
+                                    "required": ["type"], "additionalProperties": False}},
+                   "assertions": {"type": "array", "description": (
+                       "Requirements to verify. Each: {probe, min?/max?/equals?+tol|tol_pct, name?, abs?, analysis?, measure?, at?, from?, to?, ref?}. "
+                       "Numbers accept SPICE suffixes (10k, 100n, 3.3, 20m). Measures: op value; tran final|initial|max|min|mean|rms|pp|at (at = time; "
+                       "from/to restrict the window); ac gain_db|phase_deg (at = frequency)|peak_gain_db|lowpass_cutoff_hz|highpass_cutoff_hz "
+                       "(ref = reference probe, e.g. V(IN), for a gain relative to the input). analysis is optional when only one ran."),
+                       "items": {"type": "object"}},
+                   "probes": {"type": "array", "items": {"type": "string"}, "description": "Extra currents to record, e.g. I(R1); node voltages are always recorded."},
+                   "timeout": {"type": "number", "default": spice.DEFAULT_TIMEOUT, "maximum": spice.MAX_TIMEOUT, "description": "Seconds for ngspice."},
+                   "output_dir": {"type": "string", "description": "Defaults to <project>/.dsh-kicad/sim/<name>/."}}, ["path"]), writes=True),
     ToolSpec("export_netlist", "Write a netlist file with kicad-cli.",
              _obj({"path": SCH, "output": {"type": "string"},
                    "format": {"type": "string", "enum": ["kicadsexpr", "kicadxml", "cadstar", "orcadpcb2", "spice", "spicemodel", "pads", "allegro"], "default": "kicadsexpr"}},
@@ -248,10 +273,11 @@ SPEC_BY_NAME = {s.name: s for s in TOOL_SPECS}
 
 class Toolbox:
     def __init__(self, kicad_cli: str | None = None, roots: list[str] | None = None, cwd: str | None = None,
-                 java: str | None = None, freerouting: str | None = None):
+                 java: str | None = None, freerouting: str | None = None, ngspice: str | None = None):
         self.cli = KiCadCli(kicad_cli)
         self.java = java  # the bridge's java / freerouting settings (None: search)
         self.freerouting = freerouting
+        self.ngspice = ngspice  # None: $NGSPICE, then PATH
         self.roots = [os.path.realpath(r) for r in roots or []]
         self.cwd = cwd or os.getcwd()
         self._libraries: dict[str, SymbolLibraries] = {}
@@ -328,7 +354,7 @@ class Toolbox:
         }
 
     def tool_doctor(self, _args):
-        report = run_doctor(self.cli, router=self.router())
+        report = run_doctor(self.cli, router=self.router(), ngspice=spice.locate_ngspice(self.ngspice))
         return {**report, "text": format_report(report)}
 
     def tool_read_schematic(self, args):
@@ -514,6 +540,21 @@ class Toolbox:
         out_dir = os.path.join(os.path.dirname(path), ".dsh-kicad", "render", stem)
         with self.lock(path + "#glb"):  # the viewer may ask twice (open + change); the second gets the cache
             return export_glb(self.cli, path, out_dir, force=bool(args.get("force")))
+
+    def tool_simulate(self, args):
+        path = self.resolve(args["path"], ".kicad_sch")
+        executable = spice.locate_ngspice(self.ngspice)
+        if not executable:
+            raise ToolError("ngspice was not found. Install it (see kicad_doctor; e.g. `sudo dnf install ngspice` / `sudo apt-get install ngspice` / "
+                            f"`brew install ngspice`, or {spice.DOWNLOAD_URL}) or set $NGSPICE to its path.")
+        stem = os.path.splitext(os.path.basename(path))[0]
+        out_dir = self.resolve(args["output_dir"], must_exist=False) if args.get("output_dir") else \
+            os.path.join(os.path.dirname(path), ".dsh-kicad", "sim", stem)
+        try:
+            return spice.simulate(self.cli, path, out_dir, args.get("analyses"), args.get("assertions"), executable,
+                                  timeout=float(args.get("timeout", spice.DEFAULT_TIMEOUT)), probes=args.get("probes"))
+        except spice.SimulationError as exc:
+            raise ToolError(str(exc)) from exc
 
     def tool_export_netlist(self, args):
         path = self.resolve(args["path"], ".kicad_sch")

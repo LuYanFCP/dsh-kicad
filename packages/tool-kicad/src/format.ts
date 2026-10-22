@@ -57,6 +57,39 @@ export interface SyncValue {
   drc?: CheckReport
 }
 
+/** One judged requirement of kicad_simulate. */
+export interface SimAssertion {
+  name: string
+  probe: string
+  analysis: 'op' | 'tran' | 'ac'
+  measure: string
+  value: number
+  unit: string
+  min: number | null
+  max: number | null
+  passed: boolean
+}
+
+/** What kicad_simulate returns (the sidecar's simulate tool). */
+export interface SimulateValue {
+  path: string
+  ngspice: string | null
+  netlist: string
+  log: string
+  analyses: Array<
+    | { type: 'op', values: Record<string, number> }
+    | { type: 'tran', points: number, stop: number, signals: Record<string, { initial: number, final: number, min: number, max: number }> }
+    | { type: 'ac', points: number, start: number, stop: number }
+  >
+  assertions: SimAssertion[]
+  /** true when every assertion held, false when one failed, null when none were given. */
+  passed: boolean | null
+  /** Netlist elements that could not be simulated and were left out (parts without a SPICE model). */
+  ignored: string[]
+  notes: string[]
+  warnings?: string[]
+}
+
 /** What kicad_autoroute returns (the sidecar's autoroute tool). */
 export interface AutorouteValue {
   pcb: string
@@ -176,6 +209,44 @@ export function formatSync(v: SyncValue): string {
       ? 'Schematic parity (KiCad DRC): 0 issues.'
       : `Schematic parity (KiCad DRC): ${v.parity.total} issue(s) (${types}).${extra} Details: kicad_drc with schematic_parity.`)
   }
+  return lines.join('\n')
+}
+
+const PREFIXES: Array<[number, string]> = [[1e9, 'G'], [1e6, 'M'], [1e3, 'k'], [1, ''], [1e-3, 'm'], [1e-6, 'µ'], [1e-9, 'n'], [1e-12, 'p']]
+
+/** 0.0025 → "2.5m", 1000 → "1k": engineering notation with three significant digits. */
+export function eng(value: number): string {
+  if (value === 0 || !Number.isFinite(value)) return String(value)
+  const abs = Math.abs(value)
+  const [scale, prefix] = PREFIXES.find(([s]) => abs >= s * 0.9995) ?? PREFIXES[PREFIXES.length - 1]!
+  return `${Number((value / scale).toPrecision(3))}${prefix}`
+}
+
+/** The simulation as the model reads it: the tool's verdict per assertion, then the operating point and signal ranges. */
+export function formatSimulate(v: SimulateValue): string {
+  const held = v.assertions.filter(a => a.passed).length
+  const head = v.passed === null
+    ? `SPICE by ngspice ${v.ngspice ?? ''} on ${v.path}: no assertions given, results only.`.replace('  ', ' ')
+    : `SPICE by ngspice ${v.ngspice ?? ''} on ${v.path}: ${v.passed ? 'PASSED' : 'FAILED'} — ${held}/${v.assertions.length} assertion(s) hold.`.replace('  ', ' ')
+  const lines = [head]
+  for (const a of v.assertions) {
+    const bounds = [a.min !== null ? `≥ ${eng(a.min)}${a.unit}` : '', a.max !== null ? `≤ ${eng(a.max)}${a.unit}` : ''].filter(Boolean).join(' and ')
+    lines.push(`${a.passed ? '✓' : '✗'} ${a.name}: ${eng(a.value)}${a.unit} (required ${bounds})`)
+  }
+  for (const analysis of v.analyses) {
+    if (analysis.type === 'op') {
+      const entries = Object.entries(analysis.values)
+      if (entries.length) lines.push(`Operating point: ${entries.map(([k, x]) => `${k} = ${eng(x)}${k.startsWith('I(') ? 'A' : 'V'}`).join(', ')}`)
+    } else if (analysis.type === 'tran') {
+      lines.push(`Transient to ${eng(analysis.stop)}s (${analysis.points} points): ${Object.entries(analysis.signals).slice(0, 12)
+        .map(([k, s]) => `${k} ${eng(s.initial)} → ${eng(s.final)} (min ${eng(s.min)}, max ${eng(s.max)})`).join('; ')}`)
+    } else {
+      lines.push(`AC sweep ${eng(analysis.start)}–${eng(analysis.stop)} Hz (${analysis.points} points); judge it with ac assertions.`)
+    }
+  }
+  if (v.ignored.length) lines.push(`Not simulated (no SPICE model, left out of the circuit): ${v.ignored.join(', ')}.`)
+  lines.push(...v.notes, ...(v.warnings ?? []).map(w => `ngspice: ${w}`))
+  lines.push(`Netlist and log: ${v.netlist}`)
   return lines.join('\n')
 }
 

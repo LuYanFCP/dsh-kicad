@@ -84,6 +84,36 @@ function formatSync(v) {
   }
   return lines.join("\n");
 }
+var PREFIXES = [[1e9, "G"], [1e6, "M"], [1e3, "k"], [1, ""], [1e-3, "m"], [1e-6, "\xB5"], [1e-9, "n"], [1e-12, "p"]];
+function eng(value) {
+  if (value === 0 || !Number.isFinite(value)) return String(value);
+  const abs = Math.abs(value);
+  const [scale, prefix] = PREFIXES.find(([s]) => abs >= s * 0.9995) ?? PREFIXES[PREFIXES.length - 1];
+  return `${Number((value / scale).toPrecision(3))}${prefix}`;
+}
+function formatSimulate(v) {
+  const held = v.assertions.filter((a) => a.passed).length;
+  const head = v.passed === null ? `SPICE by ngspice ${v.ngspice ?? ""} on ${v.path}: no assertions given, results only.`.replace("  ", " ") : `SPICE by ngspice ${v.ngspice ?? ""} on ${v.path}: ${v.passed ? "PASSED" : "FAILED"} \u2014 ${held}/${v.assertions.length} assertion(s) hold.`.replace("  ", " ");
+  const lines = [head];
+  for (const a of v.assertions) {
+    const bounds = [a.min !== null ? `\u2265 ${eng(a.min)}${a.unit}` : "", a.max !== null ? `\u2264 ${eng(a.max)}${a.unit}` : ""].filter(Boolean).join(" and ");
+    lines.push(`${a.passed ? "\u2713" : "\u2717"} ${a.name}: ${eng(a.value)}${a.unit} (required ${bounds})`);
+  }
+  for (const analysis of v.analyses) {
+    if (analysis.type === "op") {
+      const entries = Object.entries(analysis.values);
+      if (entries.length) lines.push(`Operating point: ${entries.map(([k, x]) => `${k} = ${eng(x)}${k.startsWith("I(") ? "A" : "V"}`).join(", ")}`);
+    } else if (analysis.type === "tran") {
+      lines.push(`Transient to ${eng(analysis.stop)}s (${analysis.points} points): ${Object.entries(analysis.signals).slice(0, 12).map(([k, s]) => `${k} ${eng(s.initial)} \u2192 ${eng(s.final)} (min ${eng(s.min)}, max ${eng(s.max)})`).join("; ")}`);
+    } else {
+      lines.push(`AC sweep ${eng(analysis.start)}\u2013${eng(analysis.stop)} Hz (${analysis.points} points); judge it with ac assertions.`);
+    }
+  }
+  if (v.ignored.length) lines.push(`Not simulated (no SPICE model, left out of the circuit): ${v.ignored.join(", ")}.`);
+  lines.push(...v.notes, ...(v.warnings ?? []).map((w) => `ngspice: ${w}`));
+  lines.push(`Netlist and log: ${v.netlist}`);
+  return lines.join("\n");
+}
 function formatAutoroute(v) {
   const fr = v.freerouting;
   const router = fr.version ? `Freerouting ${fr.version}` : "Freerouting";
@@ -224,6 +254,7 @@ var TOOL_ACCESS = {
   kicad_erc: "read",
   kicad_drc: "read",
   kicad_render: "read",
+  kicad_simulate: "read",
   kicad_export: "write",
   kicad_export_fab: "write",
   kicad_fab_preset: "write",
@@ -247,6 +278,7 @@ var PATH_ARGUMENTS = {
   kicad_erc: ["path"],
   kicad_drc: ["path"],
   kicad_render: ["path"],
+  kicad_simulate: ["path", "output_dir"],
   kicad_export: ["path", "output"],
   kicad_export_fab: ["pcb", "output_dir"],
   kicad_fab_preset: ["path"],
@@ -449,6 +481,37 @@ function apply(ctx, config = {}) {
           value.note = args.view === "3d" ? "The current model does not accept images (or no attachment store is mounted); the PNG is on disk." : "The current model does not accept images (or no attachment store is mounted); open the SVG in the KiCad sidebar viewer.";
         }
         return value;
+      }
+    }),
+    defineTool({
+      name: "kicad_simulate",
+      description: [
+        "Verify what a schematic does with SPICE, then let the tool judge it: KiCad exports the netlist (symbols' Sim.* properties; sources from Simulation_SPICE such as VDC, VSIN, VPULSE), ngspice runs it headless, and every assertion is checked against the numbers (never decide by eye).",
+        "Analyses: op (DC operating point, the default), tran {stop, step?} (transient), ac {start, stop, points?} (frequency sweep; needs a source with an ac magnitude). Probes: V(net), V(netA,netB), I(R1|C1|L1|D1|V1); ngspice sign: a source that supplies current reads negative, so use abs: true.",
+        "assertions: [{probe, min?, max?, equals? with tol or tol_pct, name?, analysis?, measure?, at?, from?, to?, ref?, abs?}]. Numbers take SPICE suffixes (10k, 100n, 3.3, 20m). Measures: op value; tran final|initial|max|min|mean|rms|pp|at (at = time, from/to a window); ac gain_db|phase_deg (at = frequency)|peak_gain_db|lowpass_cutoff_hz|highpass_cutoff_hz (ref: e.g. V(IN) for gain relative to the input).",
+        `Turn each requirement into an assertion (e.g. 3V3 rail: {probe: "V(3V3)", min: 3.2, max: 3.4}; LED current: {probe: "I(D1)", min: "5m", max: "15m", abs: true}); on a failure change the circuit and run again. Report the tool's verdict, not your own.`,
+        'Every simulated part needs a SPICE model: R, C, L work from the value; a diode or LED needs the hidden property Sim.Device = D (LED: also Sim.Params "is=1e-18 n=2 rs=3"), otherwise the tool refuses; ICs without a model are left out and listed (use Sim.Library/Sim.Name for a vendor model). The circuit needs a ground net (a power:GND symbol) and, for tran/ac, a source.',
+        "Needs ngspice: when it is missing the error says how to install it; tell the user (kicad_doctor lists the commands), never install anything yourself."
+      ].join(" "),
+      parameters: {
+        path: SCH,
+        analyses: {
+          type: "array",
+          description: 'Default: one operating point. At most one of each type: {type: "op"} \xB7 {type: "tran", stop (s, e.g. "10m"), step?} \xB7 {type: "ac", start, stop (Hz, e.g. 10 and "1Meg"), points? per decade, sweep?: dec|oct|lin}.',
+          items: { type: "object", additionalProperties: true, properties: { type: { type: "string", enum: ["op", "tran", "ac"], required: true } } }
+        },
+        assertions: { type: "array", items: { type: "object", additionalProperties: true, properties: { probe: { type: "string", required: true } } }, description: "The requirements to verify, as described above." },
+        probes: { type: "array", items: { type: "string" }, description: "Extra currents to record, e.g. I(R1); node voltages are always recorded." },
+        timeout: { type: "number", description: "Seconds ngspice may run (default 60, at most 600)." }
+      },
+      output: {
+        schema: { type: "json" },
+        render: (_args, value) => [{ type: "text", text: formatSimulate(value) }]
+      },
+      isConcurrencySafe: () => true,
+      async execute(args, exec) {
+        const seconds = Math.min(Math.max(Number(args.timeout ?? 60), 1), 600);
+        return await ctx.kicad.run("simulate", { ...args, path: at(exec, args.path) }, exec.signal, { timeoutMs: seconds * 1e3 + 6e4 });
       }
     }),
     defineTool({
@@ -762,6 +825,7 @@ export {
   apply,
   checkMeta,
   doctorMeta,
+  eng,
   fabMeta,
   formatAutoroute,
   formatBoard,
@@ -771,6 +835,7 @@ export {
   formatFabGate,
   formatJson,
   formatPreset,
+  formatSimulate,
   formatSync,
   inject,
   name

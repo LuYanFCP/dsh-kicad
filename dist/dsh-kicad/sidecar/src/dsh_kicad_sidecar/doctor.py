@@ -14,6 +14,7 @@ from typing import Any, Callable
 
 from . import __version__
 from . import freerouting
+from . import spice
 from .footprints import default_footprint_dirs
 from .kicad_cli import FLATPAK_APP, MIN_KICAD, KiCadCli, parse_version
 from .models3d import FLATPAK_EXTENSION, model_library
@@ -231,6 +232,53 @@ def _model_check(cli: KiCadCli, info: dict[str, Any], which: Which) -> dict[str,
                   f", or download it ({PACKAGES3D_URL}) and set {var} to that directory.")
 
 
+NGSPICE_PACKAGES = {  # the ngspice command line simulator (kicad_simulate)
+    "fedora": ["sudo", "dnf", "install", "-y", "ngspice"],
+    "ubuntu": ["sudo", "apt-get", "install", "-y", "ngspice"],
+    "debian": ["sudo", "apt-get", "install", "-y", "ngspice"],
+    "arch": ["sudo", "pacman", "-S", "--needed", "--noconfirm", "ngspice"],
+    "suse": ["sudo", "zypper", "--non-interactive", "install", "ngspice"],
+}
+
+
+def ngspice_options(info: dict[str, Any], which: Which = shutil.which) -> list[dict[str, Any]]:
+    """Ways to install ngspice on this machine (the user runs those that need root)."""
+    options: list[dict[str, Any]] = []
+    family = _family(info)
+    if info["os"] == "linux" and family in NGSPICE_PACKAGES:
+        step = NGSPICE_PACKAGES[family]
+        options.append(_option("ngspice", f"ngspice ({step[1]})", [step], needs_root=True, available=which(step[1]) is not None))
+    elif info["os"] == "macos":
+        brew = which("brew")
+        options.append(_option("ngspice", "ngspice (Homebrew)", [["brew", "install", "ngspice"]], needs_root=False,
+                               available=brew is not None, note="" if brew else "Homebrew is not installed (https://brew.sh)."))
+    elif info["os"] == "windows":
+        winget = which("winget")
+        options.append(_option("ngspice", "ngspice (winget)", [["winget", "install", "--id", "ngspice.ngspice", "-e"]], needs_root=False,
+                               available=winget is not None, note="Or use the zip from the ngspice download page."))
+    options.append(_option("ngspice-download", "ngspice from ngspice.sourceforge.io", [], needs_root=False, available=True,
+                           note="Install it, then make sure `ngspice` is on PATH (or set $NGSPICE to the executable).", url=spice.DOWNLOAD_URL))
+    return options
+
+
+def _simulation_check(info: dict[str, Any], which: Which, ngspice: str | None) -> dict[str, Any]:
+    """Optional: ngspice, which kicad_simulate runs (KiCad's own Simulator is a GUI feature; kicad-cli has none)."""
+    label = "ngspice (optional, simulation)"
+    path = ngspice or spice.locate_ngspice()
+    if path:
+        version = spice.ngspice_version(path)
+        if version:
+            return _check("ngspice", label, "ok", f"ngspice {version} ({path}).", required=False, path=path, version=version)
+        return _check("ngspice", label, "warn", f"{path} does not run (`ngspice --version` failed).", required=False, path=path,
+                      fix="Reinstall ngspice or set $NGSPICE to a working executable.")
+    options = ngspice_options(info, which)
+    best = next((o for o in options if o["command"]), None)
+    return _check("ngspice", label, "warn", "ngspice was not found; kicad_simulate (SPICE verification) needs it.", required=False,
+                  install=options,
+                  fix=(f"Install it (`{best['command']}`)" if best else "Install it") + f", or download it ({spice.DOWNLOAD_URL}); "
+                  "if it is not on PATH, set $NGSPICE to the executable.")
+
+
 def freerouting_option() -> dict[str, Any]:
     release = freerouting.RELEASE
     return _option("freerouting", f"Freerouting {release['version']} (download the release jar, per user)",
@@ -288,7 +336,8 @@ def _routing_checks(router: freerouting.Router, info: dict[str, Any], which: Whi
 
 
 def run_doctor(cli: KiCadCli, info: dict[str, Any] | None = None, which: Which = shutil.which,
-               python_version: tuple[int, ...] | None = None, router: freerouting.Router | None = None) -> dict[str, Any]:
+               python_version: tuple[int, ...] | None = None, router: freerouting.Router | None = None,
+               ngspice: str | None = None) -> dict[str, Any]:
     """Check everything the KiCad tools need and say how to fix what is missing."""
     info = info or platform_info()
     cli.locate()  # pick up an installation that appeared since the last call
@@ -371,6 +420,7 @@ def run_doctor(cli: KiCadCli, info: dict[str, Any] | None = None, which: Which =
                          required=False, fix=None if kipy_ok else "Use the bridge's uv launcher with the 'ipc' extra, or `pip install kicad-python`."))
 
     checks += _routing_checks(router if router is not None else freerouting.locate(), info, which)
+    checks.append(_simulation_check(info, which, ngspice))
 
     errors = [c for c in checks if c["status"] == "error" and c["required"]]
     kicad_missing = cli.argv is None or version is None
