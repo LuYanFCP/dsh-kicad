@@ -7,7 +7,7 @@ import sys
 import pytest
 
 from dsh_kicad_sidecar import freerouting, kicad_cli
-from dsh_kicad_sidecar.doctor import format_report, install_hint, install_options, platform_info, run_doctor
+from dsh_kicad_sidecar.doctor import format_report, install_hint, install_options, model_options, platform_info, run_doctor
 from dsh_kicad_sidecar.kicad_cli import KiCadCli, KiCadCliError, flatpak_argv, locate_kicad_cli, parse_version
 from dsh_kicad_sidecar.tools import ToolError, Toolbox
 
@@ -278,3 +278,46 @@ def test_a_broken_java_setting_is_reported(bare):
                                 java_problems=["the KiCad bridge 'java' setting points to /opt/jdk/bin/java, which does not exist"])
     java, _ = routing(run_doctor(KiCadCli(), FEDORA, which_of(), router=router))
     assert java["status"] == "warn" and "/opt/jdk/bin/java" in java["summary"] and java["fix"] == "Fix or clear the KiCad bridge 'java' setting."
+
+
+# ---- KiCad's 3D model library (optional) -----------------------------------------------------
+
+ARCH = {"os": "linux", "distro": "arch", "distro_like": [], "name": "Arch Linux", "version": None}
+SUSE = {"os": "linux", "distro": "opensuse-tumbleweed", "distro_like": ["opensuse", "suse"], "name": "openSUSE", "version": None}
+MAC = {"os": "macos", "distro": None, "distro_like": [], "name": None, "version": None}
+WINDOWS = {"os": "windows", "distro": None, "distro_like": [], "name": None, "version": None}
+
+
+@posix
+def test_3d_model_library_check(bare, tmp_path, monkeypatch):
+    script(bare / "kicad-cli", 'if [ "$1" = version ]; then echo 10.0.7; fi')
+    models = tmp_path / "3dmodels"
+    models.mkdir()
+    monkeypatch.setenv("KICAD10_3DMODEL_DIR", str(models))
+    report = run_doctor(KiCadCli(), FEDORA, which_of("dnf"), router=freerouting.Router())
+    check = checks(report)["3d_models"]
+    assert report["ok"] and check["status"] == "warn" and not check["required"]
+    assert f"KICAD10_3DMODEL_DIR: {models} is empty or missing" in check["summary"]
+    dnf, download = check["install"]
+    assert dnf["command"] == "sudo dnf install -y kicad-packages3d" and dnf["needs_root"] and not dnf["runnable"]
+    assert download["id"] == "packages3d-download" and "kicad-packages3D" in download["url"] and not download["command"]
+    assert "sudo dnf install -y kicad-packages3d" in check["fix"] and "KICAD10_3DMODEL_DIR" in check["fix"]
+    assert "3D models (optional)" in format_report(report)
+    # Installed (a non-empty model directory): ok, nothing to install.
+    (models / "Resistor_SMD.3dshapes").mkdir()
+    check = checks(run_doctor(KiCadCli(), FEDORA, which_of("dnf"), router=freerouting.Router()))["3d_models"]
+    assert check["status"] == "ok" and check["summary"].startswith(f"1 model libraries in {models}") and "install" not in check
+
+
+def test_3d_model_install_options_per_platform():
+    first = lambda info, *tools, source=None: model_options(info, which_of(*tools), source)[0]
+    assert first(UBUNTU, "apt-get")["command"] == "sudo apt-get install -y kicad-packages3d"
+    assert first(ARCH, "pacman")["command"] == "sudo pacman -S --needed --noconfirm kicad-library-3d"
+    assert first(SUSE, "zypper")["command"] == "sudo zypper --non-interactive install kicad-packages3D"
+    flatpak = first(FEDORA, "flatpak", "dnf", source="flatpak")
+    # The Flatpak KiCad needs its extension, which installs per user without root.
+    assert flatpak["runnable"] and not flatpak["needs_root"]
+    assert flatpak["steps"][-1] == ["flatpak", "install", "--user", "-y", "--noninteractive", "flathub", "org.kicad.KiCad.Library.Packages3D//stable"]
+    assert first(MAC, "brew")["command"] == "brew reinstall --cask kicad" and first(MAC, "brew")["runnable"]
+    assert first(WINDOWS)["url"] and not first(WINDOWS)["command"]
+    assert [o["id"] for o in model_options({"os": "linux", "distro": "gentoo", "distro_like": [], "name": None, "version": None}, which_of())] == ["packages3d-download"]

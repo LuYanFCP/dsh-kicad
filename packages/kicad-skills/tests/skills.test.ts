@@ -3,7 +3,7 @@ import { dirname, join, resolve } from 'node:path'
 import SkillRegistry from '@deepseek-ai/dsh-skill'
 import { afterEach, describe, expect, it } from 'vitest'
 import * as skills from '../src/index.ts'
-import { bootKiCad, demoProject, disposeAll, fixtureProject, hasKiCadCli, unrouteOneTrack } from '../../../test/harness.ts'
+import { bootKiCad, demoProject, disposeAll, fixtureBoard, fixtureProject, hasKiCadCli, unrouteOneTrack } from '../../../test/harness.ts'
 
 afterEach(disposeAll)
 
@@ -79,6 +79,46 @@ describe('kicad commands', () => {
     expect(out.kind).toBe('success')
     expect(calls[0]).toMatchObject({ path: resolve('hw/board.kicad_pcb'), format: 'svg' })
     expect(JSON.parse((out as { text: string }).text).svg).toHaveLength(1)
+  })
+
+  it('/kicad-render --glb exports the 3D scene and --3d renders a KiCad 3D view with the camera options', async () => {
+    const calls: Array<[string, Record<string, unknown>]> = []
+    const ctx = { get: () => undefined, kicad: { run: async (tool: string, args: Record<string, unknown>) => (calls.push([tool, args]), tool === 'export_glb' ? { glb: '/p/b.glb', cached: true } : { png: ['/p/b-3d.png'], camera: { rotate: '-45,0,45' } }) } }
+    const render = skills.createCommands(ctx as never).find(c => c.name === 'kicad-render')!
+    const glb = await render.handler(invocation('hw/board.kicad_pcb --glb --force --json'))
+    expect(calls[0]).toEqual(['export_glb', { path: resolve('hw/board.kicad_pcb'), force: true }])
+    expect(JSON.parse((glb as { text: string }).text)).toEqual({ path: resolve('hw/board.kicad_pcb'), glb: '/p/b.glb', cached: true })
+    const view = await render.handler(invocation('hw/my board.kicad_pcb --3d --side=front --rotate=-45,0,45 --zoom=2 --pivot=-1,0,0.5 --perspective --quality=high --width=640 --height=480 --json'))
+    expect(calls[1]).toEqual(['render', { path: resolve('hw/my board.kicad_pcb'), view: '3d', side: 'front', rotate: '-45,0,45', zoom: 2, pivot: '-1,0,0.5', perspective: true, quality: 'high', width: 640, height: 480 }])
+    expect(JSON.parse((view as { text: string }).text)).toMatchObject({ svg: [], png: ['/p/b-3d.png'] })
+  })
+
+  it('parses /kicad-render options, keeping negative angles as values', () => {
+    expect(skills.renderArgs('')).toEqual({ path: '', kind: 'svg', force: false, camera: {} })
+    expect(skills.renderArgs('b.kicad_pcb --3d --rotate=-30,-10,5').camera).toEqual({ rotate: '-30,-10,5' })
+    expect(() => skills.renderArgs('b.kicad_pcb --3d --rotate')).toThrow(/--rotate needs a value, e.g. --rotate=-45,0,45/)
+    expect(() => skills.renderArgs('b.kicad_pcb --3d --zoom=near')).toThrow(/--zoom must be a number/)
+    expect(() => skills.renderArgs('b.kicad_pcb --rotate=-45,0,45')).toThrow(/camera options need --3d/)
+    expect(() => skills.renderArgs('b.kicad_pcb --glb --3d')).toThrow(/either --glb/)
+    expect(() => skills.renderArgs('b.kicad_pcb --3d --force')).toThrow(/--force goes with --glb/)
+    expect(() => skills.renderArgs('b.kicad_pcb --fast')).toThrow(/unknown option --fast/)
+  })
+
+  it.runIf(hasKiCadCli())('/kicad-render --glb and --3d run kicad-cli through the sidecar', async () => {
+    const board = fixtureBoard('rc_board')
+    const ctx = await bootKiCad()
+    const render = skills.createCommands(ctx).find(c => c.name === 'kicad-render')!
+    const first = JSON.parse((await render.handler(invocation(`${board} --glb --json`)) as { text: string }).text)
+    expect(first.cached).toBe(false)
+    expect(readFileSync(first.glb).subarray(0, 4).toString()).toBe('glTF')
+    expect(first.references.sort()).toEqual(['C1', 'J1', 'R1'])
+    const again = JSON.parse((await render.handler(invocation(`${board} --glb --json`)) as { text: string }).text)
+    expect(again.cached).toBe(true)
+    const view = await render.handler(invocation(`${board} --3d --rotate=-45,0,45 --zoom=1.2 --width=320 --height=240 --json`))
+    expect(view.kind).toBe('success')
+    const png = JSON.parse((view as { text: string }).text).png[0] as string
+    expect(png).toMatch(/rc_board-3d-top-r-45_0_45-z1\.2\.png$/)
+    expect(existsSync(png)).toBe(true)
   })
 
   it('formats an empty BOM', () => {
@@ -215,7 +255,7 @@ describe('/kicad-doctor and /kicad-install', () => {
     }
     const { ctx } = fakeCtx(ready)
     const plan = await skills.installCommand(ctx, '')
-    expect(plan).toMatch(/^\*\*Ready: KiCad 10\.0\.7\.\*\*[\s\S]*Optional, for kicad_autoroute[\s\S]*`\/kicad-install freerouting --yes` runs:[\s\S]*python3 -I freerouting.py download/)
+    expect(plan).toMatch(/^\*\*Ready: KiCad 10\.0\.7\.\*\*[\s\S]*Freerouting \(optional, autorouting\):[\s\S]*`\/kicad-install freerouting --yes` runs:[\s\S]*python3 -I freerouting.py download/)
     expect(await skills.installCommand(ctx, 'freerouting')).toMatch(/This will run:[\s\S]*python3 -I freerouting\.py download[\s\S]*\/kicad-install freerouting --yes/)
     expect(skills.formatDoctor(ready as never)).toContain('Optional: `/kicad-install freerouting` (Freerouting 2.5.0 (download the release jar, per user)).')
   })

@@ -14,7 +14,7 @@ import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { join, relative, resolve } from 'node:path'
 import { build } from 'esbuild'
-import { buildClient } from './build-client.mjs'
+import { buildClientWithChunks } from './build-client.mjs'
 
 const root = resolve(import.meta.dirname, '..')
 const out = join(root, 'dist/dsh-kicad')
@@ -53,13 +53,16 @@ await build({
   entryPoints: [join(pkgs, 'client-ui-kicad/src/index.ts')],
   outfile: join(out, 'lib/index.js'), bundle: true, platform: 'node', format: 'esm', logLevel: 'warning',
 })
-await buildClient({ cwd: join(pkgs, 'client-ui-kicad'), out: join(out, 'lib/client.js'), id: NAME })
+await buildClientWithChunks({ cwd: join(pkgs, 'client-ui-kicad'), out: join(out, 'lib/client.js'), id: NAME })
 
 // Runtime resources the plugins resolve relative to lib/.
 cpSync(join(pkgs, 'kicad-bridge/sidecar/src'), join(out, 'sidecar/src'), { recursive: true, filter: p => !p.includes('__pycache__') })
 for (const f of ['pyproject.toml', 'README.md', 'uv.lock']) cpSync(join(pkgs, 'kicad-bridge/sidecar', f), join(out, 'sidecar', f))
 cpSync(join(pkgs, 'kicad-skills/skills'), join(out, 'skills'), { recursive: true })
 cpSync(join(pkgs, 'client-ui-kicad/vendor/kicanvas'), join(out, 'third_party/kicanvas'), { recursive: true, filter: p => !p.endsWith('.js') && !p.endsWith('.d.ts') })
+// three.js is bundled into lib/client.three.js (the 3D view).
+mkdirSync(join(out, 'third_party/three'), { recursive: true })
+cpSync(join(root, 'node_modules/three/LICENSE'), join(out, 'third_party/three/LICENSE'))
 cpSync(join(pkgs, 'kicad-bundle/icon.svg'), join(out, 'icon.svg'))
 cpSync(join(pkgs, 'kicad-bundle/presets'), join(out, 'presets'), { recursive: true })
 cpSync(join(root, 'LICENSE'), join(out, 'LICENSE'))

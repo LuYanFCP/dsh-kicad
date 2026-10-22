@@ -12,7 +12,7 @@ import { CSS } from './styles.ts'
 
 type Tr = (key: KiCadLocaleKey, vars?: Record<string, string | number>) => string
 
-export interface DoctorCheck { id: string, label: string, status: 'ok' | 'warn' | 'error', required?: boolean, summary: string, fix?: string }
+export interface DoctorCheck { id: string, label: string, status: 'ok' | 'warn' | 'error', required?: boolean, summary: string, fix?: string, install?: InstallOption[] }
 export interface InstallOption {
   id: string
   label: string
@@ -159,6 +159,10 @@ export interface DoctorPanelProps {
   /** Check again on mount instead of reusing this page's cached report (settings may have changed). */
   fresh?: boolean
   pollMs?: number
+  /** Show one check (by id) and its own install options instead of the whole report (e.g. the 3D model library). */
+  only?: string
+  /** Heading instead of "KiCad environment". */
+  title?: string
 }
 
 /** Status, per-check fixes and — when KiCad is missing or too old — the install options. */
@@ -176,6 +180,9 @@ export function DoctorPanel(props: DoctorPanelProps): ReactNode {
   const [copied, setCopied] = useState<string | undefined>(undefined)
   const live = useRef(true)
   useEffect(() => () => { live.current = false }, [])
+  const focus = props.only ? report?.checks.find(c => c.id === props.only) : undefined
+  const shown = report && props.only ? { ...report, checks: focus ? [focus] : [] } : report
+  const options = props.only ? focus?.status === 'ok' ? [] : focus?.install ?? [] : report?.install ?? []
 
   const accept = (next: DoctorReport): void => {
     setReport(next)
@@ -259,8 +266,8 @@ export function DoctorPanel(props: DoctorPanelProps): ReactNode {
     <div className="dshk-doctor" data-kicad-doctor>
       <style>{CSS}</style>
       <div className="dshk-check">
-        <strong>{tr('doctor.title')}</strong>
-        {report && <StatusBadge report={report} tr={tr} />}
+        <strong>{props.title ?? tr('doctor.title')}</strong>
+        {report && !props.only && <StatusBadge report={report} tr={tr} />}
         <span className="dshk-spacer" />
         <button type="button" className="dshk-btn" disabled={busy || running} onClick={() => void check(true)} data-kicad-action="recheck">
           {busy ? tr('doctor.checking') : tr('doctor.recheck')}
@@ -269,10 +276,10 @@ export function DoctorPanel(props: DoctorPanelProps): ReactNode {
       {noSession && <div className="dshk-note" data-kicad-state="no-session">{tr('doctor.noSession')}</div>}
       {error && <div className="dshk-error" data-kicad-state="error">{error}</div>}
       {!report && busy && <div className="dshk-note">{tr('doctor.checking')}</div>}
-      {report && (
+      {shown && (
         <>
-          <div className="dshk-hint" data-kicad-summary>{report.summary}</div>
-          <CheckList report={report} tr={tr} />
+          {!props.only && <div className="dshk-hint" data-kicad-summary>{shown.summary}</div>}
+          <CheckList report={shown} tr={tr} />
         </>
       )}
       {job && (
@@ -287,10 +294,10 @@ export function DoctorPanel(props: DoctorPanelProps): ReactNode {
           {job.error && <div className="dshk-error">{job.error}</div>}
         </div>
       )}
-      {report && report.install.length > 0 && !running && (
+      {options.length > 0 && !running && (
         <div className="dshk-install" data-kicad-install>
-          <div><strong>{tr('install.title')}</strong> <span className="dshk-hint">{tr('install.intro')}</span></div>
-          {report.install.map(option => (
+          <div><strong>{props.only ? tr('install.optionsTitle') : tr('install.title')}</strong> <span className="dshk-hint">{tr('install.intro')}</span></div>
+          {options.map(option => (
             <div key={option.id} className="dshk-option" data-kicad-option={option.id}>
               <div className="dshk-check">
                 <strong>{option.label}</strong>

@@ -9,7 +9,9 @@ import type { ComponentType } from 'react'
 export interface RemoteFailure { message: string, code: string }
 export type RemoteResult<T> = { ok: true, value: T } | { ok: false, error: RemoteFailure }
 
-export interface WorkspaceFileBytes { absolutePath: string, version: string, data: Uint8Array, eof: boolean }
+export interface WorkspaceFileBytes { absolutePath: string, version: string, data: Uint8Array, eof: boolean, bytes?: number, offset?: number }
+/** `{}` reads the whole file (dsh caps that at 32 MiB); `range` reads one window of at most 2 MiB. */
+export interface WorkspaceByteReadOptions { range?: { offset?: number, length?: number } }
 export interface WorkspaceDirectoryListing {
   absolutePath: string
   entries: Array<{ name: string, type: 'file' | 'directory' | 'other', size?: number }>
@@ -21,7 +23,7 @@ export interface SessionSummary { sessionId: string, updatedAt: number, agentAva
 
 export interface ClientRemote {
   workspaceFiles: {
-    readBytes(sessionId: string, path: string, options: object, signal?: AbortSignal): Promise<RemoteResult<WorkspaceFileBytes>>
+    readBytes(sessionId: string, path: string, options: WorkspaceByteReadOptions, signal?: AbortSignal): Promise<RemoteResult<WorkspaceFileBytes>>
     list(sessionId: string, path: string, signal?: AbortSignal): Promise<RemoteResult<WorkspaceDirectoryListing>>
   }
   commands: {

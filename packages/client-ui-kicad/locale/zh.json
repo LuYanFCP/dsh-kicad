@@ -1,1 +1,1 @@
-{ "meta": { "title": "KiCad 界面", "description": ".kicad_sch/.kicad_pcb 侧边栏查看器、ERC/DRC 结果卡片与 KiCad 设置页。" } }
+{ "meta": { "title": "KiCad 界面", "description": ".kicad_sch/.kicad_pcb 侧边栏查看器（交互、SVG 与 3D）、ERC/DRC 结果卡片与 KiCad 设置页。" } }

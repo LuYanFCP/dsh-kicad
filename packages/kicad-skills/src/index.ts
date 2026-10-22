@@ -7,7 +7,7 @@ import { createCommands } from './commands.ts'
 import type { Context } from './dsh.ts'
 import { createSkillProvider } from './skills.ts'
 
-export { createCommands, designRequest, fabArgs, fabCommand, flags, formatBom, formatDoctor, formatJob, formatPlan, installCommand, targetFile } from './commands.ts'
+export { createCommands, designRequest, fabArgs, fabCommand, flags, formatBom, formatDoctor, formatJob, formatPlan, installCommand, renderArgs, renderCommand, targetFile } from './commands.ts'
 export type { FabArgs } from './commands.ts'
 export { createSkillProvider, parseSkill, PROVIDER, SKILLS_DIR } from './skills.ts'
 
