@@ -42,6 +42,7 @@ var TOOL_ACCESS = {
   kicad_erc: "read",
   kicad_drc: "read",
   kicad_render: "read",
+  kicad_simulate: "read",
   kicad_export: "write",
   kicad_export_fab: "write",
   kicad_fab_preset: "write",
@@ -65,6 +66,7 @@ var PATH_ARGUMENTS = {
   kicad_erc: ["path"],
   kicad_drc: ["path"],
   kicad_render: ["path"],
+  kicad_simulate: ["path", "output_dir"],
   kicad_export: ["path", "output"],
   kicad_export_fab: ["pcb", "output_dir"],
   kicad_fab_preset: ["path"],
@@ -227,6 +229,7 @@ var GUIDANCE = `# KiCad (EDA) work
 - Place a new board with one kicad_edit_pcb auto_place (it follows the schematic's functional blocks: draw them with add_block first), look at it with kicad_render (view "3d"), then fine-tune with move_footprint / place_block; kicad_read_pcb's placement line must show no overlaps and nothing outside the outline.
 - Routing: after placement, route critical nets by hand (power, USB/differential pairs, crystal) with add_track / add_via locked: true, then kicad_autoroute routes the rest without touching them; add a GND pour (add_zone on both copper layers), which kicad_autoroute refills. If it reports Freerouting or Java missing, give the user its install guidance (/kicad-install freerouting); do not install anything yourself.
 - To order a board: kicad_export_fab writes Gerber, drill, position and BOM files in one zip, and refuses while KiCad reports DRC errors, unrouted connections or schematic parity issues; pass force only when the user explicitly asks. kicad_fab_preset makes a fab house's limits (JLCPCB, PCBWay) the project's design rules.
+- Verify behaviour, not only wiring: when the user states a requirement (a rail voltage, an LED current, a filter cutoff), add the simulation sources and models the circuit needs (Simulation_SPICE VDC/VSIN/VPULSE, a ground, Sim.Device on diodes and LEDs) and run kicad_simulate with one assertion per requirement; report its verdict, never your own estimate. If ngspice is missing, give the user the install guidance from kicad_doctor; do not install anything yourself.
 - KiCad decides correctness: after edits read the ERC/DRC verdict appended to the result (or run kicad_erc / kicad_drc). Do not declare a design correct while KiCad reports errors or unrouted connections.
 - Coordinates are millimetres, Y grows downward, on the 1.27 mm grid.
 - If a kicad_* tool fails because KiCad or Python is missing or too old, run kicad_doctor and give the user its fix. Do not install software yourself; the user installs KiCad (the doctor panel's Install button or /kicad-install).`;
@@ -234,7 +237,7 @@ var isKiCadTool = (name2) => Object.hasOwn(TOOL_ACCESS, name2);
 var AUTO_CHECK = { kicad_edit_schematic: "erc", kicad_edit_pcb: "drc", kicad_update_pcb: "drc", kicad_fab_preset: "drc", kicad_autoroute: "drc" };
 var CHECKED = /* @__PURE__ */ new Set(["kicad_update_pcb", "kicad_autoroute"]);
 var GUARDED = new Set(
-  Object.keys(TOOL_ACCESS).filter((n) => TOOL_ACCESS[n] === "write" || n === "kicad_render")
+  Object.keys(TOOL_ACCESS).filter((n) => TOOL_ACCESS[n] === "write" || n === "kicad_render" || n === "kicad_simulate")
 );
 function apply(ctx, config) {
   const memory = new ErcMemory();

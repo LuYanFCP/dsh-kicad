@@ -13,7 +13,7 @@ describe('kicad skills', () => {
   it('registers packaged skills with the dsh skill registry', async () => {
     const ctx = await bootKiCad([SkillRegistry], [skills, { commands: false }])
     const names = (await ctx.skills.list()).map(s => s.name).filter(n => n.startsWith('kicad-'))
-    expect(names).toEqual(['kicad-agent-workflow', 'kicad-design-brief', 'kicad-drc-triage', 'kicad-erc-triage', 'kicad-schematic-design'])
+    expect(names).toEqual(['kicad-agent-workflow', 'kicad-design-brief', 'kicad-drc-triage', 'kicad-erc-triage', 'kicad-schematic-design', 'kicad-simulate'])
     const body = await ctx.skills.get('kicad-erc-triage')
     expect(body?.content).toContain('power_pin_not_driven')
     expect(body?.content.startsWith('---')).toBe(false)

@@ -10,10 +10,10 @@ import {
   type Block, type Context, type ImageRef, type ToolDefinition, type ToolExecution,
 } from './dsh.ts'
 import type { DoctorReport } from 'dsh-kicad-bridge'
-import { formatAutoroute, formatBoard, formatCheck, formatEdit, formatFab, formatFabGate, formatJson, formatPreset, formatSync, type AutorouteValue, type BoardSummary, type CheckReport, type EditValue, type FabResult, type PresetResult, type SyncValue } from './format.ts'
+import { eng, formatAutoroute, formatBoard, formatCheck, formatEdit, formatFab, formatFabGate, formatJson, formatPreset, formatSimulate, formatSync, type AutorouteValue, type BoardSummary, type CheckReport, type EditValue, type FabResult, type PresetResult, type SimAssertion, type SimulateValue, type SyncValue } from './format.ts'
 
-export { formatAutoroute, formatBoard, formatCheck, formatEdit, formatFab, formatFabGate, formatJson, formatPreset, formatSync }
-export type { AutorouteValue, BoardSummary, CheckReport, EditValue, FabResult, PresetResult, SyncValue }
+export { eng, formatAutoroute, formatBoard, formatCheck, formatEdit, formatFab, formatFabGate, formatJson, formatPreset, formatSimulate, formatSync }
+export type { AutorouteValue, BoardSummary, CheckReport, EditValue, FabResult, PresetResult, SimAssertion, SimulateValue, SyncValue }
 
 export const name = 'dsh-tool-kicad'
 export const inject = ['tools', 'kicad']
@@ -31,6 +31,7 @@ export const TOOL_ACCESS = {
   kicad_erc: 'read',
   kicad_drc: 'read',
   kicad_render: 'read',
+  kicad_simulate: 'read',
   kicad_export: 'write',
   kicad_export_fab: 'write',
   kicad_fab_preset: 'write',
@@ -60,6 +61,7 @@ export const PATH_ARGUMENTS: Record<KiCadToolName, readonly string[]> = {
   kicad_erc: ['path'],
   kicad_drc: ['path'],
   kicad_render: ['path'],
+  kicad_simulate: ['path', 'output_dir'],
   kicad_export: ['path', 'output'],
   kicad_export_fab: ['pcb', 'output_dir'],
   kicad_fab_preset: ['path'],
@@ -275,6 +277,37 @@ export function apply(ctx: Context, config: Config = {}): void {
             : 'The current model does not accept images (or no attachment store is mounted); open the SVG in the KiCad sidebar viewer.'
         }
         return value as never
+      },
+    }),
+    defineTool({
+      name: 'kicad_simulate',
+      description: [
+        'Verify what a schematic does with SPICE, then let the tool judge it: KiCad exports the netlist (symbols\' Sim.* properties; sources from Simulation_SPICE such as VDC, VSIN, VPULSE), ngspice runs it headless, and every assertion is checked against the numbers (never decide by eye).',
+        'Analyses: op (DC operating point, the default), tran {stop, step?} (transient), ac {start, stop, points?} (frequency sweep; needs a source with an ac magnitude). Probes: V(net), V(netA,netB), I(R1|C1|L1|D1|V1); ngspice sign: a source that supplies current reads negative, so use abs: true.',
+        'assertions: [{probe, min?, max?, equals? with tol or tol_pct, name?, analysis?, measure?, at?, from?, to?, ref?, abs?}]. Numbers take SPICE suffixes (10k, 100n, 3.3, 20m). Measures: op value; tran final|initial|max|min|mean|rms|pp|at (at = time, from/to a window); ac gain_db|phase_deg (at = frequency)|peak_gain_db|lowpass_cutoff_hz|highpass_cutoff_hz (ref: e.g. V(IN) for gain relative to the input).',
+        'Turn each requirement into an assertion (e.g. 3V3 rail: {probe: "V(3V3)", min: 3.2, max: 3.4}; LED current: {probe: "I(D1)", min: "5m", max: "15m", abs: true}); on a failure change the circuit and run again. Report the tool\'s verdict, not your own.',
+        'Every simulated part needs a SPICE model: R, C, L work from the value; a diode or LED needs the hidden property Sim.Device = D (LED: also Sim.Params "is=1e-18 n=2 rs=3"), otherwise the tool refuses; ICs without a model are left out and listed (use Sim.Library/Sim.Name for a vendor model). The circuit needs a ground net (a power:GND symbol) and, for tran/ac, a source.',
+        'Needs ngspice: when it is missing the error says how to install it; tell the user (kicad_doctor lists the commands), never install anything yourself.',
+      ].join(' '),
+      parameters: {
+        path: SCH,
+        analyses: {
+          type: 'array',
+          description: 'Default: one operating point. At most one of each type: {type: "op"} · {type: "tran", stop (s, e.g. "10m"), step?} · {type: "ac", start, stop (Hz, e.g. 10 and "1Meg"), points? per decade, sweep?: dec|oct|lin}.',
+          items: { type: 'object', additionalProperties: true, properties: { type: { type: 'string', enum: ['op', 'tran', 'ac'], required: true } } },
+        },
+        assertions: { type: 'array', items: { type: 'object', additionalProperties: true, properties: { probe: { type: 'string', required: true } } }, description: 'The requirements to verify, as described above.' },
+        probes: { type: 'array', items: { type: 'string' }, description: 'Extra currents to record, e.g. I(R1); node voltages are always recorded.' },
+        timeout: { type: 'number', description: 'Seconds ngspice may run (default 60, at most 600).' },
+      },
+      output: {
+        schema: { type: 'json' },
+        render: (_args, value) => [{ type: 'text', text: formatSimulate(value as unknown as SimulateValue) }],
+      },
+      isConcurrencySafe: () => true,
+      async execute(args, exec) {
+        const seconds = Math.min(Math.max(Number(args.timeout ?? 60), 1), 600)
+        return await ctx.kicad.run('simulate', { ...args, path: at(exec, args.path) }, exec.signal, { timeoutMs: seconds * 1000 + 60_000 }) as never
       },
     }),
     defineTool({

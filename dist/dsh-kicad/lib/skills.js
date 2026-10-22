@@ -21,6 +21,39 @@ Schematic parity was NOT checked: ${report.schematic_parity_error}` : "");
   return `${head}
 ${lines.join("\n")}`;
 }
+var PREFIXES = [[1e9, "G"], [1e6, "M"], [1e3, "k"], [1, ""], [1e-3, "m"], [1e-6, "\xB5"], [1e-9, "n"], [1e-12, "p"]];
+function eng(value) {
+  if (value === 0 || !Number.isFinite(value))
+    return String(value);
+  const abs = Math.abs(value);
+  const [scale, prefix] = PREFIXES.find(([s]) => abs >= s * 0.9995) ?? PREFIXES[PREFIXES.length - 1];
+  return `${Number((value / scale).toPrecision(3))}${prefix}`;
+}
+function formatSimulate(v) {
+  const held = v.assertions.filter((a) => a.passed).length;
+  const head = v.passed === null ? `SPICE by ngspice ${v.ngspice ?? ""} on ${v.path}: no assertions given, results only.`.replace("  ", " ") : `SPICE by ngspice ${v.ngspice ?? ""} on ${v.path}: ${v.passed ? "PASSED" : "FAILED"} \u2014 ${held}/${v.assertions.length} assertion(s) hold.`.replace("  ", " ");
+  const lines = [head];
+  for (const a of v.assertions) {
+    const bounds = [a.min !== null ? `\u2265 ${eng(a.min)}${a.unit}` : "", a.max !== null ? `\u2264 ${eng(a.max)}${a.unit}` : ""].filter(Boolean).join(" and ");
+    lines.push(`${a.passed ? "\u2713" : "\u2717"} ${a.name}: ${eng(a.value)}${a.unit} (required ${bounds})`);
+  }
+  for (const analysis of v.analyses) {
+    if (analysis.type === "op") {
+      const entries = Object.entries(analysis.values);
+      if (entries.length)
+        lines.push(`Operating point: ${entries.map(([k, x]) => `${k} = ${eng(x)}${k.startsWith("I(") ? "A" : "V"}`).join(", ")}`);
+    } else if (analysis.type === "tran") {
+      lines.push(`Transient to ${eng(analysis.stop)}s (${analysis.points} points): ${Object.entries(analysis.signals).slice(0, 12).map(([k, s]) => `${k} ${eng(s.initial)} \u2192 ${eng(s.final)} (min ${eng(s.min)}, max ${eng(s.max)})`).join("; ")}`);
+    } else {
+      lines.push(`AC sweep ${eng(analysis.start)}\u2013${eng(analysis.stop)} Hz (${analysis.points} points); judge it with ac assertions.`);
+    }
+  }
+  if (v.ignored.length)
+    lines.push(`Not simulated (no SPICE model, left out of the circuit): ${v.ignored.join(", ")}.`);
+  lines.push(...v.notes, ...(v.warnings ?? []).map((w) => `ngspice: ${w}`));
+  lines.push(`Netlist and log: ${v.netlist}`);
+  return lines.join("\n");
+}
 function violationLine(v) {
   const where = v.items.map((i) => `${i.description ?? ""}${i.pos ? ` @ (${round(i.pos.x)}, ${round(i.pos.y)})` : ""}`).filter(Boolean).join("; ");
   return `- [${v.severity}] ${v.type}: ${v.description}${where ? ` \u2014 ${where}` : ""}${v.sheet && v.sheet !== "/" ? ` [sheet ${v.sheet}]` : ""}`;
@@ -151,6 +184,15 @@ function createCommands(ctx) {
           inv.signal
         );
         return formatBom(bom.columns, bom.rows);
+      })
+    },
+    {
+      name: "simulate",
+      description: "Simulate the project schematic with ngspice (DC operating point) and show every net voltage; the agent adds assertions for requirements",
+      input: { hint: "[path/to/file.kicad_sch]" },
+      handler: wrap(async (inv, cwd) => {
+        const result = await ctx.kicad.run("simulate", { path: targetFile(cwd, inv.rawInput, ".kicad_sch") }, inv.signal, { timeoutMs: 12e4 });
+        return formatSimulate(result);
       })
     },
     {
