@@ -48,6 +48,14 @@ describe('formatSimulate', () => {
   })
 })
 
+describe('formatSimulate with a requirements file', () => {
+  it('says where the requirements came from or went', () => {
+    expect(formatSimulate(value({ spec: { path: '/p/led.sim.json', loaded: ['assertions', 'monte_carlo'], saved: false } })))
+      .toContain('Requirements from /p/led.sim.json (assertions, monte_carlo).')
+    expect(formatSimulate(value({ spec: { path: '/p/led.sim.json', loaded: [], saved: true } }))).toContain('Requirements saved to /p/led.sim.json.')
+  })
+})
+
 describe('formatSimulate with Monte Carlo and formatSimModel', () => {
   it('reports pass counts, the spread and the first failing draw', () => {
     const out = formatSimulate(value({

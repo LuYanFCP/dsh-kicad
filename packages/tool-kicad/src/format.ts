@@ -90,6 +90,8 @@ export interface SimulateValue {
   warnings?: string[]
   /** Present when the run asked for a tolerance analysis; `passed` above already includes it. */
   monte_carlo?: MonteCarlo
+  /** The requirements file this run read and/or wrote. */
+  spec?: { path: string, loaded: string[], saved: boolean }
 }
 
 export interface MonteCarlo {
@@ -296,6 +298,8 @@ export function formatSimulate(v: SimulateValue): string {
     ? `SPICE by ngspice ${v.ngspice ?? ''} on ${v.path}: no assertions given, results only.`.replace('  ', ' ')
     : `SPICE by ngspice ${v.ngspice ?? ''} on ${v.path}: ${v.passed ? 'PASSED' : 'FAILED'} — ${held}/${v.assertions.length} assertion(s) hold.`.replace('  ', ' ')
   const lines = [head]
+  if (v.spec?.loaded.length) lines.push(`Requirements from ${v.spec.path} (${v.spec.loaded.join(', ')}).`)
+  if (v.spec?.saved) lines.push(`Requirements saved to ${v.spec.path}.`)
   for (const a of v.assertions) {
     const bounds = [a.min !== null ? `≥ ${eng(a.min)}${a.unit}` : '', a.max !== null ? `≤ ${eng(a.max)}${a.unit}` : ''].filter(Boolean).join(' and ')
     lines.push(`${a.passed ? '✓' : '✗'} ${a.name}: ${eng(a.value)}${a.unit} (required ${bounds})`)

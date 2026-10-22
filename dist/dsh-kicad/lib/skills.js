@@ -46,6 +46,10 @@ function formatSimulate(v) {
   const held = v.assertions.filter((a) => a.passed).length;
   const head = v.passed === null ? `SPICE by ngspice ${v.ngspice ?? ""} on ${v.path}: no assertions given, results only.`.replace("  ", " ") : `SPICE by ngspice ${v.ngspice ?? ""} on ${v.path}: ${v.passed ? "PASSED" : "FAILED"} \u2014 ${held}/${v.assertions.length} assertion(s) hold.`.replace("  ", " ");
   const lines = [head];
+  if (v.spec?.loaded.length)
+    lines.push(`Requirements from ${v.spec.path} (${v.spec.loaded.join(", ")}).`);
+  if (v.spec?.saved)
+    lines.push(`Requirements saved to ${v.spec.path}.`);
   for (const a of v.assertions) {
     const bounds = [a.min !== null ? `\u2265 ${eng(a.min)}${a.unit}` : "", a.max !== null ? `\u2264 ${eng(a.max)}${a.unit}` : ""].filter(Boolean).join(" and ");
     lines.push(`${a.passed ? "\u2713" : "\u2717"} ${a.name}: ${eng(a.value)}${a.unit} (required ${bounds})`);
@@ -203,7 +207,7 @@ function createCommands(ctx) {
     },
     {
       name: "simulate",
-      description: "Simulate the project schematic with ngspice (DC operating point) and show every net voltage; the agent adds assertions for requirements",
+      description: "Verify the project schematic with ngspice: the requirements saved in <name>.sim.json, or a DC operating point showing every net voltage when there are none",
       input: { hint: "[path/to/file.kicad_sch]" },
       handler: wrap(async (inv, cwd) => {
         const result = await ctx.kicad.run("simulate", { path: targetFile(cwd, inv.rawInput, ".kicad_sch") }, inv.signal, { timeoutMs: 12e4 });
