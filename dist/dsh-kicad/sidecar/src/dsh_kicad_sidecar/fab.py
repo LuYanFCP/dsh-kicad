@@ -379,7 +379,7 @@ def _export_files(cli: KiCadCli, pcb: str, out: str, spec: dict[str, Any] | None
         for side in ("top", "bottom"):
             png = f"preview/{stem}-{side}.png"
             try:
-                cli.run("pcb", "render", "-o", os.path.join(out, png), "--side", side, "-w", "1600", "-h", "1000", pcb, cwd=cwd)
+                cli.run("pcb", "render", "-o", os.path.join(out, png), "--side", side, "--width", "1600", "--height", "1000", pcb, cwd=cwd)
                 previews.append(png)
             except KiCadCliError as exc:
                 warnings.append(f"3D preview ({side}) failed: {str(exc).splitlines()[0]}")

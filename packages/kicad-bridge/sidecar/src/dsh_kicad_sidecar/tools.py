@@ -18,6 +18,7 @@ from .schematic import OPERATIONS, Schematic, SchematicError, new_schematic_text
 from .pcb import OPERATIONS as PCB_OPERATIONS, Board, PcbError
 from .pcb_sync import update_pcb
 from .placement import OPERATIONS as PLACE_OPERATIONS, apply as apply_placement, check_placement
+from .board3d import QUALITIES, SIDES, export_glb, render_args, render_name
 from .autoroute import DEFAULT_TIMEOUT, MAX_TIMEOUT, autoroute
 from .freerouting import Cancelled, locate as locate_freerouting
 from .footprints import FootprintLibraries, default_footprint_dirs
@@ -149,13 +150,27 @@ TOOL_SPECS: list[ToolSpec] = [
                    "refill_zones": {"type": "boolean", "description": "Refill zones first (in memory; the file is not changed). Default: when the board has zones."}},
                   ["path"])),
     ToolSpec("render", "Render a schematic (every sheet) or board to SVG with kicad-cli, optionally rasterized to PNG; "
-             "view 3d renders a board's 3D view (kicad-cli pcb render) to PNG.",
+             "view 3d renders a board with KiCad's 3D viewer (kicad-cli pcb render) to PNG, from any side or angle.",
              _obj({"path": PATH, "format": {"type": "string", "enum": ["svg", "png"], "default": "svg"},
                    "view": {"type": "string", "enum": ["2d", "3d"], "default": "2d", "description": "Boards only: 3d is KiCad's 3D view as PNG."},
-                   "side": {"type": "string", "enum": ["top", "bottom"], "default": "top", "description": "Board side of the 3D view."},
+                   "side": {"type": "string", "enum": list(SIDES), "default": "top", "description": "3D: the side the camera starts from."},
+                   "rotate": {"type": ["string", "array"], "items": {"type": "number"},
+                              "description": "3D: extra rotation 'X,Y,Z' in degrees after side, e.g. '-45,0,45' for an isometric view from the front left."},
+                   "zoom": {"type": "number", "default": 1, "description": "3D: camera zoom (1 shows the whole board, 2 is twice as close)."},
+                   "pivot": {"type": ["string", "array"], "items": {"type": "number"},
+                             "description": "3D: point to look at, 'X,Y,Z' in cm from the board centre (KiCad 3D axes: X right, Y up the board, Z out of the top)."},
+                   "perspective": {"type": "boolean", "default": False, "description": "3D: perspective instead of orthographic projection."},
+                   "quality": {"type": "string", "enum": list(QUALITIES), "default": "basic", "description": "3D: high is ray-traced (a few seconds)."},
                    "output_dir": {"type": "string", "description": "Defaults to <project>/.dsh-kicad/render/<name>/."},
                    "pages": {"type": "string", "description": "Comma-separated page numbers (schematic only)."},
-                   "width": {"type": "integer", "default": 2000, "description": "PNG width in pixels."}}, ["path"]), writes=True),
+                   "width": {"type": "integer", "default": 2000, "description": "PNG width in pixels."},
+                   "height": {"type": "integer", "description": "3D: PNG height in pixels (default 3/4 of the width)."},
+                   "name": {"type": "string", "description": "3D: fixed file name <board>-3d-<name>.png (default: from side and camera)."}}, ["path"]), writes=True),
+    ToolSpec("export_glb", "Export a board as a binary glTF scene (kicad-cli pcb export glb, with copper, mask, silkscreen and the "
+             "footprints' 3D models) for an interactive 3D viewer. Cached by board content in <project>/.dsh-kicad/render/<name>/; "
+             "reports the board outline, the footprint references (node names of their 3D models) and models KiCad could not find.",
+             _obj({"path": PCB, "force": {"type": "boolean", "default": False, "description": "Export again even when the cached scene is current."}},
+                  ["path"]), writes=True),
     ToolSpec("export_netlist", "Write a netlist file with kicad-cli.",
              _obj({"path": SCH, "output": {"type": "string"},
                    "format": {"type": "string", "enum": ["kicadsexpr", "kicadxml", "cadstar", "orcadpcb2", "spice", "spicemodel", "pads", "allegro"], "default": "kicadsexpr"}},
@@ -478,14 +493,12 @@ class Toolbox:
         if args.get("view") == "3d":
             if not path.endswith(".kicad_pcb"):
                 raise ToolError("view 3d needs a .kicad_pcb")
-            side = args.get("side", "top")
-            if side not in ("top", "bottom"):
-                raise ToolError("side must be top or bottom")
-            width = int(args.get("width", 2000))
-            png = os.path.join(out_dir, f"{stem}-3d-{side}.png")
-            self.cli.run("pcb", "render", "-o", png, "--side", side, "-w", str(width), "-h", str(max(1, width * 3 // 4)), path,
+            camera = {k: args[k] for k in ("side", "rotate", "zoom", "pivot", "perspective", "quality") if args.get(k) is not None}
+            png = os.path.join(out_dir, render_name(stem, **camera, name=args.get("name")))
+            self.cli.run(*render_args(path, png, width=args.get("width", 2000), height=args.get("height"), **camera),
                          cwd=os.path.dirname(path))
-            return {"path": path, "output_dir": out_dir, "svg": [], "png": [png], "view": "3d"}
+            return {"path": path, "output_dir": out_dir, "svg": [], "png": [png], "view": "3d",
+                    **({"camera": camera} if camera.keys() - {"side"} else {})}
         if path.endswith(".kicad_sch"):
             svgs = self.cli.export_sch_svg(path, out_dir, pages=args.get("pages"))
         else:
@@ -494,6 +507,13 @@ class Toolbox:
         if args.get("format", "svg") == "png":
             result["png"] = [svg_to_png(svg, os.path.splitext(svg)[0] + ".png", int(args.get("width", 2000))) for svg in svgs]
         return result
+
+    def tool_export_glb(self, args):
+        path = self.resolve(args["path"], ".kicad_pcb")
+        stem = os.path.splitext(os.path.basename(path))[0]
+        out_dir = os.path.join(os.path.dirname(path), ".dsh-kicad", "render", stem)
+        with self.lock(path + "#glb"):  # the viewer may ask twice (open + change); the second gets the cache
+            return export_glb(self.cli, path, out_dir, force=bool(args.get("force")))
 
     def tool_export_netlist(self, args):
         path = self.resolve(args["path"], ".kicad_sch")

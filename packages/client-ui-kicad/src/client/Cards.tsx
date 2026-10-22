@@ -234,8 +234,11 @@ export function CommandRow(props: CommandRowProps): ReactNode {
   let text = outcome?.text ?? ''
   if (name === 'kicad-render' && outcome?.kind === 'success') {
     try {
-      const out = JSON.parse(text) as { path?: string, svg?: string[] }
-      text = tr('card.rendered', { file: basename(out.path ?? ''), count: out.svg?.length ?? 0 })
+      const out = JSON.parse(text) as { path?: string, svg?: string[], png?: string[], glb?: string }
+      const file = basename(out.path ?? '')
+      text = out.glb ? tr('card.exported3d', { file, glb: out.glb })
+        : out.png?.length && !out.svg?.length ? tr('card.rendered3d', { file, png: out.png.join(', ') })
+          : tr('card.rendered', { file, count: out.svg?.length ?? 0 })
     } catch {
       // not the JSON this plugin writes: show it as is
     }

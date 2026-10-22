@@ -228,13 +228,18 @@ export function apply(ctx: Context, config: Config = {}): void {
     }),
     defineTool({
       name: 'kicad_render',
-      description: 'Render a schematic (all sheets) or board with kicad-cli. Returns SVG/PNG paths under <project>/.dsh-kicad/render/ and, when the model accepts images, the first page as an image. For a board, view "3d" renders KiCad\'s 3D view (PNG): use it to check a placement.',
+      description: 'Render a schematic (all sheets) or board with kicad-cli. Returns SVG/PNG paths under <project>/.dsh-kicad/render/ and, when the model accepts images, the first page as an image. For a board, view "3d" renders KiCad\'s 3D view (PNG): use it to check a placement, from any side or angle (side, rotate, zoom), e.g. rotate "-45,0,45" for an isometric view, side "bottom" for the back, zoom 3 on a corner with pivot.',
       parameters: {
         path: { type: 'string', required: true, description: 'A .kicad_sch or .kicad_pcb file.' },
         pages: { type: 'string', description: 'Comma-separated page numbers (schematic only).' },
         width: { type: 'integer', description: 'PNG width in pixels (default 1600).' },
         view: { type: 'string', enum: ['2d', '3d'], description: 'Boards: "3d" renders the 3D view as PNG instead of the 2D plot (default "2d").' },
-        side: { type: 'string', enum: ['top', 'bottom'], description: 'Board side of the 3D view (default top).' },
+        side: { type: 'string', enum: ['top', 'bottom', 'left', 'right', 'front', 'back'], description: '3D: the side the camera looks from (default top).' },
+        rotate: { type: 'string', description: '3D: rotation "X,Y,Z" in degrees applied after side, e.g. "-45,0,45" (isometric from the front left), "-60,0,0" (tilted from the front).' },
+        zoom: { type: 'number', description: '3D: camera zoom; 1 (default) shows the whole board, 2 is twice as close.' },
+        pivot: { type: 'string', description: '3D: point to look at, "X,Y,Z" in cm from the board centre (X right, Y up the board, Z out of the top); use with zoom to look at one area.' },
+        perspective: { type: 'boolean', description: '3D: perspective instead of orthographic projection (default false).' },
+        quality: { type: 'string', enum: ['basic', 'high'], description: '3D: "high" ray-traces (a few seconds; default basic).' },
       },
       output: {
         schema: {
@@ -257,7 +262,8 @@ export function apply(ctx: Context, config: Config = {}): void {
         const wantImage = attachRenders && attachments(ctx) !== undefined && await imageCapable(ctx, exec)
         const rendered = await ctx.kicad.run<RenderValue>('render', {
           path, format: wantImage ? 'png' : 'svg', pages: args.pages, width: args.width ?? 1600,
-          ...(args.view ? { view: args.view } : {}), ...(args.side ? { side: args.side } : {}),
+          ...(args.view ? { view: args.view } : {}),
+          ...Object.fromEntries((['side', 'rotate', 'zoom', 'pivot', 'perspective', 'quality'] as const).filter(k => args[k] !== undefined).map(k => [k, args[k]])),
         }, exec.signal)
         const value: RenderValue = { path: rendered.path, svg: rendered.svg, ...(rendered.png ? { png: rendered.png } : {}) }
         if (wantImage && rendered.png?.[0]) {

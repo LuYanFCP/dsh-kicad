@@ -16,9 +16,10 @@ from . import __version__
 from . import freerouting
 from .footprints import default_footprint_dirs
 from .kicad_cli import FLATPAK_APP, MIN_KICAD, KiCadCli, parse_version
+from .models3d import FLATPAK_EXTENSION, model_library
 from .symbols import default_symbol_dirs
 
-__all__ = ["MIN_PYTHON", "platform_info", "install_options", "install_hint", "run_doctor"]
+__all__ = ["MIN_PYTHON", "platform_info", "install_options", "install_hint", "model_options", "run_doctor"]
 
 MIN_PYTHON = (3, 10)
 DOWNLOAD_URL = "https://www.kicad.org/download/"
@@ -168,6 +169,68 @@ def java_options(info: dict[str, Any], which: Which = shutil.which) -> list[dict
     return options
 
 
+MODEL_PACKAGES = {  # KiCad's 3D model library as a distribution package (installs into <share>/kicad/3dmodels)
+    "fedora": ["sudo", "dnf", "install", "-y", "kicad-packages3d"],
+    "ubuntu": ["sudo", "apt-get", "install", "-y", "kicad-packages3d"],
+    "debian": ["sudo", "apt-get", "install", "-y", "kicad-packages3d"],
+    "arch": ["sudo", "pacman", "-S", "--needed", "--noconfirm", "kicad-library-3d"],
+    "suse": ["sudo", "zypper", "--non-interactive", "install", "kicad-packages3D"],
+}
+LIBRARIES_URL = "https://www.kicad.org/libraries/download/"
+PACKAGES3D_URL = "https://gitlab.com/kicad/libraries/kicad-packages3D/-/tags"
+
+
+def model_options(info: dict[str, Any], which: Which = shutil.which, kicad_source: str | None = None) -> list[dict[str, Any]]:
+    """Ways to install KiCad's 3D model library for the KiCad in use (the user runs those that need root)."""
+    options: list[dict[str, Any]] = []
+    family = _family(info)
+    if kicad_source == "flatpak":
+        flatpak = which("flatpak")
+        options.append(_option("packages3d", "Flatpak extension (per user, no root)",
+                               [["flatpak", "remote-add", "--user", "--if-not-exists", "flathub", FLATHUB],
+                                ["flatpak", "install", "--user", "-y", "--noninteractive", "flathub", f"{FLATPAK_EXTENSION}//stable"]],
+                               needs_root=False, available=flatpak is not None,
+                               note="KiCad's Flatpak keeps its 3D models in a separate extension (about 640 MB download, 3.1 GB installed)."))
+    elif info["os"] == "linux" and family in MODEL_PACKAGES:
+        step = MODEL_PACKAGES[family]
+        options.append(_option("packages3d", f"KiCad 3D models ({step[1]})", [step], needs_root=True,
+                               available=which(step[1]) is not None,
+                               note="About 270 MB to download and 3.1 GB installed, into KiCad's 3dmodels directory."))
+    elif info["os"] == "macos":
+        brew = which("brew")
+        options.append(_option("packages3d", "Reinstall KiCad with Homebrew", [["brew", "reinstall", "--cask", "kicad"]],
+                               needs_root=False, available=brew is not None,
+                               note="KiCad for macOS (the DMG and the cask) bundles the 3D models in KiCad.app; reinstalling restores them."
+                               if brew else "KiCad for macOS bundles the 3D models in KiCad.app: reinstall it from kicad.org."))
+    elif info["os"] == "windows":
+        options.append(_option("packages3d-installer", "Run the KiCad installer again", [], needs_root=False, available=True,
+                               note="The full installer (and winget install KiCad.KiCad) includes them; keep the \"3D models\" component selected.",
+                               url=DOWNLOAD_URL))
+    options.append(_option("packages3d-download", "Download the 3D model library", [], needs_root=False, available=True,
+                           note="Unpack the kicad-packages3D archive for your KiCad version (gitlab.com/kicad/libraries/kicad-packages3D, "
+                                "about 3.3 GB unpacked) anywhere, then point KICAD10_3DMODEL_DIR at it (KiCad: Preferences → "
+                                "Configure Paths, or the environment).", url=PACKAGES3D_URL))
+    return options
+
+
+def _model_check(cli: KiCadCli, info: dict[str, Any], which: Which) -> dict[str, Any]:
+    """Optional: KiCad's 3D model library, which 3D renders and the Web UI's 3D view use for component bodies."""
+    lib = model_library(cli)
+    var, where = lib["var"], lib["dir"]
+    label = "3D models (optional)"
+    if lib["installed"]:
+        return _check("3d_models", label, "ok", f"{lib['libraries']} model libraries in {where} ({var}, {lib['source']}).",
+                      required=False, dir=where, var=var, source=lib["source"])
+    options = model_options(info, which, cli.source)
+    best = next((o for o in options if o["command"]), None)
+    found = f"{where} is empty or missing" if where else "no 3D model directory was found"
+    return _check("3d_models", label, "warn",
+                  f"KiCad's 3D model library is not installed ({var}: {found}); 3D views show boards without component bodies.",
+                  required=False, dir=where, var=var, source=lib["source"], install=options,
+                  fix=(f"Install it (`{best['command']}`)" if best else "Install it") +
+                  f", or download it ({PACKAGES3D_URL}) and set {var} to that directory.")
+
+
 def freerouting_option() -> dict[str, Any]:
     release = freerouting.RELEASE
     return _option("freerouting", f"Freerouting {release['version']} (download the release jar, per user)",
@@ -272,6 +335,9 @@ def run_doctor(cli: KiCadCli, info: dict[str, Any] | None = None, which: Which =
                          f"{len(fp_dirs)} director{'y' if len(fp_dirs) == 1 else 'ies'}: {', '.join(fp_dirs)}" if fp_dirs else "No KiCad footprint libraries found.",
                          required=False, dirs=fp_dirs,
                          fix=None if fp_dirs else "Install KiCad's footprint libraries (on Arch `kicad-library`; Debian/Ubuntu `kicad-footprints`), or set KICAD10_FOOTPRINT_DIR."))
+
+    if cli.argv is not None:
+        checks.append(_model_check(cli, info, which))
 
     # Python running this sidecar
     py = python_version or tuple(sys.version_info[:3])

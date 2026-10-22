@@ -10,12 +10,12 @@
 
 | 能力 | 说明 |
 |---|---|
-| **工具**（`kicad_*`） | `doctor`（检查本机是否就绪：kicad-cli 与 KiCad 8+、库、Python，附修复方法和安装命令）、`read_schematic`、`list_components`、`get_symbol_pins`、`list_nets`（KiCad 网表）、`search_symbols`（已安装符号库）、`erc`、`drc`、`render`（SVG；模型支持图片时附带 PNG 图片）、`export`（网表/BOM）、`export_fab`（Gerber/钻孔/坐标/BOM 压缩包及 3D 预览，KiCad 判定电路板就绪前拒绝导出，见[制板输出](#制板输出)）、`fab_preset`（JLCPCB/PCBWay 设计规则）、`create_schematic`，以及原子批量编辑 `edit_schematic`（增删移动元件、设置值/封装/属性、导线、标签、电源符号、结点、不连接标记、绕开元件和其他网络自动布线的引脚到引脚导线、引脚到网络的连接，以及按功能分区布局：带标题的功能块框、连同导线一起移动元件或整个功能块、图纸尺寸与标题栏）；电路板有 `read_pcb`（外框、层、设计规则与网络类、带 courtyard 和焊盘网络的封装、覆铜区、DRC 给出的未布线数）和原子批量编辑 `edit_pcb`（板框与安装孔、移动/翻面/锁定封装、写入 `.kicad_pro` 的设计规则与网络类、以焊盘为端点的走线、过孔、覆铜区、禁布区、丝印文字与位号、按 uuid 删除）；以及 `update_pcb`——无界面地完成 KiCad 的“从原理图更新 PCB”：新板使用 KiCad 的空板、默认叠层和占位板框；已有电路板上已放置的封装保持原位，新封装放在板框旁等待布局，网络、值和字段随原理图更新；无法上板时拒绝执行并列出需修正的 `REF:PIN`，结果由 KiCad 的原理图一致性检查判定；以及 `autoroute`——用 [Freerouting](https://github.com/freerouting/freerouting) 自动布线，保留手工布好（锁定）的和已有的走线，重新填充覆铜，以 KiCad 的 DRC 结论为准（见[布线](#布线)）。未修改的文件文本逐字节保持不变。 |
+| **工具**（`kicad_*`） | `doctor`（检查本机是否就绪：kicad-cli 与 KiCad 8+、库、Python，附修复方法和安装命令）、`read_schematic`、`list_components`、`get_symbol_pins`、`list_nets`（KiCad 网表）、`search_symbols`（已安装符号库）、`erc`、`drc`、`render`（SVG；模型支持图片时附带 PNG 图片；电路板可从任意方向和角度渲染 KiCad 的 3D 视图）、`export`（网表/BOM）、`export_fab`（Gerber/钻孔/坐标/BOM 压缩包及 3D 预览，KiCad 判定电路板就绪前拒绝导出，见[制板输出](#制板输出)）、`fab_preset`（JLCPCB/PCBWay 设计规则）、`create_schematic`，以及原子批量编辑 `edit_schematic`（增删移动元件、设置值/封装/属性、导线、标签、电源符号、结点、不连接标记、绕开元件和其他网络自动布线的引脚到引脚导线、引脚到网络的连接，以及按功能分区布局：带标题的功能块框、连同导线一起移动元件或整个功能块、图纸尺寸与标题栏）；电路板有 `read_pcb`（外框、层、设计规则与网络类、带 courtyard 和焊盘网络的封装、覆铜区、DRC 给出的未布线数）和原子批量编辑 `edit_pcb`（板框与安装孔、移动/翻面/锁定封装、写入 `.kicad_pro` 的设计规则与网络类、以焊盘为端点的走线、过孔、覆铜区、禁布区、丝印文字与位号、按 uuid 删除）；以及 `update_pcb`——无界面地完成 KiCad 的“从原理图更新 PCB”：新板使用 KiCad 的空板、默认叠层和占位板框；已有电路板上已放置的封装保持原位，新封装放在板框旁等待布局，网络、值和字段随原理图更新；无法上板时拒绝执行并列出需修正的 `REF:PIN`，结果由 KiCad 的原理图一致性检查判定；以及 `autoroute`——用 [Freerouting](https://github.com/freerouting/freerouting) 自动布线，保留手工布好（锁定）的和已有的走线，重新填充覆铜，以 KiCad 的 DRC 结论为准（见[布线](#布线)）。未修改的文件文本逐字节保持不变。 |
 | **策略** | 设计修改走 dsh 审批（`ask`）；写操作被单调 guard 限制在会话工作目录内；每次成功修改后自动运行 KiCad ERC（原理图）或 DRC（电路板修改或应用板厂预设后，先重新填充覆铜；`update_pcb` 之后另报原理图一致性问题数）并把结论附加到工具结果；系统提示中注入稳定的 KiCad 工作规范，以及动态的“当前目录中的 KiCad 工程 + 最近一次 ERC/DRC”上下文。 |
 | **技能** | `kicad-agent-workflow`、`kicad-erc-triage`、`kicad-drc-triage`、`kicad-schematic-design`。 |
 | **命令** | `/erc`、`/drc`、`/bom`（不经过模型，作用于工程根设计）、`/kicad-fab`（制板压缩包）、`/kicad-render`、`/kicad-doctor`（环境检查）、`/kicad-install`（安装 KiCad 或 Freerouting 自动布线器，见下文）。 |
 | **Agent 预设** | `eda`：与 standard 类似的工具集 + 电子设计人设。KiCad 工具为全局注册，任何预设都可使用。 |
-| **Web 界面** | 右侧边栏 `*.kicad_sch` / `*.kicad_pcb` 查看器，两种模式：**交互**——内嵌 [KiCanvas](https://github.com/theacodes/kicanvas)（层次图纸、查看元件/封装/网络、图层开关、KiCad 或 Witch Hazel 主题、文件变化时自动刷新）；**SVG**——kicad-cli 渲染（平移缩放、多图纸、渲染按钮，PCB 文件变化时自动重新渲染，也是交互模式失败时的自动回退）；ERC/DRC、原理图修改与环境检查的对话卡片；sidecar（kicad-cli 路径、Python，以及 KiCad 环境检查和 **安装 KiCad**）与策略（审批、自动 ERC、自动渲染）的设置页。KiCad 缺失或版本过低时，查看器和失败的工具卡片会显示带 **安装 KiCad** 按钮的提示。 |
+| **Web 界面** | 右侧边栏 `*.kicad_sch` / `*.kicad_pcb` 查看器，两种模式：**交互**——内嵌 [KiCanvas](https://github.com/theacodes/kicanvas)（层次图纸、查看元件/封装/网络、图层开关、KiCad 或 Witch Hazel 主题、文件变化时自动刷新）；**SVG**——kicad-cli 渲染（平移缩放、多图纸、渲染按钮，PCB 文件变化时自动重新渲染，也是交互模式失败时的自动回退）；电路板还有仿照 KiCad 3D 查看器的 **3D** 模式（见 [3D 视图](#3d-视图)）；ERC/DRC、原理图修改与环境检查的对话卡片；sidecar（kicad-cli 路径、Python，以及 KiCad 环境检查和 **安装 KiCad**）与策略（审批、自动 ERC、自动渲染）的设置页。KiCad 缺失或版本过低时，查看器和失败的工具卡片会显示带 **安装 KiCad** 按钮的提示。 |
 | **独立 MCP server** | Python sidecar 通过 stdio 说 MCP 协议，Claude Code 或 RL 环境可以不经 dsh 直接复用同一套工具。 |
 | **KiCad 端（可选）** | IPC 插件，工具栏按钮 “Open in DSH”。 |
 
@@ -50,7 +50,7 @@ market/                 插件市场索引示例
 
 ### 检查环境与安装 KiCad
 
-**Plugins → KiCad → KiCad bridge** 页面显示环境检查：每一项（kicad-cli、KiCad 版本 ≥ 8、符号库与封装库、Python ≥ 3.10、可选的 PNG 光栅化工具和 kicad-python）都有状态和修复方法。对话里用 `/kicad-doctor` 查看同样的结果，模型可调用 `kicad_doctor`；因缺少 KiCad 而失败的工具会在错误信息里给出安装命令。
+**Plugins → KiCad → KiCad bridge** 页面显示环境检查：每一项（kicad-cli、KiCad 版本 ≥ 8、符号库与封装库、Python ≥ 3.10、可选的 KiCad 3D 模型库、PNG 光栅化工具和 kicad-python）都有状态和修复方法。对话里用 `/kicad-doctor` 查看同样的结果，模型可调用 `kicad_doctor`；因缺少 KiCad 而失败的工具会在错误信息里给出安装命令。
 
 KiCad 缺失或版本过低时，该页面（以及查看器里的提示）会列出本机可用的安装方式：
 
@@ -121,6 +121,33 @@ dsh plugin --profile web add "git+https://github.com/LuYanFCP/dsh-kicad.git#<com
 
 Freerouting（GPL-3.0）是独立的 Java 程序，不随插件分发。`/kicad-doctor` 检查 Java 与 Freerouting；`/kicad-install freerouting --yes` 把固定版本的发布 jar（2.5.0，约 65 MB，校验 SHA-256）下载到你的数据目录（Linux 上为 `~/.local/share/dsh-kicad/freerouting`），从不使用 `sudo`。Freerouting 2.5.0 需要 **Java 25+**：doctor 会列出包管理器命令或 [Temurin JRE](https://adoptium.net/temurin/releases/?package=jre)。bridge 的 `java` 与 `freerouting` 设置可以指向已有的 Java 或 jar。
 
+### 3D 视图
+
+打开 `.kicad_pcb`，在“交互 / SVG”旁选择 **3D**，相当于 KiCad 的“视图 → 3D 查看器”。Host 把电路板导出为二进制 glTF 场景（`kicad-cli pcb export glb`，含铜皮、焊盘、覆铜、阻焊、丝印和封装的 3D 模型），存放在 `<工程>/.dsh-kicad/render/<板名>/`，按电路板内容缓存，再次打开即时显示。查看器通过 `remote.workspaceFiles` 读取（原始字节；超过 dsh 32 MiB 整文件上限时按 2 MiB 分段读取），用 three.js 显示：拖动旋转，右键或 Shift 拖动平移，滚轮缩放；**顶面 / 底面 / 前 / 后 / 左 / 右 / 轴测**、**透视 / 正交**、**元件**开关和**重置视角**。电路板变化时（agent 修改、KiCad 保存）静置一秒后重新导出，视角保持不变；导出失败时保留上一次的模型并说明原因。
+
+![修改后的 3D 视图（左）与同一视角的 KiCad 渲染（右）](docs/images/3d-view-vs-kicad-render.jpg)
+
+**KiCad 渲染**按钮用 KiCad 自己的渲染器渲染当前视角（`kicad-cli pcb render --quality high`，几秒钟），把轨道相机换算为 `--rotate` / `--zoom` / `--pivot` / `--perspective`，得到与 KiCad 完全一致的效果。浏览器不支持 WebGL 时，3D 模式显示这种渲染图，视图按钮同样可用。
+
+three.js（约 645 KB，gzip 后 163 KB）是单独的客户端分块 `lib/client.three.js`，第一次以 3D 模式打开电路板时才由 dsh 加载；主客户端模块只增加约 28 KB。
+
+模型也能从任意角度查看：`kicad_render {view: "3d", side?, rotate?: "-45,0,45", zoom?, pivot?, perspective?, quality?: "basic" | "high"}`（默认值和返回结果不变；在对话中用 `/kicad-render <板> --3d --rotate=-45,0,45`）。
+
+**KiCad 3D 模型库。** 元件外形来自 KiCad 的 3D 模型库（`${KICAD10_3DMODEL_DIR}`），多数 Linux 发行版把它单独打包。`/kicad-doctor` 会检查它（变量按 KiCad 的方式解析：环境变量，其次“首选项 → 配置路径”，最后是内置默认路径）；封装引用的模型找不到时，3D 视图会显示带修复方法的提示：
+
+| 平台 | 3D 模型库 | dsh 能否代为执行 |
+|---|---|---|
+| Fedora | `sudo dnf install -y kicad-packages3d` | 否：需要 root，提供 **复制命令** |
+| Debian、Ubuntu（含 KiCad PPA） | `sudo apt-get install -y kicad-packages3d` | 否（root） |
+| Arch | `sudo pacman -S --needed kicad-library-3d` | 否（root） |
+| openSUSE | `sudo zypper install kicad-packages3D` | 否（root） |
+| Flatpak 版 KiCad | `flatpak install --user flathub org.kicad.KiCad.Library.Packages3D//stable` | 可以，按用户安装（下载约 640 MB） |
+| macOS | 已包含在 KiCad.app 中（DMG 与 Homebrew cask）；`brew reinstall --cask kicad` 可恢复 | 可以，需 Homebrew |
+| Windows | 完整安装包（以及 `winget install KiCad.KiCad`）已包含；保留“3D models”组件 | 链接 |
+| 所有平台 | 下载与 KiCad 版本对应的 [kicad-packages3D](https://gitlab.com/kicad/libraries/kicad-packages3D/-/tags) 压缩包，再设置 `KICAD10_3DMODEL_DIR` | 链接 |
+
+发行版软件包下载约 270 MB，安装后约 3.1 GB。没有它时，3D 视图和渲染图只显示带焊盘、铜皮和丝印的裸板。
+
 ### 制板输出
 
 `/kicad-fab [board.kicad_pcb] [--preset jlcpcb|pcbway] [--force] [--step] [--ipc2581] [--odb]`（agent 使用 `kicad_export_fab`）先由 KiCad 判定电路板：存在 DRC 错误、未布通的连接、原理图一致性（parity）问题（原理图与电路板在同一目录时检查），或在指定预设时违反该板厂的工艺限制，都会拒绝导出，且不写任何文件。`--force` 强制导出，结果和 `fab-manifest.json` 会注明这一点。
@@ -184,6 +211,7 @@ python packages/kicad-bridge/sidecar/tests/make_fixtures.py   # 用编辑器本�
 - 新放置在子图纸中的元件只向上查找一层根图纸来确定 instance 路径；更深的层次可能需要 KiCad 重新标注。
 - 只有当模型路由声明支持图片输入且挂载了附件存储时，图片才会传给模型；否则渲染工具只返回 SVG 路径。
 - 审批需要交互式审批通道；没有审批通道的 headless 运行会拒绝设计修改，除非设置 `approval: allow`。
+- 3D 视图需要 WebGL（否则显示 KiCad 渲染图）。其颜色来自 KiCad 的 GLB 导出，KiCad 把 sRGB 颜色直接写成 glTF 的线性颜色系数；查看器按 sRGB 读取以与 KiCad 一致，因此其他 glTF 查看器显示同一文件时会偏亮。
 - 交互查看器是 KiCanvas，由 `scripts/vendor-kicanvas.mjs` 按固定 commit 打包进插件（离线、图标、主题等补丁见 `packages/client-ui-kicad/vendor/kicanvas/README.md`）。它能解析 KiCad 10 文件，但会忽略尚不认识的新字段；SVG 模式是 kicad-cli 的准确渲染。需要 WebGL2。
 - IPC 通道目前只有状态探测和 KiCad 端启动按钮，未实现通过 IPC 实时编辑（KiCad IPC API 以 PCB 为主）。
 - Flatpak 方式以 `flatpak run --filesystem=host --filesystem=/tmp --command=kicad-cli org.kicad.KiCad` 运行 kicad-cli；只用替身 `flatpak` 测试过，未在真实的 Flatpak KiCad 上验证。apt/pacman/zypper/brew/winget 的安装命令只在 Fedora 上验证过展示逻辑。

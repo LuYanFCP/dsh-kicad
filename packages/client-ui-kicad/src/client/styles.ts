@@ -53,4 +53,13 @@ export const CSS = `
 .dshk-primary{font-weight:600;border-color:var(--dsw-alias-state-warn-primary)}
 .dshk-log{margin:0;max-height:220px;overflow:auto;padding:4px 6px;border-radius:4px;background:var(--dsw-alias-bg-base);white-space:pre-wrap}
 a.dshk-btn{text-decoration:none}
+.dshk-views{padding-top:4px;padding-bottom:4px;gap:4px}
+.dshk-views .dshk-btn{padding:1px 6px}
+.dshk-views .dshk-btn[aria-pressed=true]{background:var(--dsw-alias-interactive-bg-hover);font-weight:600}
+.dshk-3d{cursor:grab;background:linear-gradient(#cfd0e3,#6b6b85)}
+.dshk-3d-host canvas{touch-action:none}
+.dshk-3d-image{position:absolute;inset:0;z-index:3;display:flex;align-items:center;justify-content:center;background:linear-gradient(#cfd0e3,#6b6b85)}
+.dshk-3d-image img{position:static;max-width:100%;max-height:100%;transform:none;background:none;box-shadow:none;object-fit:contain}
+.dshk-3d-close{position:absolute;right:8px;top:8px}
+.dshk-3d-help{padding:2px 10px 4px}
 `

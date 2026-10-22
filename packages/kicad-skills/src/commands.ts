@@ -90,17 +90,76 @@ export function createCommands(ctx: Context): CommandDefinition[] {
     },
     {
       name: 'kicad-render',
-      description: 'Re-render a KiCad schematic or board to SVG for the sidebar viewer',
-      input: { hint: 'path/to/file.kicad_sch [--json]' },
-      handler: wrap(async (inv, cwd) => {
-        // `--json` marks the viewer's automatic re-renders, whose chat rows stay hidden; the output is JSON either way.
-        const arg = inv.rawInput.replace(/(^|\s)--json(?=\s|$)/g, ' ').trim()
-        const path = arg ? (isAbsolute(arg) ? arg : resolve(cwd, arg)) : targetFile(cwd, '', '.kicad_sch')
-        const out = await ctx.kicad.run<{ svg: string[] }>('render', { path, format: 'svg' }, inv.signal)
-        return JSON.stringify({ path, svg: out.svg })
-      }),
+      description: 'Re-render a KiCad schematic or board for the sidebar viewer: SVG, a board\'s 3D scene (--glb) or KiCad\'s 3D render (--3d)',
+      input: { hint: 'path/to/file.kicad_sch [--glb [--force] | --3d [--side=top] [--rotate=X,Y,Z] [--zoom=1] [--pivot=X,Y,Z] [--perspective] [--quality=basic|high] [--width=W] [--height=H] [--name=N]] [--json]' },
+      // `--json` marks the viewer's own runs, whose chat rows stay hidden; the output is JSON either way.
+      handler: wrap(async (inv, cwd) => renderCommand(ctx, cwd, inv.rawInput, inv.signal)),
     },
   ]
+}
+
+export interface RenderArgs {
+  path: string
+  kind: 'svg' | 'glb' | '3d'
+  force: boolean
+  /** kicad-cli pcb render camera and image options (`--3d`). */
+  camera: Record<string, string | number | boolean>
+}
+
+const RENDER_VALUES = ['side', 'rotate', 'zoom', 'pivot', 'quality', 'width', 'height', 'name'] as const
+const RENDER_NUMBERS = new Set(['zoom', 'width', 'height'])
+
+/**
+ * `/kicad-render [path] [--glb [--force] | --3d [--side=…] [--rotate=X,Y,Z] …] [--json]`. Values go after `=`, so
+ * a negative angle (`--rotate=-45,0,45`) is never taken for an option; the rest of the line is the path.
+ */
+export function renderArgs(raw: string): RenderArgs {
+  const out: RenderArgs = { path: '', kind: 'svg', force: false, camera: {} }
+  const rest: string[] = []
+  for (const word of raw.trim().split(/\s+/).filter(Boolean)) {
+    const option = /^--([a-z0-9-]+)(?:=(.*))?$/.exec(word)
+    if (!option) {
+      rest.push(word)
+      continue
+    }
+    const [, name, value] = option as unknown as [string, string, string | undefined]
+    if (name === 'json') continue
+    if (name === 'glb' || name === '3d') {
+      if (out.kind !== 'svg' && out.kind !== name) throw new Error('use either --glb (3D scene) or --3d (KiCad render)')
+      out.kind = name
+    } else if (name === 'force') {
+      out.force = true
+    } else if (name === 'perspective') {
+      out.camera.perspective = true
+    } else if ((RENDER_VALUES as readonly string[]).includes(name)) {
+      if (!value) throw new Error(`--${name} needs a value, e.g. --${name}=${name === 'rotate' || name === 'pivot' ? '-45,0,45' : name === 'side' ? 'top' : name === 'quality' ? 'high' : '1'}`)
+      const number = Number(value)
+      if (RENDER_NUMBERS.has(name) && !Number.isFinite(number)) throw new Error(`--${name} must be a number, got ${value}`)
+      out.camera[name] = RENDER_NUMBERS.has(name) ? number : value
+    } else {
+      throw new Error(`unknown option --${name}; use --glb [--force], or --3d with --side, --rotate, --zoom, --pivot, --perspective, --quality, --width, --height, --name`)
+    }
+  }
+  if (out.kind !== '3d' && Object.keys(out.camera).length) throw new Error('camera options need --3d')
+  if (out.force && out.kind !== 'glb') throw new Error('--force goes with --glb')
+  out.path = rest.join(' ')
+  return out
+}
+
+/** `/kicad-render`: the sidebar viewer's renders (SVG pages, the 3D scene, or one KiCad 3D render). */
+export async function renderCommand(ctx: Context, cwd: string, raw: string, signal?: AbortSignal): Promise<string> {
+  const args = renderArgs(raw)
+  const path = args.path ? (isAbsolute(args.path) ? args.path : resolve(cwd, args.path)) : targetFile(cwd, '', args.kind === 'svg' ? '.kicad_sch' : '.kicad_pcb')
+  if (args.kind === 'glb') {
+    const out = await ctx.kicad.run<Record<string, unknown>>('export_glb', { path, force: args.force }, signal)
+    return JSON.stringify({ path, ...out })
+  }
+  if (args.kind === '3d') {
+    const out = await ctx.kicad.run<{ png: string[], camera?: unknown }>('render', { path, view: '3d', ...args.camera }, signal)
+    return JSON.stringify({ path, svg: [], png: out.png, ...(out.camera ? { camera: out.camera } : {}) })
+  }
+  const out = await ctx.kicad.run<{ svg: string[] }>('render', { path, format: 'svg' }, signal)
+  return JSON.stringify({ path, svg: out.svg })
 }
 
 export function flags(raw: string): { json: boolean, yes: boolean, words: string[] } {
@@ -217,9 +276,8 @@ function formatOption(o: InstallOption): string {
 
 export function formatPlan(report: DoctorReport): string {
   const optional = optionalInstalls(report)
-  const extras = optional.length
-    ? ['**Optional, for kicad_autoroute:**', ...optional.map(formatOption)]
-    : []
+  // One heading per optional component (Java and Freerouting for kicad_autoroute, KiCad's 3D models).
+  const extras = report.checks.filter(c => c.install?.length).flatMap(c => [`**${c.label}:**`, ...c.install!.map(formatOption)])
   if (report.status === 'ok') {
     return optional.length ? [`**${report.summary}**`, ...extras].join('\n\n') : `${report.summary}\nNothing to install.`
   }

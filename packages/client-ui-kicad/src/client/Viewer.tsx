@@ -1,13 +1,15 @@
 /**
- * Right-sidebar body for .kicad_sch / .kicad_pcb: shows the SVG that kicad-cli
- * rendered into <project>/.dsh-kicad/render/<name>/, follows file changes through
- * `useResource`, and re-renders on request through the `/kicad-render` command
- * (and by itself when a board changes, see `rendersItself`).
+ * Right-sidebar body for .kicad_sch / .kicad_pcb, in three modes: Interactive (KiCanvas),
+ * SVG (what kicad-cli rendered into <project>/.dsh-kicad/render/<name>/, re-rendered on
+ * request through the `/kicad-render` command and by itself when a board changes, see
+ * `rendersItself`) and, for boards, 3D (Board3D.tsx). Every mode follows file changes
+ * through `useResource`.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode, type WheelEvent } from 'react'
 import { orderPages, parseFileAddress, renderDir, sessionFileAddress } from './address.ts'
 import { KICAD_MISSING, KiCadNotice } from './Doctor.tsx'
 import { followEnabled, setFollowEnabled } from './follow.ts'
+import { Board3DView } from './Board3D.tsx'
 import { InteractiveView } from './InteractiveView.tsx'
 import type { ClientRemote, TabBodyProps } from './dsh.ts'
 import { translate, type KiCadLocaleKey } from './locales.ts'
@@ -15,7 +17,7 @@ import { CSS } from './styles.ts'
 
 interface View { scale: number, x: number, y: number }
 
-type Mode = 'interactive' | 'svg'
+type Mode = 'interactive' | 'svg' | '3d'
 const MODE_KEY = 'dsh-kicad:viewer-mode'
 const THEME_KEY = 'dsh-kicad:viewer-theme'
 
@@ -53,7 +55,7 @@ export function createViewer(remote: ClientRemote) {
   const SvgView = createSvgView(remote)
   return function KiCadViewer(props: TabBodyProps): ReactNode {
     const tr = (key: KiCadLocaleKey, vars?: Record<string, string | number>): string => translate(props.t, key, vars)
-    const [mode, setMode] = useState<Mode>(() => stored<Mode>(MODE_KEY, ['interactive', 'svg'], 'interactive'))
+    const [mode, setMode] = useState<Mode>(() => stored<Mode>(MODE_KEY, ['interactive', 'svg', '3d'], 'interactive'))
     const [follow, setFollow] = useState(followEnabled)
     const [theme, setTheme] = useState(() => stored(THEME_KEY, ['kicad', 'witchhazel'], 'kicad'))
     const [fallback, setFallback] = useState<string | undefined>(undefined)
@@ -65,11 +67,15 @@ export function createViewer(remote: ClientRemote) {
       setMode(next)
       remember(MODE_KEY, next)
     }
-    const effective: Mode = mode === 'interactive' && fallback === undefined ? 'interactive' : 'svg'
+    const board = rendersItself(file?.path ?? '')
+    // Schematics have no 3D mode: a board's choice of 3D opens them interactively.
+    const wanted: Mode = mode === '3d' && !board ? 'interactive' : mode
+    const effective: Mode = wanted === 'interactive' && fallback !== undefined ? 'svg' : wanted
     const modeSwitch = (
       <span className="dshk-segmented" role="group">
         <button type="button" className="dshk-btn" aria-pressed={effective === 'interactive'} data-kicad-mode="interactive" onClick={() => choose('interactive')}>{tr('viewer.interactive')}</button>
         <button type="button" className="dshk-btn" aria-pressed={effective === 'svg'} data-kicad-mode="svg" onClick={() => choose('svg')}>{tr('viewer.svg')}</button>
+        {board && <button type="button" className="dshk-btn" aria-pressed={effective === '3d'} data-kicad-mode="3d" onClick={() => choose('3d')}>{tr('viewer.3d')}</button>}
       </span>
     )
     const followToggle = (
@@ -80,6 +86,15 @@ export function createViewer(remote: ClientRemote) {
     )
     if (effective === 'svg' || file?.scope !== 'session' || !file.sessionId) {
       return <SvgView {...props} modeSwitch={<>{modeSwitch}{followToggle}</>} notice={fallback ? tr('viewer.fellBack', { message: fallback }) : undefined} />
+    }
+    if (effective === '3d') {
+      return (
+        <>
+          <style>{CSS}</style>
+          <Board3DView remote={remote} sessionId={file.sessionId} designPath={file.path} version={sourceVersion} visible={tab.visible !== false}
+            tr={tr} t={props.t} toolbarStart={<>{modeSwitch}{followToggle}</>} />
+        </>
+      )
     }
     return (
       <div className="dshk-root" data-kicad-viewer={file.path} data-kicad-mode-active="interactive">

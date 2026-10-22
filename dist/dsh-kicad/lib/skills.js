@@ -172,16 +172,60 @@ function createCommands(ctx) {
     },
     {
       name: "kicad-render",
-      description: "Re-render a KiCad schematic or board to SVG for the sidebar viewer",
-      input: { hint: "path/to/file.kicad_sch [--json]" },
-      handler: wrap(async (inv, cwd) => {
-        const arg = inv.rawInput.replace(/(^|\s)--json(?=\s|$)/g, " ").trim();
-        const path = arg ? isAbsolute(arg) ? arg : resolve(cwd, arg) : targetFile(cwd, "", ".kicad_sch");
-        const out = await ctx.kicad.run("render", { path, format: "svg" }, inv.signal);
-        return JSON.stringify({ path, svg: out.svg });
-      })
+      description: "Re-render a KiCad schematic or board for the sidebar viewer: SVG, a board's 3D scene (--glb) or KiCad's 3D render (--3d)",
+      input: { hint: "path/to/file.kicad_sch [--glb [--force] | --3d [--side=top] [--rotate=X,Y,Z] [--zoom=1] [--pivot=X,Y,Z] [--perspective] [--quality=basic|high] [--width=W] [--height=H] [--name=N]] [--json]" },
+      // `--json` marks the viewer's own runs, whose chat rows stay hidden; the output is JSON either way.
+      handler: wrap(async (inv, cwd) => renderCommand(ctx, cwd, inv.rawInput, inv.signal))
     }
   ];
+}
+var RENDER_VALUES = ["side", "rotate", "zoom", "pivot", "quality", "width", "height", "name"];
+var RENDER_NUMBERS = /* @__PURE__ */ new Set(["zoom", "width", "height"]);
+function renderArgs(raw) {
+  const out = { path: "", kind: "svg", force: false, camera: {} };
+  const rest = [];
+  for (const word of raw.trim().split(/\s+/).filter(Boolean)) {
+    const option = /^--([a-z0-9-]+)(?:=(.*))?$/.exec(word);
+    if (!option) {
+      rest.push(word);
+      continue;
+    }
+    const [, name2, value] = option;
+    if (name2 === "json") continue;
+    if (name2 === "glb" || name2 === "3d") {
+      if (out.kind !== "svg" && out.kind !== name2) throw new Error("use either --glb (3D scene) or --3d (KiCad render)");
+      out.kind = name2;
+    } else if (name2 === "force") {
+      out.force = true;
+    } else if (name2 === "perspective") {
+      out.camera.perspective = true;
+    } else if (RENDER_VALUES.includes(name2)) {
+      if (!value) throw new Error(`--${name2} needs a value, e.g. --${name2}=${name2 === "rotate" || name2 === "pivot" ? "-45,0,45" : name2 === "side" ? "top" : name2 === "quality" ? "high" : "1"}`);
+      const number = Number(value);
+      if (RENDER_NUMBERS.has(name2) && !Number.isFinite(number)) throw new Error(`--${name2} must be a number, got ${value}`);
+      out.camera[name2] = RENDER_NUMBERS.has(name2) ? number : value;
+    } else {
+      throw new Error(`unknown option --${name2}; use --glb [--force], or --3d with --side, --rotate, --zoom, --pivot, --perspective, --quality, --width, --height, --name`);
+    }
+  }
+  if (out.kind !== "3d" && Object.keys(out.camera).length) throw new Error("camera options need --3d");
+  if (out.force && out.kind !== "glb") throw new Error("--force goes with --glb");
+  out.path = rest.join(" ");
+  return out;
+}
+async function renderCommand(ctx, cwd, raw, signal) {
+  const args = renderArgs(raw);
+  const path = args.path ? isAbsolute(args.path) ? args.path : resolve(cwd, args.path) : targetFile(cwd, "", args.kind === "svg" ? ".kicad_sch" : ".kicad_pcb");
+  if (args.kind === "glb") {
+    const out2 = await ctx.kicad.run("export_glb", { path, force: args.force }, signal);
+    return JSON.stringify({ path, ...out2 });
+  }
+  if (args.kind === "3d") {
+    const out2 = await ctx.kicad.run("render", { path, view: "3d", ...args.camera }, signal);
+    return JSON.stringify({ path, svg: [], png: out2.png, ...out2.camera ? { camera: out2.camera } : {} });
+  }
+  const out = await ctx.kicad.run("render", { path, format: "svg" }, signal);
+  return JSON.stringify({ path, svg: out.svg });
 }
 function flags(raw) {
   const words = raw.trim().split(/\s+/).filter(Boolean);
@@ -291,7 +335,7 @@ ${o.note}` : ""}`;
 }
 function formatPlan(report) {
   const optional = optionalInstalls(report);
-  const extras = optional.length ? ["**Optional, for kicad_autoroute:**", ...optional.map(formatOption)] : [];
+  const extras = report.checks.filter((c) => c.install?.length).flatMap((c) => [`**${c.label}:**`, ...c.install.map(formatOption)]);
   if (report.status === "ok") {
     return optional.length ? [`**${report.summary}**`, ...extras].join("\n\n") : `${report.summary}
 Nothing to install.`;
@@ -407,5 +451,7 @@ export {
   installCommand,
   name,
   parseSkill,
+  renderArgs,
+  renderCommand,
   targetFile
 };
