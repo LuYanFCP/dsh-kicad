@@ -7,7 +7,7 @@
       config:
         id: eda
         name: EDA agent
-        description: Electronics design with KiCad — schematics, ERC/DRC, BOM
+        description: Electronics design with KiCad — schematics, boards, ERC/DRC, fab output
         order: 5
         plugins:
           - id: persona
