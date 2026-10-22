@@ -88,6 +88,43 @@ export interface SimulateValue {
   ignored: string[]
   notes: string[]
   warnings?: string[]
+  /** Present when the run asked for a tolerance analysis; `passed` above already includes it. */
+  monte_carlo?: MonteCarlo
+}
+
+export interface MonteCarlo {
+  runs: number
+  seed: number
+  distribution: 'uniform' | 'gaussian'
+  min_pass_rate: number
+  /** Percent, per varied element. */
+  tolerances: Record<string, number>
+  varied: string[]
+  passed: boolean
+  assertions: Array<{
+    name: string
+    probe: string
+    unit: string
+    min_required: number | null
+    max_required: number | null
+    passes: number
+    runs: number
+    pass_rate: number
+    min: number
+    mean: number
+    max: number
+    stdev: number
+    passed: boolean
+    first_failure?: { run: number, value: number, varied: Record<string, number> }
+  }>
+}
+
+/** What kicad_sim_model returns: the models found in model files. */
+export interface SimModelValue {
+  path: string
+  files: Array<{ file: string, models: Array<{ name: string, kind: 'subckt' | 'model', pins?: string[], type?: string, comment?: string }> }>
+  models: number
+  truncated: boolean
 }
 
 /** What kicad_autoroute returns (the sidecar's autoroute tool). */
@@ -222,6 +259,36 @@ export function eng(value: number): string {
   return `${Number((value / scale).toPrecision(3))}${prefix}`
 }
 
+function formatMonteCarlo(mc: MonteCarlo): string[] {
+  const spread = Object.entries(mc.tolerances).map(([ref, pct]) => `${ref} ±${pct}%`).join(', ')
+  const lines = [`Monte Carlo: ${mc.passed ? 'PASSED' : 'FAILED'} — ${mc.runs} runs (seed ${mc.seed}, ${mc.distribution}; varied ${spread}); an assertion must hold in ${Math.round(mc.min_pass_rate * 100)}% of the runs.`]
+  for (const a of mc.assertions) {
+    const bounds = [a.min_required !== null ? `≥ ${eng(a.min_required)}${a.unit}` : '', a.max_required !== null ? `≤ ${eng(a.max_required)}${a.unit}` : ''].filter(Boolean).join(' and ')
+    lines.push(`${a.passed ? '✓' : '✗'} ${a.name}: holds in ${a.passes}/${a.runs} runs; ${eng(a.min)}${a.unit} … ${eng(a.mean)}${a.unit} (mean) … ${eng(a.max)}${a.unit} (required ${bounds})`)
+    if (a.first_failure) {
+      const f = a.first_failure
+      lines.push(`    first failure: run ${f.run}, ${eng(f.value)}${a.unit} with ${Object.entries(f.varied).map(([k, x]) => `${k} = ${eng(x)}`).join(', ')}`)
+    }
+  }
+  return lines
+}
+
+/** The models of a model file or folder, with the pins the binding must map. */
+export function formatSimModel(v: SimModelValue): string {
+  if (v.files.length === 0) return `No .subckt or .model found in ${v.path}.`
+  const lines = [`${v.models} model(s) in ${v.files.length} file(s) under ${v.path}${v.truncated ? ' (list truncated)' : ''}:`]
+  for (const f of v.files) {
+    lines.push(f.file)
+    for (const m of f.models) {
+      lines.push(m.kind === 'subckt'
+        ? `  .subckt ${m.name} ${(m.pins ?? []).join(' ')}${m.comment ? `   — ${m.comment}` : ''}`
+        : `  .model ${m.name} ${m.type}`)
+    }
+  }
+  lines.push('Bind one with kicad_edit_schematic set_sim_model {reference, library, name, pins?}.')
+  return lines.join('\n')
+}
+
 /** The simulation as the model reads it: the tool's verdict per assertion, then the operating point and signal ranges. */
 export function formatSimulate(v: SimulateValue): string {
   const held = v.assertions.filter(a => a.passed).length
@@ -245,6 +312,7 @@ export function formatSimulate(v: SimulateValue): string {
     }
   }
   if (v.ignored.length) lines.push(`Not simulated (no SPICE model, left out of the circuit): ${v.ignored.join(', ')}.`)
+  if (v.monte_carlo) lines.push(...formatMonteCarlo(v.monte_carlo))
   lines.push(...v.notes, ...(v.warnings ?? []).map(w => `ngspice: ${w}`))
   lines.push(`Netlist and log: ${v.netlist}`)
   return lines.join('\n')

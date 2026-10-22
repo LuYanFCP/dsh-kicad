@@ -21,7 +21,7 @@ from .placement import OPERATIONS as PLACE_OPERATIONS, apply as apply_placement,
 from .board3d import QUALITIES, SIDES, export_glb, render_args, render_name
 from .autoroute import DEFAULT_TIMEOUT, MAX_TIMEOUT, autoroute
 from .freerouting import Cancelled, locate as locate_freerouting
-from . import spice
+from . import simmodels, spice
 from .footprints import FootprintLibraries, default_footprint_dirs
 from . import geometry
 from .symbols import LibraryError, SymbolLibraries, default_symbol_dirs
@@ -65,7 +65,9 @@ OPERATION_SCHEMA: dict[str, Any] = {
     "description": (
         "One edit. 'op' selects it; coordinates are schematic millimetres (Y grows downward) and snap to the 1.27 mm grid. "
         "add_symbol{lib_id,x,y,reference?,value?,rotation?,mirror?,unit?,footprint?,properties?,dnp?} · "
-        "set_property{reference,name,value,hide?} · set_value{reference,value} · set_footprint{reference,footprint} · "
+        "set_property{reference,name,value,hide?} · "
+        "set_sim_model{reference,library?,name?,pins?,device?,params?} (SPICE: library+name binds a .subckt/.model from a model file, pins matched by name or {symbolPin: modelPin}; device alone e.g. D with params sets a built-in model; inspect files with kicad_sim_model) · "
+        "set_value{reference,value} · set_footprint{reference,footprint} · "
         "remove_symbol{reference} · move_symbol{reference,x,y,rotation?} · add_wire{points:[[x,y],...]} · "
         "add_label{text,x,y,kind?:label|global_label|hierarchical_label,rotation?,shape?} · add_junction{x,y} · "
         "add_no_connect{x,y} · no_connect_pin{pin:'REF:PIN'} · "
@@ -194,8 +196,18 @@ TOOL_SPECS: list[ToolSpec] = [
                        "(ref = reference probe, e.g. V(IN), for a gain relative to the input). analysis is optional when only one ran."),
                        "items": {"type": "object"}},
                    "probes": {"type": "array", "items": {"type": "string"}, "description": "Extra currents to record, e.g. I(R1); node voltages are always recorded."},
+                   "monte_carlo": {"type": "object", "description": (
+                       "Tolerance analysis: repeat the run with R, C, L values (and V/I DC levels) drawn within their tolerances and report how often each "
+                       "assertion holds (needs assertions). {runs?: 2-500 (default 50), seed? (default 1: repeatable), tolerances?: {R: 5, C: 10, L: 10, R1: '1%', V1: 2} "
+                       "(percent; keys are a part letter or a reference; defaults R 5, C 10, L 10), distribution?: uniform (default, ±tolerance) | gaussian "
+                       "(3σ = tolerance), min_pass_rate?: 0-1 (default 1: every run must pass)}.")},
                    "timeout": {"type": "number", "default": spice.DEFAULT_TIMEOUT, "maximum": spice.MAX_TIMEOUT, "description": "Seconds for ngspice."},
                    "output_dir": {"type": "string", "description": "Defaults to <project>/.dsh-kicad/sim/<name>/."}}, ["path"]), writes=True),
+    ToolSpec("sim_model", "Find SPICE models for kicad_edit_schematic set_sim_model: lists the .subckt (with their pin names and the comment above them) "
+             "and .model (with their device type) definitions in one model file, or in every model file (.lib .mod .sub .cir .sp .spi .ckt .cmp .mdl .inc) "
+             "below a folder, optionally filtered by a part of the model name. Read-only.",
+             _obj({"path": {"type": "string", "description": "A model file, or a folder to search (e.g. the project folder)."},
+                   "name": {"type": "string", "description": "Only models whose name contains this text (case-insensitive)."}}, ["path"])),
     ToolSpec("export_netlist", "Write a netlist file with kicad-cli.",
              _obj({"path": SCH, "output": {"type": "string"},
                    "format": {"type": "string", "enum": ["kicadsexpr", "kicadxml", "cadstar", "orcadpcb2", "spice", "spicemodel", "pads", "allegro"], "default": "kicadsexpr"}},
@@ -552,8 +564,16 @@ class Toolbox:
             os.path.join(os.path.dirname(path), ".dsh-kicad", "sim", stem)
         try:
             return spice.simulate(self.cli, path, out_dir, args.get("analyses"), args.get("assertions"), executable,
-                                  timeout=float(args.get("timeout", spice.DEFAULT_TIMEOUT)), probes=args.get("probes"))
+                                  timeout=float(args.get("timeout", spice.DEFAULT_TIMEOUT)), probes=args.get("probes"),
+                                  monte_carlo=args.get("monte_carlo"))
         except spice.SimulationError as exc:
+            raise ToolError(str(exc)) from exc
+
+    def tool_sim_model(self, args):
+        path = self.resolve(args["path"])
+        try:
+            return simmodels.scan(path, args.get("name"))
+        except simmodels.ModelError as exc:
             raise ToolError(str(exc)) from exc
 
     def tool_export_netlist(self, args):

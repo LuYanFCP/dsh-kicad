@@ -312,5 +312,106 @@ def test_simulate_refuses_a_diode_without_sim_device(tmp_path):
         {"op": "connect_pins", "a": "R1:2", "b": "D1:2"},
         {"op": "connect_pin_to_net", "pin": "D1:1", "net": "GND", "kind": "power"},
     ])
-    with pytest.raises(ToolError, match="D1 has no SPICE model.*Sim.Device"):
+    with pytest.raises(ToolError, match="D1 has no SPICE model.*set_sim_model"):
         tb.call("simulate", {"path": path})
+
+
+# ---- vendor models and Monte Carlo -----------------------------------------------------------
+LDO_LIB = """* behavioural 3.3 V LDO
+.subckt LDO33 IN GND OUT
+B1 n1 GND V=min(V(IN,GND)-0.3,3.3)
+Rs n1 OUT 0.1
+.ends LDO33
+"""
+
+
+def ldo_circuit(tmp_path, name="LDO33"):
+    (tmp_path / "ldo.lib").write_text(LDO_LIB)
+    tb, path = build(tmp_path, [
+        {"op": "add_symbol", "lib_id": "Simulation_SPICE:VDC", "x": 50.8, "y": 50.8, "reference": "V1", "value": "5", "properties": {"Sim.Params": "dc=5"}},
+        {"op": "add_symbol", "lib_id": "Regulator_Linear:AMS1117-3.3", "x": 101.6, "y": 38.1, "reference": "U1", "value": "AMS1117-3.3"},
+        {"op": "add_symbol", "lib_id": "Device:R", "x": 127, "y": 63.5, "reference": "R1", "value": "330"},
+        {"op": "set_sim_model", "reference": "U1", "library": "ldo.lib", "name": name, "pins": {"1": "GND", "2": "OUT", "3": "IN"}},
+    ], [
+        {"op": "connect_pin_to_net", "pin": "V1:1", "net": "VIN", "kind": "label"},
+        {"op": "connect_pin_to_net", "pin": "V1:2", "net": "GND", "kind": "power"},
+        {"op": "connect_pin_to_net", "pin": "U1:3", "net": "VIN", "kind": "label"},
+        {"op": "connect_pin_to_net", "pin": "U1:1", "net": "GND", "kind": "power"},
+        {"op": "connect_pin_to_net", "pin": "U1:2", "net": "V3V3", "kind": "label"},
+        {"op": "connect_pin_to_net", "pin": "R1:1", "net": "V3V3", "kind": "label"},
+        {"op": "connect_pin_to_net", "pin": "R1:2", "net": "GND", "kind": "power"},
+    ])
+    return tb, path
+
+
+@needs_kicad_cli
+@needs_symbols
+@needs_ngspice
+def test_simulate_a_vendor_subcircuit_bound_with_set_sim_model(tmp_path):
+    tb, path = ldo_circuit(tmp_path)
+    result = tb.call("simulate", {"path": path, "assertions": [{"probe": "V(V3V3)", "min": 3.2, "max": 3.4}, {"probe": "I(R1)", "equals": "10m", "tol_pct": 5}]})
+    assert result["passed"], result["assertions"]
+    assert all("." not in key for key in result["analyses"][0]["values"])  # the subcircuit's inner nodes stay out of the summary
+    # Dropout: the model follows its input below 3.6 V.
+    low = tb.call("simulate", {"path": path, "assertions": [{"probe": "V(V3V3)", "min": 3.2}]})
+    assert low["passed"]
+
+
+@needs_kicad_cli
+@needs_symbols
+@needs_ngspice
+def test_simulate_reports_a_model_kicad_cannot_load(tmp_path):
+    tb, path = ldo_circuit(tmp_path)
+    text = open(path, encoding="utf-8").read().replace('"Sim.Name" "LDO33"', '"Sim.Name" "NOPE"')
+    open(path, "w", encoding="utf-8").write(text)
+    with pytest.raises(ToolError, match=r"(?s)KiCad could not build the SPICE netlist.*NOPE.*kicad_sim_model"):
+        tb.call("simulate", {"path": path})
+
+
+def test_varying_elements_and_tolerances():
+    lines = [".title t", "R1 a b 10k", "C1 a 0 100n", "L1 a b 4.7u", "V1 a 0 DC 5 ", "V2 c 0 SIN(0 1 1k)", "XU1 a b c LDO33", "R2 a b {rval}", "D1 a b DMOD"]
+    found = spice.varying_elements(lines)
+    assert set(found) == {"R1", "C1", "L1", "V1"} and found["R1"][2] == 10000 and found["V1"][2] == 5
+    assert spice._percent("5%", "t") == 5 and spice._percent(2, "t") == 2
+    with pytest.raises(SimulationError):
+        spice._percent("150%", "t")
+
+
+@needs_kicad_cli
+@needs_symbols
+@needs_ngspice
+def test_monte_carlo_counts_how_often_each_assertion_holds(tmp_path):
+    tb, path = divider(tmp_path)
+    loose = {"probe": "V(MID)", "equals": 2.5, "tol_pct": 6, "name": "mid within 6 %"}
+    tight = {"probe": "V(MID)", "equals": 2.5, "tol_pct": 0.5, "name": "mid within 0.5 %"}
+    result = tb.call("simulate", {"path": path, "assertions": [loose, tight], "monte_carlo": {"runs": 40, "seed": 7}})
+    mc = result["monte_carlo"]
+    held, broke = mc["assertions"]
+    assert (held["passes"], held["runs"], held["passed"]) == (40, 40, True)
+    assert 0 < broke["passes"] < 40 and broke["passed"] is False and broke["first_failure"]["varied"].keys() == {"R1", "R2"}
+    assert held["min"] < 2.5 < held["max"] and held["min"] > 2.5 * 0.94
+    assert mc["tolerances"] == {"R1": 5.0, "R2": 5.0} and mc["varied"] == ["R1", "R2"]
+    assert result["passed"] is False  # the nominal run holds, the Monte Carlo does not
+    again = tb.call("simulate", {"path": path, "assertions": [loose, tight], "monte_carlo": {"runs": 40, "seed": 7}})
+    assert again["monte_carlo"]["assertions"][1]["passes"] == broke["passes"]  # seeded: repeatable
+    # a pass rate below 100 % can be acceptable
+    relaxed = tb.call("simulate", {"path": path, "assertions": [tight], "monte_carlo": {"runs": 40, "seed": 7, "min_pass_rate": 0.1}})
+    assert relaxed["monte_carlo"]["passed"] is True
+
+
+@needs_kicad_cli
+@needs_symbols
+@needs_ngspice
+def test_monte_carlo_tolerances_and_errors(tmp_path):
+    tb, path = divider(tmp_path)
+    ok = {"probe": "V(MID)", "min": 2, "max": 3}
+    one = tb.call("simulate", {"path": path, "assertions": [ok], "monte_carlo": {"runs": 5, "tolerances": {"R": 0, "R1": "10%", "V1": 2}}})
+    assert one["monte_carlo"]["tolerances"] == {"R1": 10.0, "V1": 2.0}
+    gauss = tb.call("simulate", {"path": path, "assertions": [ok], "monte_carlo": {"runs": 5, "distribution": "gaussian"}})
+    assert gauss["monte_carlo"]["distribution"] == "gaussian"
+    for mc, message in (({"runs": 1}, "between 2 and"), ({"tolerances": {"R9": 5}}, "no such element"), ({"tolerances": {"R": 0, "C": 0, "L": 0}}, "nothing to vary"),
+                        ({"distribution": "cauchy"}, "distribution"), ({"min_pass_rate": 0}, "min_pass_rate")):
+        with pytest.raises(ToolError, match=message):
+            tb.call("simulate", {"path": path, "assertions": [ok], "monte_carlo": mc})
+    with pytest.raises(ToolError, match="give assertions"):
+        tb.call("simulate", {"path": path, "monte_carlo": {}})

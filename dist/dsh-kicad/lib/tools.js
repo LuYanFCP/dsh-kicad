@@ -91,6 +91,31 @@ function eng(value) {
   const [scale, prefix] = PREFIXES.find(([s]) => abs >= s * 0.9995) ?? PREFIXES[PREFIXES.length - 1];
   return `${Number((value / scale).toPrecision(3))}${prefix}`;
 }
+function formatMonteCarlo(mc) {
+  const spread = Object.entries(mc.tolerances).map(([ref, pct]) => `${ref} \xB1${pct}%`).join(", ");
+  const lines = [`Monte Carlo: ${mc.passed ? "PASSED" : "FAILED"} \u2014 ${mc.runs} runs (seed ${mc.seed}, ${mc.distribution}; varied ${spread}); an assertion must hold in ${Math.round(mc.min_pass_rate * 100)}% of the runs.`];
+  for (const a of mc.assertions) {
+    const bounds = [a.min_required !== null ? `\u2265 ${eng(a.min_required)}${a.unit}` : "", a.max_required !== null ? `\u2264 ${eng(a.max_required)}${a.unit}` : ""].filter(Boolean).join(" and ");
+    lines.push(`${a.passed ? "\u2713" : "\u2717"} ${a.name}: holds in ${a.passes}/${a.runs} runs; ${eng(a.min)}${a.unit} \u2026 ${eng(a.mean)}${a.unit} (mean) \u2026 ${eng(a.max)}${a.unit} (required ${bounds})`);
+    if (a.first_failure) {
+      const f = a.first_failure;
+      lines.push(`    first failure: run ${f.run}, ${eng(f.value)}${a.unit} with ${Object.entries(f.varied).map(([k, x]) => `${k} = ${eng(x)}`).join(", ")}`);
+    }
+  }
+  return lines;
+}
+function formatSimModel(v) {
+  if (v.files.length === 0) return `No .subckt or .model found in ${v.path}.`;
+  const lines = [`${v.models} model(s) in ${v.files.length} file(s) under ${v.path}${v.truncated ? " (list truncated)" : ""}:`];
+  for (const f of v.files) {
+    lines.push(f.file);
+    for (const m of f.models) {
+      lines.push(m.kind === "subckt" ? `  .subckt ${m.name} ${(m.pins ?? []).join(" ")}${m.comment ? `   \u2014 ${m.comment}` : ""}` : `  .model ${m.name} ${m.type}`);
+    }
+  }
+  lines.push("Bind one with kicad_edit_schematic set_sim_model {reference, library, name, pins?}.");
+  return lines.join("\n");
+}
 function formatSimulate(v) {
   const held = v.assertions.filter((a) => a.passed).length;
   const head = v.passed === null ? `SPICE by ngspice ${v.ngspice ?? ""} on ${v.path}: no assertions given, results only.`.replace("  ", " ") : `SPICE by ngspice ${v.ngspice ?? ""} on ${v.path}: ${v.passed ? "PASSED" : "FAILED"} \u2014 ${held}/${v.assertions.length} assertion(s) hold.`.replace("  ", " ");
@@ -110,6 +135,7 @@ function formatSimulate(v) {
     }
   }
   if (v.ignored.length) lines.push(`Not simulated (no SPICE model, left out of the circuit): ${v.ignored.join(", ")}.`);
+  if (v.monte_carlo) lines.push(...formatMonteCarlo(v.monte_carlo));
   lines.push(...v.notes, ...(v.warnings ?? []).map((w) => `ngspice: ${w}`));
   lines.push(`Netlist and log: ${v.netlist}`);
   return lines.join("\n");
@@ -255,6 +281,7 @@ var TOOL_ACCESS = {
   kicad_drc: "read",
   kicad_render: "read",
   kicad_simulate: "read",
+  kicad_sim_model: "read",
   kicad_export: "write",
   kicad_export_fab: "write",
   kicad_fab_preset: "write",
@@ -279,6 +306,7 @@ var PATH_ARGUMENTS = {
   kicad_drc: ["path"],
   kicad_render: ["path"],
   kicad_simulate: ["path", "output_dir"],
+  kicad_sim_model: ["path"],
   kicad_export: ["path", "output"],
   kicad_export_fab: ["pcb", "output_dir"],
   kicad_fab_preset: ["path"],
@@ -490,7 +518,8 @@ function apply(ctx, config = {}) {
         "Analyses: op (DC operating point, the default), tran {stop, step?} (transient), ac {start, stop, points?} (frequency sweep; needs a source with an ac magnitude). Probes: V(net), V(netA,netB), I(R1|C1|L1|D1|V1); ngspice sign: a source that supplies current reads negative, so use abs: true.",
         "assertions: [{probe, min?, max?, equals? with tol or tol_pct, name?, analysis?, measure?, at?, from?, to?, ref?, abs?}]. Numbers take SPICE suffixes (10k, 100n, 3.3, 20m). Measures: op value; tran final|initial|max|min|mean|rms|pp|at (at = time, from/to a window); ac gain_db|phase_deg (at = frequency)|peak_gain_db|lowpass_cutoff_hz|highpass_cutoff_hz (ref: e.g. V(IN) for gain relative to the input).",
         `Turn each requirement into an assertion (e.g. 3V3 rail: {probe: "V(3V3)", min: 3.2, max: 3.4}; LED current: {probe: "I(D1)", min: "5m", max: "15m", abs: true}); on a failure change the circuit and run again. Report the tool's verdict, not your own.`,
-        'Every simulated part needs a SPICE model: R, C, L work from the value; a diode or LED needs the hidden property Sim.Device = D (LED: also Sim.Params "is=1e-18 n=2 rs=3"), otherwise the tool refuses; ICs without a model are left out and listed (use Sim.Library/Sim.Name for a vendor model). The circuit needs a ground net (a power:GND symbol) and, for tran/ac, a source.',
+        "Tolerance: add monte_carlo to learn whether the requirements still hold when parts vary (e.g. 5% resistors); it reports pass counts and the spread per assertion, with the first failing draw.",
+        'Every simulated part needs a SPICE model: R, C, L work from the value; a diode or LED needs set_sim_model {reference, device: "D", params: "is=1e-18 n=2 rs=3" for an LED}, otherwise the tool refuses; ICs, regulators and transistors need a vendor model: find it with kicad_sim_model and bind it with kicad_edit_schematic set_sim_model (it maps the pins and checks them); parts without a model are left out and listed. The circuit needs a ground net (a power:GND symbol) and, for tran/ac, a source.',
         "Needs ngspice: when it is missing the error says how to install it; tell the user (kicad_doctor lists the commands), never install anything yourself."
       ].join(" "),
       parameters: {
@@ -502,6 +531,11 @@ function apply(ctx, config = {}) {
         },
         assertions: { type: "array", items: { type: "object", additionalProperties: true, properties: { probe: { type: "string", required: true } } }, description: "The requirements to verify, as described above." },
         probes: { type: "array", items: { type: "string" }, description: "Extra currents to record, e.g. I(R1); node voltages are always recorded." },
+        monte_carlo: {
+          type: "object",
+          additionalProperties: true,
+          description: 'Tolerance analysis (needs assertions): {runs? 2-500 (default 50), seed? (default 1, repeatable), tolerances? {R: 5, C: 10, L: 10, R1: "1%", V1: 2} in percent (a part letter or a reference; defaults R 5, C 10, L 10), distribution? uniform | gaussian (3\u03C3 = tolerance), min_pass_rate? 0-1 (default 1: every run must pass)}. Repeats the run with those values drawn at random and reports how often each assertion holds.'
+        },
         timeout: { type: "number", description: "Seconds ngspice may run (default 60, at most 600)." }
       },
       output: {
@@ -512,6 +546,22 @@ function apply(ctx, config = {}) {
       async execute(args, exec) {
         const seconds = Math.min(Math.max(Number(args.timeout ?? 60), 1), 600);
         return await ctx.kicad.run("simulate", { ...args, path: at(exec, args.path) }, exec.signal, { timeoutMs: seconds * 1e3 + 6e4 });
+      }
+    }),
+    defineTool({
+      name: "kicad_sim_model",
+      description: "List the SPICE models in a model file (.lib .mod .sub .cir .sp .spi .ckt .cmp .mdl .inc) or in every model file below a folder, optionally filtered by part of the model name: each .subckt with its pin names and the comment above it, each .model with its device type. Use it to find the model for a part and to see its pins before binding it with kicad_edit_schematic set_sim_model {reference, library, name, pins?}. Models come from files the user has (vendor downloads); do not invent them.",
+      parameters: {
+        path: { type: "string", required: true, description: "A model file, or a folder to search (e.g. the project folder)." },
+        name: { type: "string", description: "Only models whose name contains this text (case-insensitive)." }
+      },
+      output: {
+        schema: { type: "json" },
+        render: (_args, value) => [{ type: "text", text: formatSimModel(value) }]
+      },
+      isConcurrencySafe: () => true,
+      async execute(args, exec) {
+        return await ctx.kicad.run("sim_model", { ...args, path: at(exec, args.path) }, exec.signal);
       }
     }),
     defineTool({
@@ -612,6 +662,7 @@ function apply(ctx, config = {}) {
         "Layout by function: set_page{paper?,title?,date?,rev?,company?,comments?}; add_block{title, references:[...] (frame encloses those parts with their wiring) | x,y,width,height} draws a dashed frame with a bold title;",
         "move_block{title, dx,dy | x,y} moves the frame with the parts inside and their wiring; move_symbols{references,dx,dy} moves parts with their wires, labels and power symbols (refuses if that would tear a wire to a part left behind);",
         "add_text{text,x,y,size?,bold?}; add_rectangle{x,y,width,height,style?}.",
+        'SPICE models for kicad_simulate: set_sim_model{reference, library, name, pins?} binds a .subckt or .model from a model file (library relative to the project; find them with kicad_sim_model), matching symbol pins to model pins by name and refusing when it cannot, so give pins {"1":"GND","2":"OUT"} (symbol pin \u2192 model pin) when the names differ; set_sim_model{reference, device:"D", params:"is=1e-18 n=2 rs=3"} sets a built-in device (diode, LED) without a file.',
         "Rotation is counter-clockwise: Device:R/C/L at 0\xB0 are vertical with pin 1 on top; at 90\xB0 horizontal with pin 1 on the left; add_symbol results list the placed pin positions.",
         "Wire parts that work together with connect_pins (chain a net with several pins: A-B, then B-C); use power symbols for rails and labels between blocks or across the page. A connect_pins result with a note took a detour: move, rotate or mirror a part so the pins face each other, or use labels. Keep one call to at most ~20 operations; split bigger changes. Never rewrite or recreate a .kicad_sch to fix layout \u2014 remove and re-add the affected items.",
         "ERC runs automatically afterwards when the KiCad policy is enabled."
@@ -835,6 +886,7 @@ export {
   formatFabGate,
   formatJson,
   formatPreset,
+  formatSimModel,
   formatSimulate,
   formatSync,
   inject,
