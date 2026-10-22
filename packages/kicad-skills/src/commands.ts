@@ -73,7 +73,7 @@ export function createCommands(ctx: Context): CommandDefinition[] {
     },
     {
       name: 'simulate',
-      description: 'Simulate the project schematic with ngspice (DC operating point) and show every net voltage; the agent adds assertions for requirements',
+      description: 'Verify the project schematic with ngspice: the requirements saved in <name>.sim.json, or a DC operating point showing every net voltage when there are none',
       input: { hint: '[path/to/file.kicad_sch]' },
       handler: wrap(async (inv, cwd) => {
         const result = await ctx.kicad.run<SimulateValue>('simulate', { path: targetFile(cwd, inv.rawInput, '.kicad_sch') }, inv.signal, { timeoutMs: 120_000 })

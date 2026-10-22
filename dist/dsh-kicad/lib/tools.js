@@ -120,6 +120,8 @@ function formatSimulate(v) {
   const held = v.assertions.filter((a) => a.passed).length;
   const head = v.passed === null ? `SPICE by ngspice ${v.ngspice ?? ""} on ${v.path}: no assertions given, results only.`.replace("  ", " ") : `SPICE by ngspice ${v.ngspice ?? ""} on ${v.path}: ${v.passed ? "PASSED" : "FAILED"} \u2014 ${held}/${v.assertions.length} assertion(s) hold.`.replace("  ", " ");
   const lines = [head];
+  if (v.spec?.loaded.length) lines.push(`Requirements from ${v.spec.path} (${v.spec.loaded.join(", ")}).`);
+  if (v.spec?.saved) lines.push(`Requirements saved to ${v.spec.path}.`);
   for (const a of v.assertions) {
     const bounds = [a.min !== null ? `\u2265 ${eng(a.min)}${a.unit}` : "", a.max !== null ? `\u2264 ${eng(a.max)}${a.unit}` : ""].filter(Boolean).join(" and ");
     lines.push(`${a.passed ? "\u2713" : "\u2717"} ${a.name}: ${eng(a.value)}${a.unit} (required ${bounds})`);
@@ -305,7 +307,7 @@ var PATH_ARGUMENTS = {
   kicad_erc: ["path"],
   kicad_drc: ["path"],
   kicad_render: ["path"],
-  kicad_simulate: ["path", "output_dir"],
+  kicad_simulate: ["path", "output_dir", "spec"],
   kicad_sim_model: ["path"],
   kicad_export: ["path", "output"],
   kicad_export_fab: ["pcb", "output_dir"],
@@ -518,6 +520,7 @@ function apply(ctx, config = {}) {
         "Analyses: op (DC operating point, the default), tran {stop, step?} (transient), ac {start, stop, points?} (frequency sweep; needs a source with an ac magnitude). Probes: V(net), V(netA,netB), I(R1|C1|L1|D1|V1); ngspice sign: a source that supplies current reads negative, so use abs: true.",
         "assertions: [{probe, min?, max?, equals? with tol or tol_pct, name?, analysis?, measure?, at?, from?, to?, ref?, abs?}]. Numbers take SPICE suffixes (10k, 100n, 3.3, 20m). Measures: op value; tran final|initial|max|min|mean|rms|pp|at (at = time, from/to a window); ac gain_db|phase_deg (at = frequency)|peak_gain_db|lowpass_cutoff_hz|highpass_cutoff_hz (ref: e.g. V(IN) for gain relative to the input).",
         `Turn each requirement into an assertion (e.g. 3V3 rail: {probe: "V(3V3)", min: 3.2, max: 3.4}; LED current: {probe: "I(D1)", min: "5m", max: "15m", abs: true}); on a failure change the circuit and run again. Report the tool's verdict, not your own.`,
+        "Keep the requirements with the project: save_spec: true writes this call's analyses, assertions and monte_carlo to <schematic name>.sim.json; later calls (and the /simulate command) use that file when it exists, so a change can be re-verified against every requirement without retyping them. Arguments you pass replace the same key of the file.",
         "Tolerance: add monte_carlo to learn whether the requirements still hold when parts vary (e.g. 5% resistors); it reports pass counts and the spread per assertion, with the first failing draw.",
         'Every simulated part needs a SPICE model: R, C, L work from the value; a diode or LED needs set_sim_model {reference, device: "D", params: "is=1e-18 n=2 rs=3" for an LED}, otherwise the tool refuses; ICs, regulators and transistors need a vendor model: find it with kicad_sim_model and bind it with kicad_edit_schematic set_sim_model (it maps the pins and checks them); parts without a model are left out and listed. The circuit needs a ground net (a power:GND symbol) and, for tran/ac, a source.',
         "Needs ngspice: when it is missing the error says how to install it; tell the user (kicad_doctor lists the commands), never install anything yourself."
@@ -536,7 +539,9 @@ function apply(ctx, config = {}) {
           additionalProperties: true,
           description: 'Tolerance analysis (needs assertions): {runs? 2-500 (default 50), seed? (default 1, repeatable), tolerances? {R: 5, C: 10, L: 10, R1: "1%", V1: 2} in percent (a part letter or a reference; defaults R 5, C 10, L 10), distribution? uniform | gaussian (3\u03C3 = tolerance), min_pass_rate? 0-1 (default 1: every run must pass)}. Repeats the run with those values drawn at random and reports how often each assertion holds.'
         },
-        timeout: { type: "number", description: "Seconds ngspice may run (default 60, at most 600)." }
+        timeout: { type: "number", description: "Seconds ngspice may run (default 60, at most 600)." },
+        spec: { type: "string", description: "Requirements file (JSON: analyses, assertions, probes, monte_carlo, timeout). Default: <schematic name>.sim.json next to the schematic, used when it exists; what this call names replaces the same key of the file." },
+        save_spec: { type: "boolean", description: "Write the analyses, assertions and monte_carlo this call used to the spec file: the requirements then stay with the project and /simulate checks them again." }
       },
       output: {
         schema: { type: "json" },
@@ -545,7 +550,7 @@ function apply(ctx, config = {}) {
       isConcurrencySafe: () => true,
       async execute(args, exec) {
         const seconds = Math.min(Math.max(Number(args.timeout ?? 60), 1), 600);
-        return await ctx.kicad.run("simulate", { ...args, path: at(exec, args.path) }, exec.signal, { timeoutMs: seconds * 1e3 + 6e4 });
+        return await ctx.kicad.run("simulate", { ...args, path: at(exec, args.path), ...args.spec ? { spec: at(exec, args.spec) } : {} }, exec.signal, { timeoutMs: seconds * 1e3 + 6e4 });
       }
     }),
     defineTool({

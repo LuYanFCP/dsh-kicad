@@ -67,7 +67,7 @@ var PATH_ARGUMENTS = {
   kicad_erc: ["path"],
   kicad_drc: ["path"],
   kicad_render: ["path"],
-  kicad_simulate: ["path", "output_dir"],
+  kicad_simulate: ["path", "output_dir", "spec"],
   kicad_sim_model: ["path"],
   kicad_export: ["path", "output"],
   kicad_export_fab: ["pcb", "output_dir"],

@@ -12,6 +12,8 @@ export interface LaunchOptions {
   /** Java and Freerouting for the autorouter (empty: the sidecar searches). */
   java?: string
   freerouting?: string
+  /** ngspice for kicad_simulate (empty: the sidecar searches $NGSPICE, then PATH). */
+  ngspice?: string
   /** Optional extras installed by uv (`png`, `ipc`). */
   extras?: readonly string[]
   platform?: NodeJS.Platform
@@ -32,6 +34,7 @@ export function launchSpec(options: LaunchOptions): LaunchSpec {
     ...(options.kicadCli ? ['--kicad-cli', options.kicadCli] : []),
     ...(options.java ? ['--java', options.java] : []),
     ...(options.freerouting ? ['--freerouting', options.freerouting] : []),
+    ...(options.ngspice ? ['--ngspice', options.ngspice] : []),
   ]
   const env: Record<string, string> = { PYTHONUTF8: '1', PYTHONUNBUFFERED: '1', PYTHONDONTWRITEBYTECODE: '1' }
   if (options.launcher === 'uv') {

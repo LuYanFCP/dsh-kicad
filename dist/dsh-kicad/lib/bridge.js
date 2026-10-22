@@ -162,7 +162,8 @@ function launchSpec(options) {
     "dsh_kicad_sidecar",
     ...options.kicadCli ? ["--kicad-cli", options.kicadCli] : [],
     ...options.java ? ["--java", options.java] : [],
-    ...options.freerouting ? ["--freerouting", options.freerouting] : []
+    ...options.freerouting ? ["--freerouting", options.freerouting] : [],
+    ...options.ngspice ? ["--ngspice", options.ngspice] : []
   ];
   const env = { PYTHONUTF8: "1", PYTHONUNBUFFERED: "1", PYTHONDONTWRITEBYTECODE: "1" };
   if (options.launcher === "uv") {
@@ -309,6 +310,7 @@ var Config = default2.object({
   kicadCli: default2.string().volatile().description("kicad-cli path; empty searches $KICAD_CLI, PATH and standard locations."),
   java: default2.string().volatile().description("Java for the Freerouting autorouter; empty searches $JAVA_HOME and PATH."),
   freerouting: default2.string().volatile().description("freerouting.jar for the autorouter; empty uses $FREEROUTING_JAR or the jar /kicad-install freerouting downloaded."),
+  ngspice: default2.string().volatile().description("ngspice executable for kicad_simulate; empty uses $NGSPICE, then PATH."),
   requestTimeoutMs: default2.natural().default(3e5).description("Timeout for one sidecar request, in milliseconds."),
   sidecarDir: default2.string().description("Sidecar directory override (development only).")
 });
@@ -413,7 +415,7 @@ var KiCadBridge = class extends Service {
     }
   }
   launchKey() {
-    return JSON.stringify([this.config.launcher, this.config.python.get(), this.config.kicadCli.get(), this.config.java.get(), this.config.freerouting.get()]);
+    return JSON.stringify([this.config.launcher, this.config.python.get(), this.config.kicadCli.get(), this.config.java.get(), this.config.freerouting.get(), this.config.ngspice.get()]);
   }
   async ensure(signal) {
     if (this.running) {
@@ -443,6 +445,7 @@ var KiCadBridge = class extends Service {
       kicadCli: this.config.kicadCli.get() || void 0,
       java: this.config.java.get() || void 0,
       freerouting: this.config.freerouting.get() || void 0,
+      ngspice: this.config.ngspice.get() || void 0,
       extras: this.config.uvExtras
     });
     const handle = subprocess.spawn({

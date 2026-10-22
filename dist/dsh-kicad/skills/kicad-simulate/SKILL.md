@@ -44,6 +44,10 @@ ERC says the schematic is wired correctly; `kicad_simulate` says whether it **be
 
 Net names are the names on the schematic (`V(3V3)`, not `/3V3`); `V(a,b)` is the difference; `I()` works for R, C, L, D and V parts. Run `tran` and `ac` together by listing both in `analyses`; then name the `analysis` in each assertion.
 
+## Keep the requirements with the project
+
+Once the assertions are right, run `kicad_simulate` once more with `save_spec: true`: it writes the analyses, assertions and `monte_carlo` to `<schematic name>.sim.json` next to the schematic. From then on `kicad_simulate {path}` (and the user's `/simulate`) checks all of them without retyping, so after any later edit rerun it and report which requirement broke. Arguments you pass replace the same key of the file; edit the file only through `save_spec`.
+
 ## Tolerances (Monte Carlo)
 
 A requirement that holds only for nominal parts is not met. Add `monte_carlo: {runs: 50}` (needs assertions): it repeats the run with R, C, L (defaults ±5 %, ±10 %, ±10 %) and, if you name them, supply levels drawn at random, then reports per assertion how many runs held, the min/mean/max and the first failing draw. `tolerances: {R: 1, "C1": "20%", V1: 2}` (percent; a part letter or a reference) sets the spread, `min_pass_rate` (default 1: every run) accepts a share below 100 %, `seed` makes it repeatable. On a failure, tighten the parts that drive the result (the first failing draw shows them), widen the design margin, or ask whether the requirement is meant to cover tolerance. Op-amp, LDO and transistor parameters are not varied, only the values listed.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextvars
+import json
 import os
 import re
 import shutil
@@ -202,6 +203,8 @@ TOOL_SPECS: list[ToolSpec] = [
                        "(percent; keys are a part letter or a reference; defaults R 5, C 10, L 10), distribution?: uniform (default, ±tolerance) | gaussian "
                        "(3σ = tolerance), min_pass_rate?: 0-1 (default 1: every run must pass)}.")},
                    "timeout": {"type": "number", "default": spice.DEFAULT_TIMEOUT, "maximum": spice.MAX_TIMEOUT, "description": "Seconds for ngspice."},
+                   "spec": {"type": "string", "description": "Requirements file (JSON with analyses, assertions, probes, monte_carlo, timeout). Default: <schematic name>.sim.json next to the schematic, used when it exists; what the call names replaces the same key of the file."},
+                   "save_spec": {"type": "boolean", "default": False, "description": "Write the analyses, assertions and monte_carlo this call used to the spec file, so the requirements stay with the project (and /simulate checks them)."},
                    "output_dir": {"type": "string", "description": "Defaults to <project>/.dsh-kicad/sim/<name>/."}}, ["path"]), writes=True),
     ToolSpec("sim_model", "Find SPICE models for kicad_edit_schematic set_sim_model: lists the .subckt (with their pin names and the comment above them) "
              "and .model (with their device type) definitions in one model file, or in every model file (.lib .mod .sub .cir .sp .spi .ckt .cmp .mdl .inc) "
@@ -553,21 +556,58 @@ class Toolbox:
         with self.lock(path + "#glb"):  # the viewer may ask twice (open + change); the second gets the cache
             return export_glb(self.cli, path, out_dir, force=bool(args.get("force")))
 
+    SPEC_KEYS = ("analyses", "assertions", "probes", "monte_carlo", "timeout")
+
+    def load_spec(self, path: str, explicit: bool) -> dict[str, Any]:
+        """The requirements file next to a schematic (``<name>.sim.json``): analyses, assertions, probes, monte_carlo, timeout."""
+        try:
+            with open(path, encoding="utf-8") as fh:
+                spec = json.load(fh)
+        except json.JSONDecodeError as exc:
+            raise ToolError(f"{path} is not valid JSON: {exc}") from exc
+        if not isinstance(spec, dict):
+            raise ToolError(f"{path} must hold a JSON object with {', '.join(self.SPEC_KEYS)}")
+        unknown = sorted(set(spec) - set(self.SPEC_KEYS))
+        if unknown:
+            raise ToolError(f"{path}: unknown key(s) {', '.join(unknown)}; the spec holds {', '.join(self.SPEC_KEYS)}")
+        return spec
+
     def tool_simulate(self, args):
         path = self.resolve(args["path"], ".kicad_sch")
+        if self.ngspice and not os.path.isfile(self.ngspice):
+            raise ToolError(f"the ngspice setting {self.ngspice} is not a file; fix or clear it (empty: $NGSPICE, then PATH)")
         executable = spice.locate_ngspice(self.ngspice)
         if not executable:
             raise ToolError("ngspice was not found. Install it (see kicad_doctor; e.g. `sudo dnf install ngspice` / `sudo apt-get install ngspice` / "
-                            f"`brew install ngspice`, or {spice.DOWNLOAD_URL}) or set $NGSPICE to its path.")
+                            f"`brew install ngspice`, or {spice.DOWNLOAD_URL}) or set the KiCad bridge 'ngspice' setting / $NGSPICE to its path.")
         stem = os.path.splitext(os.path.basename(path))[0]
         out_dir = self.resolve(args["output_dir"], must_exist=False) if args.get("output_dir") else \
             os.path.join(os.path.dirname(path), ".dsh-kicad", "sim", stem)
+        default_spec = os.path.join(os.path.dirname(path), f"{stem}.sim.json")
+        if args.get("spec"):
+            spec_path = self.resolve(args["spec"], ".json", must_exist=not args.get("save_spec"))
+        else:
+            spec_path = default_spec
+        spec = self.load_spec(spec_path, bool(args.get("spec"))) if os.path.isfile(spec_path) else {}
+        given = {k: args[k] for k in self.SPEC_KEYS if args.get(k) is not None}
+        use = {**spec, **given}  # what the call names replaces the same key of the file
+        if args.get("save_spec"):
+            to_save = {k: use[k] for k in self.SPEC_KEYS if k in use and use[k] not in (None, [], {})}
+            if not to_save.get("assertions"):
+                raise ToolError("save_spec writes the requirements: give assertions")
+            with self.lock(spec_path):
+                with open(spec_path, "w", encoding="utf-8") as fh:
+                    json.dump(to_save, fh, indent=2, ensure_ascii=False)
+                    fh.write("\n")
         try:
-            return spice.simulate(self.cli, path, out_dir, args.get("analyses"), args.get("assertions"), executable,
-                                  timeout=float(args.get("timeout", spice.DEFAULT_TIMEOUT)), probes=args.get("probes"),
-                                  monte_carlo=args.get("monte_carlo"))
+            result = spice.simulate(self.cli, path, out_dir, use.get("analyses"), use.get("assertions"), executable,
+                                    timeout=float(use.get("timeout", spice.DEFAULT_TIMEOUT)), probes=use.get("probes"),
+                                    monte_carlo=use.get("monte_carlo"))
         except spice.SimulationError as exc:
             raise ToolError(str(exc)) from exc
+        if spec or args.get("save_spec"):
+            result["spec"] = {"path": spec_path, "loaded": sorted(set(spec) - set(given)) if spec else [], "saved": bool(args.get("save_spec"))}
+        return result
 
     def tool_sim_model(self, args):
         path = self.resolve(args["path"])

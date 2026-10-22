@@ -270,13 +270,13 @@ def _simulation_check(info: dict[str, Any], which: Which, ngspice: str | None) -
         if version:
             return _check("ngspice", label, "ok", f"ngspice {version} ({path}).", required=False, path=path, version=version)
         return _check("ngspice", label, "warn", f"{path} does not run (`ngspice --version` failed).", required=False, path=path,
-                      fix="Reinstall ngspice or set $NGSPICE to a working executable.")
+                      fix="Reinstall ngspice or set the KiCad bridge 'ngspice' setting or $NGSPICE to a working executable.")
     options = ngspice_options(info, which)
     best = next((o for o in options if o["command"]), None)
     return _check("ngspice", label, "warn", "ngspice was not found; kicad_simulate (SPICE verification) needs it.", required=False,
                   install=options,
                   fix=(f"Install it (`{best['command']}`)" if best else "Install it") + f", or download it ({spice.DOWNLOAD_URL}); "
-                  "if it is not on PATH, set $NGSPICE to the executable.")
+                  "if it is not on PATH, set the KiCad bridge 'ngspice' setting or $NGSPICE to the executable.")
 
 
 def freerouting_option() -> dict[str, Any]:

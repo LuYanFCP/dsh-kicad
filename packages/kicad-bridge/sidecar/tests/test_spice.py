@@ -415,3 +415,74 @@ def test_monte_carlo_tolerances_and_errors(tmp_path):
             tb.call("simulate", {"path": path, "assertions": [ok], "monte_carlo": mc})
     with pytest.raises(ToolError, match="give assertions"):
         tb.call("simulate", {"path": path, "monte_carlo": {}})
+
+
+# ---- requirements file and the ngspice setting -----------------------------------------------
+@needs_kicad_cli
+@needs_symbols
+@needs_ngspice
+def test_spec_file_is_saved_loaded_and_overridden(tmp_path):
+    import json
+
+    tb, path = divider(tmp_path)
+    spec = tmp_path / "circuit.sim.json"
+    assertions = [{"probe": "V(MID)", "equals": 2.5, "tol": 0.01, "name": "mid is 2.5 V"}, {"probe": "I(R1)", "equals": "2.5m", "tol_pct": 1, "abs": True}]
+    saved = tb.call("simulate", {"path": path, "assertions": assertions, "save_spec": True})
+    assert saved["passed"] and saved["spec"] == {"path": str(spec), "loaded": [], "saved": True}
+    assert json.loads(spec.read_text()) == {"assertions": assertions}
+    # nothing passed: the file next to the schematic is used
+    again = tb.call("simulate", {"path": path})
+    assert again["passed"] and [a["name"] for a in again["assertions"]][0] == "mid is 2.5 V"
+    assert again["spec"]["loaded"] == ["assertions"] and again["spec"]["saved"] is False
+    # a key named in the call replaces the file's
+    over = tb.call("simulate", {"path": path, "assertions": [{"probe": "V(MID)", "min": 3}]})
+    assert over["passed"] is False and len(over["assertions"]) == 1
+    # a change that breaks a saved requirement is caught without retyping it
+    text = open(path, encoding="utf-8").read().replace('(property "Value" "1k"', '(property "Value" "3k"', 1)
+    open(path, "w", encoding="utf-8").write(text)
+    assert tb.call("simulate", {"path": path})["passed"] is False
+    # Monte Carlo and analyses live in the file too
+    tb.call("simulate", {"path": path, "assertions": [{"probe": "V(MID)", "min": 0, "max": 5}], "monte_carlo": {"runs": 3}, "save_spec": True})
+    kept = json.loads(spec.read_text())
+    assert kept["monte_carlo"] == {"runs": 3} and "analyses" not in kept
+    assert tb.call("simulate", {"path": path})["monte_carlo"]["runs"] == 3
+
+
+@needs_kicad_cli
+@needs_symbols
+@needs_ngspice
+def test_spec_file_errors(tmp_path):
+    tb, path = divider(tmp_path)
+    spec = tmp_path / "circuit.sim.json"
+    for body, message in (("{not json", "not valid JSON"), ("[]", "must hold a JSON object"), ('{"asserts": []}', "unknown key.*asserts")):
+        spec.write_text(body)
+        with pytest.raises(ToolError, match=message):
+            tb.call("simulate", {"path": path})
+    spec.write_text('{"assertions": [{"probe": "V(MID)", "min": 0}]}')
+    other = tmp_path / "other.sim.json"
+    with pytest.raises(ToolError, match="does not exist"):
+        tb.call("simulate", {"path": path, "spec": str(other)})
+    assert tb.call("simulate", {"path": path, "spec": str(spec)})["spec"]["path"] == str(spec)
+    spec.unlink()
+    with pytest.raises(ToolError, match="give assertions"):
+        tb.call("simulate", {"path": path, "save_spec": True})
+    with pytest.raises(ToolError, match="expected a .json file"):
+        tb.call("simulate", {"path": path, "spec": str(tmp_path / "notes.txt")})
+
+
+@needs_kicad_cli
+@needs_symbols
+def test_ngspice_setting_names_a_missing_file(tmp_path):
+    tb, path = divider(tmp_path)
+    tb.ngspice = str(tmp_path / "no-such-ngspice")
+    with pytest.raises(ToolError, match="ngspice setting .* is not a file"):
+        tb.call("simulate", {"path": path})
+
+
+@needs_kicad_cli
+@needs_symbols
+@needs_ngspice
+def test_ngspice_setting_is_used(tmp_path):
+    tb, path = divider(tmp_path)
+    tb.ngspice = spice.locate_ngspice()
+    assert tb.call("simulate", {"path": path})["ngspice"]

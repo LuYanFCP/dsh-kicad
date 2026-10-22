@@ -46,7 +46,7 @@ market/                 插件市场索引示例
 - dsh `>=0.2.1-rc.2 <0.3`（`npm i -g @deepseek-ai/dsh`），Node `>=22.19`，pnpm 11（源码构建时）
 - `PATH` 上的 Python `>=3.10`（`python3`；Windows 为 `python`），核心无需任何 Python 包
 - KiCad 8+ 与 `kicad-cli`（已在 10.0.7 测试）。查找顺序：设置项、`$KICAD_CLI`、`PATH`、macOS/Windows 安装目录、Flatpak `org.kicad.KiCad`
-- 可选：`rsvg-convert`、ImageMagick 或 `png` extra（PNG 渲染）；`ipc` extra（IPC 通道）；[ngspice](https://ngspice.sourceforge.io/)（`PATH` 上的 `ngspice`，或 `$NGSPICE`），供 `kicad_simulate` 使用
+- 可选：`rsvg-convert`、ImageMagick 或 `png` extra（PNG 渲染）；`ipc` extra（IPC 通道）；[ngspice](https://ngspice.sourceforge.io/)（`PATH` 上的 `ngspice`，或 `$NGSPICE`，或 KiCad bridge 的 `ngspice` 设置），供 `kicad_simulate` 使用
 
 ### 检查环境与安装 KiCad
 
@@ -131,7 +131,8 @@ Freerouting（GPL-3.0）是独立的 Java 程序，不随插件分发。`/kicad-
 - 电路需要接地网络、来自 `Simulation_SPICE` 的信号源（`VDC`、`VSIN`、`VPULSE`、`IDC`），以及每个关键元件的模型：R、C、L 按其值仿真；二极管和 LED 需要 `set_sim_model {reference, device: "D", params}`（即隐藏属性 `Sim.Device`）（否则工具拒绝运行，因为缺少它时 KiCad 会把二极管接反）；IC、稳压器和三极管需要厂商模型（见下）。没有模型的元件会被排除在电路之外，并列在结果里。
 - **厂商模型。** `kicad_sim_model {path, name?}` 列出模型文件（或目录下所有模型文件）中的 `.subckt`（带引脚名和上方的注释）与 `.model`。`kicad_edit_schematic` 的 `set_sim_model {reference, library, name, pins?}` 把其中一个绑定到元件：写入隐藏属性 `Sim.Library`（相对工程路径）、`Sim.Name`、`Sim.Device` 和 `Sim.Pins`，按名称匹配符号引脚与模型引脚；匹配不了时拒绝并给出两边的引脚列表（请传 `pins: {"1": "GND", "2": "OUT", "3": "IN"}`），因为 KiCad 会照单全收错误的 `Sim.Pins` 并仿真出错误的电路。`{reference, device: "D", params}` 不需要文件，直接设置内置器件。模型来自你提供的文件，插件不内置任何模型，也要求 agent 不得编造。子电路内部节点不会出现在结果里。
 - **容差分析。** `monte_carlo: {runs?, seed?, tolerances?, distribution?, min_pass_rate?}` 在 R、C、L 的值（默认 ±5 %、±10 %、±10 %；`tolerances: {R: 1, C1: "20%", V1: 2}`，百分比，按元件字母或位号；V、I 源按直流电平）随机取值的情况下重复仿真，均匀分布在容差内，或高斯分布（3σ 等于容差），并按断言报告成立的次数、最小/平均/最大值和第一次失败的取值。有随机种子，可重复；`min_pass_rate`（默认每次都要成立）可接受低于 100 % 的比例。只有普通的 R、C、L 值和电源电平会变化，厂商模型内部的参数不变。
-- ngspice 需要另行安装：`/kicad-doctor` 会检查并列出本机的安装命令（`sudo dnf install ngspice`、`sudo apt-get install ngspice`、`brew install ngspice` 等）。网表、仿真文件、rawfile 和日志保存在 `<工程>/.dsh-kicad/sim/<名称>/`。`/simulate` 不经过模型，对工程原理图做一次工作点仿真；`kicad-simulate` 技能指导 agent 把需求写成断言并迭代修改。
+- **需求跟着工程走。** `save_spec: true` 把本次调用的分析、断言和 `monte_carlo` 写入 `<原理图名>.sim.json`（普通 JSON：`analyses`、`assertions`、`probes`、`monte_carlo`、`timeout`；`spec` 可指定别的文件）。之后的 `kicad_simulate` 调用和 `/simulate` 在该文件存在时直接使用它，改动后无需重新输入就能按所有已保存的需求重新验证；调用中明确给出的参数会替换文件里的同名键。
+- ngspice 需要另行安装：`/kicad-doctor` 会检查并列出本机的安装命令（`sudo dnf install ngspice`、`sudo apt-get install ngspice`、`brew install ngspice` 等）。网表、仿真文件、rawfile 和日志保存在 `<工程>/.dsh-kicad/sim/<名称>/`。`/simulate` 不经过模型，按工程已保存的需求仿真（没有保存时做一次工作点仿真）；`kicad-simulate` 技能指导 agent 把需求写成断言并迭代修改。
 - 它无法回答的：固件行为、没有 SPICE 模型的元件、信号完整性、EMC 和热。
 
 ### 3D 视图
