@@ -55,8 +55,8 @@
         "zh": "KiCad 原理图助手"
       },
       "description": {
-        "en": "AI electronics design with KiCad, from one sentence to an orderable board: describe the circuit board you want (/kicad-design) and the agent asks a few questions, writes the spec and draws the schematic in titled functional blocks with wires between the parts. It then syncs the PCB, places the parts by block, routes the board with Freerouting (optional, installed on request) and exports a Gerber/drill/position/BOM zip with JLCPCB or PCBWay rules (/kicad-fab), refusing to export until KiCad reports 0 DRC errors, 0 unrouted connections and a matching schematic. Watch the schematic or board live in the sidebar; edits follow the session's permissions, KiCad ERC/DRC after every change, /erc /drc /bom, EDA preset. Beginner friendly. Checks your KiCad installation and offers an Install KiCad button when it is missing.",
-        "zh": "用 AI 做电子电路设计（KiCad），从一句话到可下单的电路板：说出你想做的电路板（/kicad-design），agent 会问几个问题、写好设计规格，画出按功能分块、元件之间用导线相连的原理图；接着同步生成 PCB、按功能块自动摆放、用 Freerouting 自动布线（可选，需要时再安装），并按 JLCPCB 或 PCBWay 工艺规则导出 Gerber/钻孔/坐标/BOM 压缩包（/kicad-fab），只有 KiCad 报告 DRC 0 错误、没有未布线、原理图与 PCB 一致时才允许导出。右侧栏实时显示原理图或 PCB；修改遵循会话权限，每次改完自动跑 KiCad ERC/DRC；/erc /drc /bom 和 EDA 预设。适合新手。会检查本机 KiCad 环境，缺失时提供“安装 KiCad”按钮。"
+        "en": "AI electronics design with KiCad, from one sentence to an orderable board: describe the circuit board you want (/kicad-design) and the agent asks a few questions, writes the spec and draws the schematic in titled functional blocks with wires between the parts. It then syncs the PCB, places the parts by block, routes the board with Freerouting (optional, installed on request) and exports a Gerber/drill/position/BOM zip with JLCPCB or PCBWay rules (/kicad-fab), refusing to export until KiCad reports 0 DRC errors, 0 unrouted connections and a matching schematic. Watch the schematic or board live in the sidebar, with an interactive 3D view of the board like KiCad's 3D Viewer; edits follow the session's permissions, KiCad ERC/DRC after every change, /erc /drc /bom, EDA preset. Beginner friendly. Checks your KiCad installation and offers an Install KiCad button when it is missing.",
+        "zh": "用 AI 做电子电路设计（KiCad），从一句话到可下单的电路板：说出你想做的电路板（/kicad-design），agent 会问几个问题、写好设计规格，画出按功能分块、元件之间用导线相连的原理图；接着同步生成 PCB、按功能块自动摆放、用 Freerouting 自动布线（可选，需要时再安装），并按 JLCPCB 或 PCBWay 工艺规则导出 Gerber/钻孔/坐标/BOM 压缩包（/kicad-fab），只有 KiCad 报告 DRC 0 错误、没有未布线、原理图与 PCB 一致时才允许导出。右侧栏实时显示原理图或 PCB，并可像 KiCad 3D Viewer 一样旋转查看板子的 3D 视图；修改遵循会话权限，每次改完自动跑 KiCad ERC/DRC；/erc /drc /bom 和 EDA 预设。适合新手。会检查本机 KiCad 环境，缺失时提供“安装 KiCad”按钮。"
       },
       "icon": "icons/dsh-kicad.svg",
       "author": "LuYanFCP",
@@ -76,6 +76,19 @@
         ]
       },
       "versions": [
+        {
+          "version": "0.5.0",
+          "publishTimestamp": 1792640070,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/LuYanFCP/dsh-kicad",
+            "commit": "d07dee53432c1cc328243bdc3cce8eb0602ff440",
+            "path": "dist/dsh-kicad"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.2 <0.3.0-0"
+          }
+        },
         {
           "version": "0.4.0",
           "publishTimestamp": 1792598911,
