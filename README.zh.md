@@ -148,11 +148,11 @@ Freerouting（GPL-3.0）是独立的 Java 程序，不随插件分发。`/kicad-
 
 `kicad_simulate_firmware {path, firmware, stimuli?, assertions?, duration?, clock_hz?}` 在模拟的 **ATtiny25/45/85** 上运行固件镜像，芯片按原理图连接，并判定电路板的行为，于是“按下按钮后 20 ms 内 LED 亮起”这类需求会被验证，而不是被假设。固件是你自己构建的 `.hex` 或 `.elf`（avr-gcc、PlatformIO、Arduino）；插件不会构建、编写或编造固件。
 
-- **芯片**是一个纯 Python 的小型 AVR 模拟器（无依赖）：ATtiny85 指令集、GPIO 端口、引脚变化中断和 INT0、Timer0 的普通与 CTC 模式、ADC（PB2-PB5 上的单端通道和 1.1 V 带隙、Vcc / 1.1 V / 2.56 V / AREF 基准、10 位或左对齐结果、连续转换、转换完成中断、真实的 13/25 个 ADC 时钟的转换时间）、空闲与掉电休眠、时钟分频。它用 avr-gcc 在四个优化等级下编译的程序校验过（各种位宽的算术、移位、排序、CRC、跳转表、函数指针、flash 读取、软浮点，与 Python 中的同一计算对比），也校验了已知时序（`_delay_ms`、CTC 周期、溢出次数）。
+- **芯片**是一个纯 Python 的小型 AVR 模拟器（无依赖）：ATtiny85 指令集、GPIO 端口、引脚变化中断和 INT0、Timer0 的普通、CTC、相位修正 PWM 和快速 PWM 模式（OC0A / OC0B 引脚表现为占空比和频率，带溢出和比较中断）、ADC（PB2-PB5 上的单端通道和 1.1 V 带隙、Vcc / 1.1 V / 2.56 V / AREF 基准、10 位或左对齐结果、连续转换、转换完成中断、真实的 13/25 个 ADC 时钟的转换时间）、空闲与掉电休眠、时钟分频。它用 avr-gcc 在四个优化等级下编译的程序校验过（各种位宽的算术、移位、排序、CRC、跳转表、函数指针、flash 读取、软浮点，与 Python 中的同一计算对比），也校验了已知时序（`_delay_ms`、CTC 周期、溢出次数）。
 - **电路板**是一个直流网络：电阻、开关、引脚驱动器（40 Ω）和内部上拉（35 kΩ）、电源轨和地。场景按下按钮就闭合对应开关；芯片读到的是网络给这个引脚的电平；LED 报告它是否会亮（正向压降 1.8 V）。这些网络上的晶体管、IC 等其他元件按开路处理，并列在结果里。
-- **场景。** `stimuli`：`{at: "30ms", press: "SW1", name: "press"}`、`release`、`toggle`，或 `{at, drive: "NET", level: high|low|release|<伏特数>}`（理想电压源，也能覆盖电源轨，比如电量下降的电池：`{at: "10ms", drive: "VBAT", level: 7.4}`）。`assertions`：一个对象（`{led: "D2", is: "on"}`、`{pin: "PB4", level: "high"}`、`{net, level}`、以伏特计的 `{net, min, max}`）加一个时刻（`at`、`{after: "press", within: "20ms"}`、全程成立的 `{from, to}`）。每条都在仿真得到的时间线上判定。
+- **场景。** `stimuli`：`{at: "30ms", press: "SW1", name: "press"}`、`release`、`toggle`，或 `{at, drive: "NET", level: high|low|release|<伏特数>}`（理想电压源，也能覆盖电源轨，比如电量下降的电池：`{at: "10ms", drive: "VBAT", level: 7.4}`）。`assertions`：一个对象（`{led: "D2", is: "on"}`、`{pin: "PB4", level: "high"}`、`{net, level}`、以伏特计的 `{net, min, max}`，PWM 网络上是平均值；PWM 引脚用 `{pin, duty, tol}` 和 `{pin, freq, tol_pct}`；`{led, min, max}` 表示 LED 点亮时间的占比）加一个时刻（`at`、`{after: "press", within: "20ms"}`、全程成立的 `{from, to}`）。每条都在仿真得到的时间线上判定。
 - **不请自来的隐患。**固件读取了悬空输入（按钮没有上拉）、输出与开关对抗（过流：驱动器经闭合的开关接地是 125 mA）、输入卡在逻辑电平之间。
-- **它不会假装的。**差分 ADC 通道、温度传感器、Timer1、USI（I²C/SPI）、Timer 的 PWM 模式、EEPROM 和看门狗都不仿真。固件用到其中之一时，运行会带着原因和时间停下；之后时刻的断言是 `cannot verify`，绝不算通过，总体结论也一样。其他 MCU（ESP32、STM32、其他 AVR）会被拒绝；`kicad_check_mcu` 仍会检查它们的接线。
+- **它不会假装的。**差分 ADC 通道、温度传感器、Timer1（因此 OC1A/OC1B 上的 PWM）、USI（I²C/SPI）、Timer0 的模式 5、EEPROM 和看门狗都不仿真。固件用到其中之一时，运行会带着原因和时间停下；之后时刻的断言是 `cannot verify`，绝不算通过，总体结论也一样。其他 MCU（ESP32、STM32、其他 AVR）会被拒绝；`kicad_check_mcu` 仍会检查它们的接线。
 - 速度：休眠的芯片几乎不耗时；忙等循环每秒可执行数百万条指令（开发机上，1 MHz 下忙等闪灯仿真 1 s 用了 0.1 s），并有墙钟 `timeout`。`clock_hz` 默认 1 MHz（出厂 8 MHz RC 加除以 8 的熔丝）：请设成固件构建时使用的时钟。
 
 ### 3D 视图

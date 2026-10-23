@@ -36,5 +36,11 @@
  "adc_bandgap": {
   "vs_vcc": 98,
   "vs_internal": 96
+ },
+ "pwm_fade": {
+  "n": 96
+ },
+ "millis_blink": {
+  "ticks": 96
  }
 }

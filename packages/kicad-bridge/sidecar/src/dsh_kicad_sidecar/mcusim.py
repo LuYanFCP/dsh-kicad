@@ -183,27 +183,57 @@ class Board:
 
     # ---- state → voltages ----
     def solve(self, avr: Avr, closed: set[str], forced: dict[str, float | None]) -> dict[str, Any]:
+        """One DC solution per combination of levels of the PWM pins (a PWM pin is high for a fraction ``duty`` of the time and low
+        for the rest), weighted: the average voltage of every net, the fraction of time each LED would light, the worst pin current."""
         edges = [(a, b, ohms) for a, b, ohms, _ in self.resistors]
         edges += [(a, b, SWITCH_OHMS) for r, (a, b) in self.switches.items() if r in closed]
-        sources: list[tuple[str, float, float]] = []
-        drivers: dict[int, tuple[float, float]] = {}
-        for bit, net in self.pins.items():
-            if avr.pin_driven(bit):
-                level = self.vcc if avr.pin_out_level(bit) else 0.0
-                sources.append((net, level, OUT_OHMS))
-                drivers[bit] = (level, OUT_OHMS)
-            elif avr.pin_pullup(bit):
-                sources.append((net, self.vcc, PULLUP_OHMS))
         fixed = dict(self.fixed)
         for net, level in forced.items():  # an external drive is an ideal source (it also overrides a rail)
             if level is not None:
                 fixed[net] = level
-        volts = solve(self.nets, fixed, edges, sources)
-        currents = {}
-        for bit, (level, ohms) in drivers.items():
-            v = volts.get(self.pins[bit])
-            currents[bit] = abs(level - v) / ohms if v is not None else 0.0
-        return {"volts": volts, "currents": currents}
+        static: list[tuple[str, float, float]] = []
+        drivers: dict[int, float] = {}
+        pwm: dict[int, dict[str, float]] = {}
+        for bit, net in self.pins.items():
+            if avr.pin_driven(bit):
+                wave = avr.pwm_pin(bit)
+                if wave is not None:
+                    pwm[bit] = wave
+                else:
+                    level = self.vcc if avr.pin_out_level(bit) else 0.0
+                    static.append((net, level, OUT_OHMS))
+                    drivers[bit] = level
+            elif avr.pin_pullup(bit):
+                static.append((net, self.vcc, PULLUP_OHMS))
+        bits = sorted(pwm)
+        totals: dict[str, float] = {}
+        unknown: set[str] = set()
+        leds = {r: 0.0 for r in self.leds}
+        currents: dict[int, float] = {}
+        for combo in range(1 << len(bits)):
+            weight = 1.0
+            sources = list(static)
+            levels = dict(drivers)
+            for i, bit in enumerate(bits):
+                high = combo >> i & 1
+                weight *= pwm[bit]["duty"] if high else 1.0 - pwm[bit]["duty"]
+                levels[bit] = self.vcc if high else 0.0
+                sources.append((self.pins[bit], levels[bit], OUT_OHMS))
+            if weight <= 0:
+                continue
+            volts = solve(self.nets, fixed, edges, sources)
+            for n, v in volts.items():
+                if v is None:
+                    unknown.add(n)
+                else:
+                    totals[n] = totals.get(n, 0.0) + weight * v
+            for r, lit in self.led_lit(volts).items():
+                leds[r] += weight * lit
+            for bit, level in levels.items():
+                v = volts.get(self.pins[bit])
+                currents[bit] = max(currents.get(bit, 0.0), abs(level - v) / OUT_OHMS if v is not None else 0.0)
+        volts_avg = {n: (None if n in unknown else totals.get(n)) for n in self.nets}
+        return {"volts": volts_avg, "currents": currents, "leds": leds, "pwm": pwm}
 
     def logic(self, volts: float | None) -> int | None:
         if volts is None:
@@ -214,8 +244,8 @@ class Board:
             return 0
         return None
 
-    def led_states(self, volts: dict[str, float | None]) -> dict[str, bool | None]:
-        out: dict[str, bool | None] = {}
+    def led_lit(self, volts: dict[str, float | None]) -> dict[str, bool]:
+        out: dict[str, bool] = {}
         for r, (a, k) in self.leds.items():
             va, vk = volts.get(a), volts.get(k)
             out[r] = False if va is None or vk is None else (va - vk) >= self.led_vf  # a floating end carries no current: dark
@@ -292,15 +322,26 @@ class Run:
                                          "message": f"PB{bit} drives {amps * 1000:.0f} mA into net {net} (the ATtiny85 allows 20 mA per pin, 40 mA absolute): "
                                                     "an output fighting a switch or a short to the opposite rail"}
         avr.set_inputs(levels)
+        pwm = {f"PB{b}": {"duty": round(w["duty"], 4), "hz": round(w["hz"], 3)} for b, w in result["pwm"].items()}
+
+        def pin_state(b: int) -> str:
+            if b in result["pwm"]:
+                return f"pwm {pwm[f'PB{b}']['duty']:.0%} {pwm[f'PB{b}']['hz']:.0f}Hz"
+            if avr.pin_driven(b):
+                return "out-high" if avr.pin_out_level(b) else "out-low"
+            return "in-pullup" if avr.pin_pullup(b) else "in"
+
         snap = {
             "t": t,
-            "pins": {f"PB{b}": ("out-high" if avr.pin_out_level(b) else "out-low") if avr.pin_driven(b) else ("in-pullup" if avr.pin_pullup(b) else "in") for b in board.pins},
+            "pins": {f"PB{b}": pin_state(b) for b in board.pins},
+            "pwm": pwm,
             "nets": {short_name(n): (None if volts[n] is None else round(volts[n], 3)) for n in sorted(set(board.pins.values()))},
-            "leds": board.led_states(volts),
+            "leds": {r: round(f, 4) for r, f in result["leds"].items()},
             "switches": sorted(self.closed),
             "_volts": volts,
         }
-        key = (tuple(sorted(snap["pins"].items())), tuple(sorted((k, v) for k, v in snap["nets"].items())), tuple(sorted(snap["leds"].items())), tuple(snap["switches"]))
+        key = (tuple(sorted(snap["pins"].items())), tuple(sorted((k, v) for k, v in snap["nets"].items())), tuple(sorted(snap["leds"].items())), tuple(snap["switches"]),
+               tuple(sorted((k, w["duty"], w["hz"]) for k, w in snap["pwm"].items())))
         if self.timeline and self.timeline[-1].get("_key") == key:
             return
         snap["_key"] = key
@@ -326,6 +367,10 @@ class Run:
         return out
 
 
+def _led_label(fraction: float) -> str:
+    return "on" if fraction >= 0.99 else "off" if fraction <= 0.01 else f"dim {fraction:.0%}"
+
+
 def _measure(board: Board, snap: dict[str, Any], a: dict[str, Any]) -> tuple[Any, str]:
     """``(value, label)`` of an assertion's subject in a state."""
     volts = snap["_volts"]
@@ -333,12 +378,22 @@ def _measure(board: Board, snap: dict[str, Any], a: dict[str, Any]) -> tuple[Any
         ref = a["led"]
         if ref not in board.leds:
             raise SimulationError(f"no LED {ref} in the circuit (LEDs: {', '.join(sorted(board.leds)) or 'none'})")
-        state = snap["leds"].get(ref)
-        return (None if state is None else ("on" if state else "off")), f"LED {ref}"
+        fraction = snap["leds"].get(ref, 0.0)
+        return (fraction if "min" in a or "max" in a else _led_label(fraction)), f"LED {ref}"
     if "pin" in a:
         bit = _pin_bit(a["pin"])
         if bit not in board.pins:
             raise SimulationError(f"PB{bit} is not connected to anything")
+        wave = snap["pwm"].get(f"PB{bit}")
+        if "duty" in a:
+            if wave:
+                return wave["duty"], f"PB{bit}"
+            level = board.logic(volts[board.pins[bit]])
+            return (None if level is None else float(level)), f"PB{bit}"
+        if "freq" in a:
+            return (wave["hz"] if wave else None), f"PB{bit}"
+        if wave and "min" not in a and "max" not in a:
+            return f"pwm {wave['duty']:.0%} at {wave['hz']:.0f} Hz", f"PB{bit}"
         return _level_or_volts(board, volts[board.pins[bit]], a), f"PB{bit}"
     if "net" in a:
         net = _net_name(board, a["net"])
@@ -356,12 +411,17 @@ def _level_or_volts(board: Board, v: float | None, a: dict[str, Any]) -> Any:
 def _holds(value: Any, a: dict[str, Any]) -> bool | None:
     if value is None:
         return False
-    if "led" in a:
-        return value == a.get("is", "on")
+    if "duty" in a:
+        return abs(value - parse_value(a["duty"], "duty")) <= (parse_value(a["tol"], "tol") if "tol" in a else 0.02)
+    if "freq" in a:
+        want = parse_value(a["freq"], "freq")
+        return abs(value - want) <= want * (parse_value(a["tol_pct"], "tol_pct") if "tol_pct" in a else 2.0) / 100
     if "min" in a or "max" in a:
         lo = parse_value(a["min"], "min") if "min" in a else None
         hi = parse_value(a["max"], "max") if "max" in a else None
         return (lo is None or value >= lo) and (hi is None or value <= hi)
+    if "led" in a:
+        return value == a.get("is", "on")
     return value == a.get("level", a.get("is"))
 
 
@@ -369,13 +429,16 @@ def _judge(run: Run, a: dict[str, Any], names: dict[str, float], abort_at: float
     board = run.board
     if not isinstance(a, dict):
         raise SimulationError("each assertion is an object")
-    want = a.get("is") or a.get("level") or (f"{a.get('min', '')}..{a.get('max', '')}" if ("min" in a or "max" in a) else ("on" if "led" in a else None))
+    want = (f"duty {a['duty']}" if "duty" in a else f"{a['freq']} Hz" if "freq" in a else a.get("is") or a.get("level")
+            or (f"{a.get('min', '')}..{a.get('max', '')}" if ("min" in a or "max" in a) else ("on" if "led" in a else None)))
     if want is None:
-        raise SimulationError(f"assertion {a}: give is (led: on|off), level (pin/net: high|low) or min/max (volts)")
-    if "led" in a and a.get("is", "on") not in ("on", "off"):
-        raise SimulationError("an LED assertion's is must be on or off")
-    if ("pin" in a or "net" in a) and "min" not in a and "max" not in a and a.get("level", a.get("is")) not in ("high", "low"):
-        raise SimulationError("a pin or net assertion's level must be high or low (or give min/max in volts)")
+        raise SimulationError(f"assertion {a}: give is (led: on|off), level (pin/net: high|low), duty or freq (a PWM pin), or min/max (volts; for an LED a brightness 0-1)")
+    if ("duty" in a or "freq" in a) and "pin" not in a:
+        raise SimulationError("duty and freq describe a PWM pin: use pin: \"PB0\"")
+    if "led" in a and "min" not in a and "max" not in a and a.get("is", "on") not in ("on", "off"):
+        raise SimulationError("an LED assertion's is must be on or off (or give min/max: its brightness between 0 and 1)")
+    if ("pin" in a or "net" in a) and not any(k in a for k in ("min", "max", "duty", "freq")) and a.get("level", a.get("is")) not in ("high", "low"):
+        raise SimulationError("a pin or net assertion's level must be high or low (or give min/max in volts, or duty / freq for a PWM pin)")
     _, label = _measure(board, run.timeline[0], a)
     name = a.get("name") or f"{label} {'is' if 'led' in a else ''} {want}".replace("  ", " ")
 
@@ -539,7 +602,7 @@ def simulate_firmware(netlist: dict[str, Any], mcu_ref: str, provider: dict[str,
     for snap in run.timeline[:120]:
         if snap["t"] > end + 1e-9:
             continue
-        item = {"t": snap["t"], "pins": snap["pins"], "nets": snap["nets"], "leds": {k: v for k, v in snap["leds"].items() if v is not None}, "switches": snap["switches"]}
+        item = {"t": snap["t"], "pins": snap["pins"], "nets": snap["nets"], "leds": dict(snap["leds"]), "switches": snap["switches"], "pwm": snap["pwm"]}
         view = (tuple(item["pins"].items()), tuple(item["leds"].items()), tuple(item["switches"]))
         if view != last:
             events_out.append(item)
