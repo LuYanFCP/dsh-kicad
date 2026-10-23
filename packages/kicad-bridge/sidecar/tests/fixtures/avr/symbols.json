@@ -1,0 +1,26 @@
+{
+ "selftest_O0": {
+  "results": 114
+ },
+ "selftest_O1": {
+  "results": 106
+ },
+ "selftest_Os": {
+  "results": 106
+ },
+ "selftest_O2": {
+  "results": 106
+ },
+ "timer_ctc": {
+  "ticks": 96
+ },
+ "timer_ovf": {
+  "overflows": 96
+ },
+ "pcint_sleep": {
+  "presses": 96
+ },
+ "int0_powerdown": {
+  "wakes": 96
+ }
+}

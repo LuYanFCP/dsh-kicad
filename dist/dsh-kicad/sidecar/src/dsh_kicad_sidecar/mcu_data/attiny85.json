@@ -3,11 +3,23 @@
   "name": "ATtiny25/45/85 (8-pin AVR)",
   "source": "Microchip ATtiny25/45/85 datasheet (pinout, alternate functions, reset); hand-transcribed, check against the datasheet of the exact part",
   "match": {
-    "lib_id": ["MCU_Microchip_ATtiny:ATtiny25*", "MCU_Microchip_ATtiny:ATtiny45*", "MCU_Microchip_ATtiny:ATtiny85*"],
-    "value": ["^ATtiny(25|45|85)"]
+    "lib_id": [
+      "MCU_Microchip_ATtiny:ATtiny25*",
+      "MCU_Microchip_ATtiny:ATtiny45*",
+      "MCU_Microchip_ATtiny:ATtiny85*"
+    ],
+    "value": [
+      "^ATtiny(25|45|85)"
+    ]
   },
   "not_covered": [
-    {"lib_id": ["*:ATtiny*", "*:ATmega*"], "why": "only the 8-pin ATtiny25/45/85 table is shipped; other AVR parts have different pins and alternate functions"}
+    {
+      "lib_id": [
+        "*:ATtiny*",
+        "*:ATmega*"
+      ],
+      "why": "only the 8-pin ATtiny25/45/85 table is shipped; other AVR parts have different pins and alternate functions"
+    }
   ],
   "gpio_pin_pattern": "(?:^|/)PB(\\d)$",
   "enable": {
@@ -18,13 +30,53 @@
     "no_pullup_why": "it relies on the weak internal pull-up",
     "advice": "Pull RESET up to the supply with 10 kΩ (the usual ISP header wiring); if PB5 is used as a GPIO the RSTDISBL fuse disables ISP programming."
   },
-  "supply": {"pins": ["VCC"], "min_uf": 0.1, "advice": "100 nF capacitor"},
+  "supply": {
+    "pins": [
+      "VCC"
+    ],
+    "min_uf": 0.1,
+    "advice": "100 nF capacitor"
+  },
   "gpios": {
-    "0": {"caps": ["pwm", "i2c_sda", "spi_mosi"], "note": "MOSI / DI / SDA / OC0A"},
-    "1": {"caps": ["pwm", "spi_miso"], "note": "MISO / DO / OC0B / OC1A"},
-    "2": {"adc": "adc1", "caps": ["i2c_scl", "spi_sck", "int0"], "note": "SCK / SCL / ADC1 / INT0"},
-    "3": {"adc": "adc3", "note": "ADC3 / XTAL1"},
-    "4": {"adc": "adc2", "caps": ["pwm"], "note": "ADC2 / XTAL2 / OC1B"},
-    "5": {"adc": "adc0", "note": "RESET / ADC0: a GPIO only with the RSTDISBL fuse, which disables ISP"}
-  }
+    "0": {
+      "caps": [
+        "pwm",
+        "i2c_sda",
+        "spi_mosi"
+      ],
+      "note": "MOSI / DI / SDA / OC0A"
+    },
+    "1": {
+      "caps": [
+        "pwm",
+        "spi_miso"
+      ],
+      "note": "MISO / DO / OC0B / OC1A"
+    },
+    "2": {
+      "adc": "adc1",
+      "caps": [
+        "i2c_scl",
+        "spi_sck",
+        "int0"
+      ],
+      "note": "SCK / SCL / ADC1 / INT0"
+    },
+    "3": {
+      "adc": "adc3",
+      "note": "ADC3 / XTAL1"
+    },
+    "4": {
+      "adc": "adc2",
+      "caps": [
+        "pwm"
+      ],
+      "note": "ADC2 / XTAL2 / OC1B"
+    },
+    "5": {
+      "adc": "adc0",
+      "note": "RESET / ADC0: a GPIO only with the RSTDISBL fuse, which disables ISP"
+    }
+  },
+  "simulator": "avr-attiny85"
 }
