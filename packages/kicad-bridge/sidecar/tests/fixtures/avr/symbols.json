@@ -42,5 +42,43 @@
  },
  "millis_blink": {
   "ticks": 96
+ },
+ "wdt_reset": {
+  "boots": 97
+ },
+ "wdt_interrupt": {
+  "wakes": 96
+ },
+ "eeprom_counter": {
+  "last": 97
+ },
+ "eeprom_initial": {
+  "seen": 96
+ },
+ "timer1_ctc": {
+  "compares": 97,
+  "overflows": 96
+ },
+ "timer1_ovf": {
+  "overflows": 96
+ },
+ "comparator_irq": {
+  "events": 96
+ },
+ "adc_diff": {
+  "gain1": 98,
+  "gain20": 96
+ },
+ "adc_temp": {
+  "reading": 96
+ },
+ "usi_spi_master": {
+  "rx": 96
+ },
+ "usi_strobe": {
+  "rx": 96
+ },
+ "reset_boots": {
+  "boots": 97
  }
 }

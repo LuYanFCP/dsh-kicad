@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from dsh_kicad_sidecar.avr import Avr, AvrError, Unsupported, load_firmware, parse_ihex
+from dsh_kicad_sidecar.avr import Avr, AvrError, Unsupported, load_firmware, load_image, parse_ihex
 
 FIX = os.path.join(os.path.dirname(__file__), "fixtures", "avr")
 SYMS = json.load(open(os.path.join(FIX, "symbols.json")))
@@ -99,7 +99,7 @@ def test_hex_loading():
     assert parse_ihex("\n".join([record(0x10, [1, 2, 3]), record(0, [], 1)]))[0x10:0x13] == bytes([1, 2, 3])
     with pytest.raises(AvrError, match="bad length or checksum"):
         parse_ihex(record(0, [1, 2]).replace("0102", "0103"))
-    with pytest.raises(AvrError, match="beyond the ATtiny85"):
+    with pytest.raises(AvrError, match="beyond the device"):
         parse_ihex(record(0x2000, [1, 2]))
     with pytest.raises(AvrError, match="no program data"):
         parse_ihex(record(0, [], 1))
@@ -188,8 +188,8 @@ def test_int0_falling_edge_wakes_power_down_but_a_high_level_does_not():
     assert c.read_data(SYMS["int0_powerdown"]["wakes"]) == 1 and c.io[0x18] & 0x10
 
 
-@pytest.mark.parametrize("name, what, text", [("uses_adc_diff", "ADC", "differential channel"), ("uses_timer1", "Timer1", "Timer1 is not simulated"),
-                                              ("uses_usi", "USI", "USI .I²C/SPI. is not simulated"), ("uses_mode5", "Timer0", "waveform mode 5")])
+@pytest.mark.parametrize("name, what, text", [("uses_acme", "ADC", "ACME"), ("uses_adc_trigger", "ADC", "free running"), ("uses_timer1_foc", "Timer1", "forces an output compare"),
+                                              ("uses_usi_twowire", "USI", "two-wire mode"), ("uses_mode5", "Timer0", "waveform mode 5")])
 def test_unsupported_peripherals_stop_the_run(name, what, text):
     c = cpu(name)
     with pytest.raises(Unsupported, match=text) as info:
@@ -288,6 +288,8 @@ def test_adc_without_a_board_is_refused():
 def test_fast_pwm_outputs_both_polarities():
     c = cpu("pwm_fast")
     c.run(c.cycle_for(0.005))
+    assert c.pwm_pin(0)["duty"] == pytest.approx(1 / 256)  # OCR0A is written, but only latched when the counter restarts (16.4 ms at clk/64)
+    c.run(c.cycle_for(0.02))
     a, b = c.pwm_pin(0), c.pwm_pin(1)
     assert a["duty"] == pytest.approx(65 / 256) and a["hz"] == pytest.approx(1e6 / 64 / 256)  # OCR0A + 1 of 256 ticks
     assert b["duty"] == pytest.approx(1 - 192 / 256)  # inverting
@@ -296,7 +298,7 @@ def test_fast_pwm_outputs_both_polarities():
 
 def test_phase_correct_pwm_duty_and_frequency():
     c = cpu("pwm_pc")
-    c.run(c.cycle_for(0.005))
+    c.run(c.cycle_for(0.02))
     p = c.pwm_pin(0)
     assert p["duty"] == pytest.approx(128 / 255) and p["hz"] == pytest.approx(1e6 / 8 / 510)
 
@@ -311,11 +313,26 @@ def test_ctc_toggle_is_a_square_wave():
 def test_a_pwm_pin_must_be_an_output_to_count():
     flash = bytes(8192)
     c = Avr(flash)
+    c.io_write(0x29, 100)   # OCR0A, written while the timer is stopped: effective at once
     c.io_write(0x2A, 0x83)  # COM0A1, WGM01, WGM00
     c.io_write(0x33, 0x03)
-    c.io_write(0x29, 100)
     assert c.pwm_pin(0) is None  # DDRB bit 0 is still an input
     c.io_write(0x17, 0x01)
+    assert c.pwm_pin(0)["duty"] == pytest.approx(101 / 256)
+
+
+def test_ocr_writes_latch_at_the_top_in_the_pwm_modes():
+    c = Avr(bytes(8192))
+    c.io_write(0x17, 0x01)
+    c.io_write(0x2A, 0x83)  # fast PWM, COM0A1
+    c.io_write(0x33, 0x01)  # clk/1: one period is 256 cycles
+    c.io_write(0x29, 100)   # OCR0A: pending until the counter restarts
+    assert c.pwm_pin(0)["duty"] == pytest.approx(1 / 256)
+    c.cycle += 100
+    c.io_read(0x32)
+    assert c.pwm_pin(0)["duty"] == pytest.approx(1 / 256)
+    c.cycle += 200      # past the wrap at 256
+    c.io_read(0x32)
     assert c.pwm_pin(0)["duty"] == pytest.approx(101 / 256)
 
 
@@ -352,3 +369,287 @@ def test_phase_correct_timer_flags_and_counter():
     assert c.io_read(0x32) == 510 - (101 + 160)  # past the top, counting down
     c.cycle += 300
     assert c.io_read(0x38) & 0x02                                  # TOV0 at BOTTOM
+
+
+# ---- the rest of the ATtiny85 ----------------------------------------------------------------
+def chip(name, clock_hz=1_000_000, **kw):
+    return Avr(load_firmware(os.path.join(FIX, name + ".hex")), clock_hz, **kw)
+
+
+def word(c, name, symbol):
+    addr = SYMS[name][symbol]
+    return c.read_data(addr) | c.read_data(addr + 1) << 8
+
+
+def test_an_unfed_watchdog_resets_the_chip_every_16_ms_plus_the_startup_delay():
+    c = cpu("wdt_reset")
+    c.run(c.cycle_for(0.4))
+    times = [t * 1000 for t, cause in c.resets]
+    assert [cause for _, cause in c.resets] == ["watchdog"] * 5
+    assert times[0] == pytest.approx(16.05, abs=0.1) and all(79.9 < b - a < 80.2 for a, b in zip(times, times[1:]))  # 16 ms of watchdog + the 64 ms start-up
+    assert c.read_data(SYMS["wdt_reset"]["boots"]) == 5 and c.mcusr & 0x08  # the count survives the resets; WDRF is set
+
+
+def test_a_fed_watchdog_never_resets_and_an_interrupt_watchdog_wakes_power_down():
+    c = cpu("wdt_fed")
+    c.run(c.cycle_for(0.3))
+    assert c.resets == []
+    c = cpu("wdt_interrupt")
+    log = watch(c)
+    c.run(c.cycle_for(1.1))
+    assert c.read_data(SYMS["wdt_interrupt"]["wakes"]) == 4 and c.sleeping_power_down  # one per 32768 / 128 kHz = 256 ms
+    assert [round(t) for t, _ in log][1:] == [256, 512, 768, 1024] and c.instructions < 300
+
+
+def test_watchdog_registers_follow_the_timed_sequence():
+    c = Avr(bytes(8192))
+    c.io_write(0x21, 0x08)               # WDE: enable, no sequence needed
+    assert c.io_read(0x21) & 0x08
+    c.io_write(0x21, 0x00)               # disabling without the sequence does nothing
+    assert c.io_read(0x21) & 0x08
+    c.io_write(0x21, 0x18)               # WDCE | WDE opens the window
+    assert c.io_read(0x21) & 0x10
+    c.cycle += 4
+    c.io_write(0x21, 0x00)               # inside it: disabled
+    assert not c.io_read(0x21) & 0x08
+    c.io_write(0x21, 0x08)
+    c.mcusr = 0x08                       # WDRF set: WDE cannot be cleared until WDRF is
+    c.io_write(0x21, 0x18)
+    c.io_write(0x21, 0x00)
+    assert c.io_read(0x21) & 0x08
+    c.io_write(0x21, 0x40)               # WDIE alone: interrupt mode; writing 1 to WDIF clears it
+    c.wdtcr |= 0x80
+    c.io_write(0x21, 0x40 | 0x80)
+    assert not c.io_read(0x21) & 0x80
+
+
+def test_eeprom_boot_counter_survives_watchdog_resets_and_writes_take_3_4_ms():
+    c = cpu("eeprom_counter")
+    c.run(c.cycle_for(0.5))
+    assert c.eeprom[0] == 3 and c.read_data(SYMS["eeprom_counter"]["last"]) == 2 and c.io[0x18] & 1
+    first = [round(t * 1000, 2) for t, a, v in c.eeprom_log]
+    assert [(a, v) for _, a, v in c.eeprom_log] == [(0, 1), (0, 2), (0, 3)]
+    assert 3.4 < first[0] < 3.6 and 83.5 < first[1] < 83.7  # 3.4 ms after the write started, again after each 80 ms restart
+
+
+def test_eeprom_register_protocol():
+    c = Avr(bytes(8192), eeprom=bytes(range(512 // 2)) * 2)
+    c.io_write(0x1E, 5)
+    c.io_write(0x1C, 0x01)                       # EERE: read
+    assert c.io_read(0x1D) == 5 and c.extra == 4  # the CPU halts for four cycles
+    c.extra = 0
+    c.io_write(0x1D, 0x77)
+    c.io_write(0x1C, 0x02)                       # EEPE without EEMPE: nothing happens
+    assert not c.io_read(0x1C) & 0x02 and c.eeprom[5] == 5
+    c.io_write(0x1C, 0x04)
+    c.io_write(0x1C, 0x02)                       # EEMPE then EEPE inside four cycles: the write starts
+    assert c.io_read(0x1C) & 0x02 and c.extra == 2
+    c.io_write(0x1D, 0x11)                       # busy: the data register is locked
+    assert c.io_read(0x1D) == 0x77
+    c.cycle = c.events["ee"] - 1
+    assert c.io_read(0x1C) & 0x02
+    c.cycle += 1
+    assert not c.io_read(0x1C) & 0x02 and c.eeprom[5] == 0x77
+    c.io_write(0x1C, 0x10 | 0x04)                # EEPM = 01 (erase only), EEMPE
+    c.io_write(0x1C, 0x10 | 0x02)
+    c.cycle = c.events["ee"]
+    assert c.io_read(0x1C) & 0x02 == 0 and c.eeprom[5] == 0xFF
+    c.io_write(0x1C, 0x30 | 0x04)
+    with pytest.raises(Unsupported, match="reserved EEPROM programming mode"):
+        c.io_write(0x1C, 0x30 | 0x02)
+
+
+def test_eeprom_contents_come_from_the_elf_eeprom_section():
+    flash, eeprom = load_image(os.path.join(FIX, "eeprom_initial.elf"))
+    assert eeprom[:2] == bytes([0x12, 0x34]) and eeprom[2] == 0xFF
+    c = Avr(flash, 1_000_000, eeprom=eeprom)
+    c.run(c.cycle_for(0.01))
+    assert [c.read_data(SYMS["eeprom_initial"]["seen"] + i) for i in range(2)] == [0x12, 0x34] and c.io[0x18] & 1
+
+
+def test_timer1_pwm_from_the_pll_clock():
+    c = cpu("timer1_pwm")
+    c.run(c.cycle_for(0.01))
+    a, b = c.pwm_pin(1), c.pwm_pin(4)
+    assert a["duty"] == pytest.approx(50 / 200) and a["hz"] == pytest.approx(4e6 / 200)  # PCK/16 = 4 MHz, OCR1C + 1 = 200
+    assert b["duty"] == pytest.approx(100 / 200)
+    assert c.io_read(0x27) & 0x07 == 0x07  # PCKE, PLLE and PLOCK
+
+
+def test_timer1_complementary_outputs_and_the_pwm_extremes():
+    c = cpu("timer1_complementary", 8_000_000)
+    c.run(c.cycle_for(0.01))
+    a, n = c.pwm_pin(1), c.pwm_pin(0)
+    assert a["duty"] == pytest.approx(62 / 250) and n["duty"] == pytest.approx(1 - 62 / 250) and a["hz"] == pytest.approx(8e6 / 8 / 250)
+    for ocr, duty in ((0, 0.0), (249, 1.0), (250, 1.0)):  # datasheet Table 12-2: OCR1x = 0 holds the pin low, OCR1x = OCR1C high
+        c.io_write(0x2E, ocr)
+        c.cycle += 8 * 250 * 2
+        c.t1_sync()
+        c.io_read(0x2F)
+        assert c.pwm_pin(1)["duty"] == duty
+
+
+def test_timer1_ctc_interrupts_and_flags():
+    c = cpu("timer1_ctc")
+    log = watch(c)
+    c.run(c.cycle_for(0.1))
+    assert c.read_data(SYMS["timer1_ctc"]["compares"]) == 13 and c.read_data(SYMS["timer1_ctc"]["overflows"]) == 0
+    edges = toggles(log, 0)[1:]
+    assert 3.8 < edges[0][0] < 4.0 and all(7.99 < b[0] - a[0] < 8.01 for a, b in zip(edges, edges[1:]))  # 61 ticks to the first match, then every 125
+
+
+def test_timer1_normal_mode_overflow_and_toggling_output():
+    c = cpu("timer1_ovf")
+    c.run(c.cycle_for(0.1))
+    assert c.read_data(SYMS["timer1_ovf"]["overflows"]) == 6  # 256 ticks of 64 µs
+    wave = c.pwm_pin(1)
+    assert wave["duty"] == 0.5 and wave["hz"] == pytest.approx(1e6 / 64 / (2 * 256))
+
+
+def test_timer1_refuses_what_it_does_not_model():
+    for writes in ([(0x2C, 0x80)], [(0x2C, 0x04)], [(0x30, 0x20)]):  # TSM; FOC1A; clear-on-match output outside PWM mode
+        c = Avr(bytes(8192))
+        with pytest.raises(Unsupported):
+            for a, v in writes:
+                c.io_write(a, v)
+    c = Avr(bytes(8192))
+    c.io_write(0x17, 0x03)
+    c.io_write(0x2A, 0x83)  # Timer0 fast PWM on OC0A (PB0)
+    c.io_write(0x33, 0x01)
+    with pytest.raises(Unsupported, match="both drive PB0"):
+        c.io_write(0x30, 0x40 | 0x10 | 0x01)  # Timer1 PWM1A with /OC1A on PB0 as well
+
+
+def test_comparator_output_and_interrupt_modes():
+    volts = {0: 2.0, 1: 3.0}
+    c = cpu("comparator_irq")
+    c.adc_input = lambda bit: volts.get(bit)
+    c.run(c.cycle_for(0.01))
+    assert not c.io_read(0x08) & 0x20  # ACO: AIN0 (2.0 V) is not above AIN1 (3.0 V)
+    volts[0] = 4.0
+    c.after_pin_levels()
+    c.run(c.cycle_for(0.02))
+    events = lambda: c.read_data(SYMS["comparator_irq"]["events"])
+    assert events() == 1 and c.io[0x18] & 0x10 and c.io_read(0x08) & 0x20
+    volts[0] = 1.0                      # a falling output does not trigger the rising-edge mode
+    c.after_pin_levels()
+    c.run(c.cycle_for(0.03))
+    assert events() == 1
+    volts[0] = 4.0
+    c.after_pin_levels()
+    c.run(c.cycle_for(0.04))
+    assert events() == 2
+    with pytest.raises(Unsupported, match="no board is attached"):
+        Avr(bytes(8192)).io_read(0x08)
+
+
+def test_comparator_bandgap_input():
+    c = cpu("comparator_poll")
+    level = {1: 0.8}
+    c.adc_input = lambda bit: level.get(bit)
+    c.run(c.cycle_for(0.01))
+    assert c.io[0x18] >> 4 & 1 == 1    # 1.1 V (ACBG) is above AIN1 = 0.8 V
+    level[1] = 1.5
+    c.comparator_update()
+    c.run(c.cycle_for(0.02))
+    assert c.io[0x18] >> 4 & 1 == 0
+
+
+def test_adc_differential_channels_bipolar():
+    c = cpu("adc_diff")
+    c.adc_input = lambda bit: {4: 2.55, 3: 2.50}.get(bit)  # ADC2 (PB4) - ADC3 (PB3) = +50 mV
+    c.run(c.cycle_for(0.02))
+    assert word(c, "adc_diff", "gain1") == int(0.05 * 512 / 5) and word(c, "adc_diff", "gain20") == int(0.05 * 20 * 512 / 5)
+    c = cpu("adc_diff")
+    c.adc_input = lambda bit: {4: 2.50, 3: 2.55}.get(bit)  # -50 mV: two's complement, floored like the converter
+    c.run(c.cycle_for(0.02))
+    assert word(c, "adc_diff", "gain1") == (-6) & 0x3FF and word(c, "adc_diff", "gain20") == (-103) & 0x3FF
+
+
+def test_adc_temperature_sensor_follows_the_datasheet_table():
+    for celsius, lsb in ((-40, 230), (25, 300), (85, 370)):
+        c = cpu("adc_temp")
+        c.temperature_c = celsius
+        c.adc_input = lambda bit: None
+        c.run(c.cycle_for(0.02))
+        assert word(c, "adc_temp", "reading") == lsb
+    c = cpu("adc_temp")
+    c.temperature_c = 55
+    c.adc_input = lambda bit: None
+    c.run(c.cycle_for(0.02))
+    assert 330 < word(c, "adc_temp", "reading") < 340  # between the 25 °C and 85 °C points
+
+
+def test_adc0_is_the_reset_pin_unless_rstdisbl():
+    for rstdisbl in (False, True):
+        c = Avr(bytes(8192), rstdisbl=rstdisbl)
+        c.adc_input = lambda bit: 1.0
+        c.io_write(0x07, 0b0000)  # ADC0 (PB5)
+        if rstdisbl:
+            c.io_write(0x06, 0x80 | 0x40)
+            assert c.io_read(0x06) & 0x40
+        else:
+            with pytest.raises(Unsupported, match="RESET pin unless the RSTDISBL fuse"):
+                c.io_write(0x06, 0x80 | 0x40)
+
+
+def test_usi_spi_master_transfers_and_pin_waveforms():
+    c = chip("usi_spi_master", usi_input=[0x12, 0x34])
+    log = []
+    c.on_pin_change = lambda: log.append((c.now() * 1e6, c.io[0x18] >> 2 & 1, c.pin_value(1)))
+    c.run(c.cycle_for(0.01))
+    assert [c.read_data(SYMS["usi_spi_master"]["rx"] + i) for i in range(2)] == [0x12, 0x34]
+    assert [(tx, rx) for _, tx, rx in c.usi_log] == [(0xA5, 0x12), (0x3C, 0x34)]
+    assert sum(1 for (_, a, _), (_, b, _) in zip(log, log[1:]) if a != b) == 32       # 16 USCK edges per byte
+    sampled, last_ck = [], 0                                                         # a slave samples DO on the rising edge (SPI mode 0)
+    for _, ck, do in log:
+        if ck == 1 and last_ck == 0:
+            sampled.append(do)
+        last_ck = ck
+    byte = lambda bits: sum(bit << (7 - i) for i, bit in enumerate(bits))
+    assert byte(sampled[:8]) == 0xA5 and byte(sampled[8:16]) == 0x3C
+
+
+def test_usi_software_strobe_shifts_without_touching_usck():
+    c = chip("usi_strobe", usi_input=[0xC3])
+    c.run(c.cycle_for(0.01))
+    assert c.read_data(SYMS["usi_strobe"]["rx"]) == 0xC3 and [(tx, rx) for _, tx, rx in c.usi_log] == [(0x96, 0xC3)]
+    assert not c.io[0x18] & 0x04
+
+
+def test_the_reset_pin_restarts_the_program_after_the_startup_delay():
+    c = chip("reset_boots")
+    c.run(c.cycle_for(0.01))
+    assert c.read_data(SYMS["reset_boots"]["boots"]) == 1 and c.io[0x18] & 1
+    c.set_reset_line(True)
+    c.run(c.cycle_for(0.02))
+    assert c.held and c.pc == 0 and c.mcusr & 0x02 and c.io[0x18] == 0  # EXTRF set; the pins are inputs again
+    c.set_reset_line(False)
+    c.run(c.cycle_for(0.05))
+    assert c.read_data(SYMS["reset_boots"]["boots"]) == 1  # the 64 ms start-up delay has not passed
+    c.run(c.cycle_for(0.1))
+    assert c.read_data(SYMS["reset_boots"]["boots"]) == 2 and c.io[0x18] & 1
+    assert [cause for _, cause in c.resets] == ["external"]
+    flash = load_firmware(os.path.join(FIX, "reset_boots.hex"))
+    ignoring = Avr(flash, rstdisbl=True)
+    ignoring.set_reset_line(True)
+    assert not ignoring.held
+
+
+def test_didr0_disables_the_digital_input_buffer():
+    c = chip("didr_pullup")
+    c.set_inputs([None, None, None, 1, None, None])
+    c.run(c.cycle_for(0.01))
+    assert not c.io[0x18] >> 4 & 1  # PB3 is high, but its buffer is off: it reads 0
+
+
+def test_device_sizes():
+    flash = bytes(2048)
+    c = Avr(flash, device="attiny25")
+    assert c.sram_end == 0x60 + 127 and len(c.eeprom) == 128
+    with pytest.raises(AvrError, match="flash image must be 2048 bytes for the attiny25"):
+        Avr(bytes(8192), device="attiny25")
+    with pytest.raises(AvrError, match="unknown device"):
+        Avr(flash, device="attiny13")
+    with pytest.raises(AvrError, match="outside the attiny25's memory"):
+        c.read_data(0x60 + 128)

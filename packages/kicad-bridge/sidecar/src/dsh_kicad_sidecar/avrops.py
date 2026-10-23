@@ -397,7 +397,10 @@ def decode(cpu: Any, op: int, pc: int) -> Callable[[], int]:
                 return 1
             return f
         if op == 0x95A8:  # WDR
-            return lambda: 1
+            def f():
+                cpu.wdt_reset()
+                return 1
+            return f
         if op == 0x9598:  # BREAK
             return lambda: 1
         if op == 0x95C8:  # LPM (R0 ← Z)
