@@ -390,6 +390,8 @@ def decode(cpu: Any, op: int, pc: int) -> Callable[[], int]:
         if op == 0x9588:  # SLEEP
             def f():
                 if cpu.mcucr & 0x20:  # SE
+                    if (cpu.mcucr >> 3 & 3) == 1 and cpu.adcsra & 0x80:
+                        raise cpu.unsupported("ADC", "the firmware sleeps in ADC noise reduction mode, which starts a conversion by itself; it is not simulated")
                     cpu.sleeping = True
                     cpu.t0_sync()
                 return 1

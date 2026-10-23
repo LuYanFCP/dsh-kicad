@@ -4,7 +4,7 @@
 set -e
 cd "$(dirname "$0")"
 out=..
-for f in contention button_poll button_nopull blink_delay timer_ctc timer_ovf pcint_sleep int0_powerdown uses_adc uses_pwm; do
+for f in contention button_poll button_nopull blink_delay timer_ctc timer_ovf pcint_sleep int0_powerdown adc_threshold adc_read10 adc_irq adc_bandgap uses_adc_diff uses_timer1 uses_usi uses_pwm; do
     avr-gcc -mmcu=attiny85 -Os -Wall -o /tmp/$f.elf $f.c
     avr-objcopy -O ihex -R .eeprom /tmp/$f.elf $out/$f.hex
 done
@@ -17,7 +17,9 @@ python3 - <<'PY'
 import json, subprocess
 syms = {}
 for elf, names in (("/tmp/selftest_O0.elf", ["results"]), ("/tmp/selftest_O1.elf", ["results"]), ("/tmp/selftest_Os.elf", ["results"]), ("/tmp/selftest_O2.elf", ["results"]), ("/tmp/timer_ctc.elf", ["ticks"]), ("/tmp/timer_ovf.elf", ["overflows"]),
-                   ("/tmp/pcint_sleep.elf", ["presses"]), ("/tmp/int0_powerdown.elf", ["wakes"])):
+                   ("/tmp/pcint_sleep.elf", ["presses"]), ("/tmp/int0_powerdown.elf", ["wakes"]),
+                   ("/tmp/adc_threshold.elf", ["last"]), ("/tmp/adc_read10.elf", ["reading"]), ("/tmp/adc_irq.elf", ["reading", "count"]),
+                   ("/tmp/adc_bandgap.elf", ["vs_vcc", "vs_internal"])):
     table = {line.split()[2]: int(line.split()[0], 16) for line in subprocess.check_output(["avr-nm", elf], text=True).splitlines() if len(line.split()) == 3}
     for name in names:
         syms.setdefault(elf.rsplit("/", 1)[1][:-4], {})[name] = table[name] & 0xFFFF

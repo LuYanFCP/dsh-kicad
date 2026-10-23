@@ -197,9 +197,11 @@ def test_power_down_sleep_wakes_on_int0_and_an_external_drive(tmp_path):
 @needs_symbols
 def test_what_is_not_simulated_stops_the_run_and_nothing_after_it_is_passed(tmp_path):
     tb, path = circuit(tmp_path)
-    adc = run(tb, path, "uses_adc", duration="10ms", assertions=[{"led": "D1", "is": "off", "at": "5ms", "name": "after the ADC use"}])
-    assert adc["aborted"]["what"] == "ADC" and "the ADC is not simulated" in adc["aborted"]["reason"]
+    adc = run(tb, path, "uses_adc_diff", duration="10ms", assertions=[{"led": "D1", "is": "off", "at": "5ms", "name": "after the ADC use"}])
+    assert adc["aborted"]["what"] == "ADC" and "differential" in adc["aborted"]["reason"]
     assert adc["assertions"][0]["passed"] is None and "cannot verify" in adc["assertions"][0]["reason"] and adc["passed"] is None
+    timer1 = run(tb, path, "uses_timer1", duration="10ms", assertions=[{"pin": "PB0", "level": "low", "at": "5ms"}])
+    assert timer1["aborted"]["what"] == "Timer1" and timer1["passed"] is None
     pwm = run(tb, path, "uses_pwm", duration="10ms", assertions=[{"pin": "PB0", "level": "low", "at": "5ms"}])
     assert pwm["aborted"]["what"] == "Timer0" and "PWM mode" in pwm["aborted"]["reason"] and pwm["passed"] is None
 
@@ -222,7 +224,7 @@ def test_bad_arguments_name_the_fix(tmp_path):
         ({"stimuli": [{"at": "10ms"}]}, "give exactly one of press"),
         ({"stimuli": [{"at": "500ms", "press": "SW1"}]}, "after the end of the simulation"),
         ({"stimuli": [{"at": "1ms", "drive": "NOWHERE", "level": "low"}]}, "no net named NOWHERE"),
-        ({"stimuli": [{"at": "1ms", "drive": "BTN", "level": "dim"}]}, "level: high, low or release"),
+        ({"stimuli": [{"at": "1ms", "drive": "BTN", "level": "dim"}]}, "drive needs level"),
         ({"assertions": [{"led": "D9", "is": "on", "at": "1ms"}]}, "no LED D9 in the circuit .LEDs: D1"),
         ({"assertions": [{"led": "D1", "at": "1ms", "is": "dim"}]}, "must be on or off"),
         ({"assertions": [{"pin": "PB4", "level": "medium", "at": "1ms"}]}, "level must be high or low"),
@@ -264,3 +266,44 @@ def test_only_simulable_mcus_are_accepted(tmp_path):
     tb.call("edit_schematic", {"path": path, "operations": [{"op": "add_symbol", "lib_id": "RF_Module:ESP32-WROOM-32", "x": 127, "y": 88.9, "reference": "U1", "value": "ESP32-WROOM-32"}]})
     with pytest.raises(ToolError, match="no MCU with a firmware simulator.*only the ATtiny25/45/85"):
         tb.call("simulate_firmware", {"path": path, "firmware": path})
+
+
+def divider(tmp_path, name="adc"):
+    """A 100k/47k divider from a VBAT net to ADC3 (PB3, the BTN net with its switch to ground)."""
+    return circuit(tmp_path, [
+        {"op": "add_symbol", "lib_id": "Device:R", "x": 38.1, "y": 38.1, "reference": "R4", "value": "100k"},
+        {"op": "add_symbol", "lib_id": "Device:R", "x": 38.1, "y": 63.5, "reference": "R5", "value": "47k"},
+        {"op": "connect_pin_to_net", "pin": "R4:1", "net": "VBAT", "kind": "label"}, {"op": "connect_pin_to_net", "pin": "R4:2", "net": "BTN", "kind": "label"},
+        {"op": "connect_pin_to_net", "pin": "R5:1", "net": "BTN", "kind": "label"}, {"op": "connect_pin_to_net", "pin": "R5:2", "net": "GND", "kind": "power"}], name=name)
+
+
+@needs_kicad_cli
+@needs_symbols
+def test_a_battery_monitor_follows_the_divider_the_adc_sees(tmp_path):
+    tb, path = divider(tmp_path)
+    result = run(tb, path, "adc_threshold", duration="100ms", stimuli=[
+        {"at": "10ms", "drive": "VBAT", "level": 7.4, "name": "weak"}, {"at": "30ms", "drive": "VBAT", "level": 9.0, "name": "full"},
+        {"at": "60ms", "press": "SW1", "name": "short"}], assertions=[
+        {"net": "BTN", "min": 2.3, "max": 2.4, "at": "20ms", "name": "7.4 V through the divider is 2.37 V"},
+        {"pin": "PB0", "level": "low", "at": "25ms", "name": "weak battery: LED off"},
+        {"pin": "PB0", "level": "high", "after": "full", "within": "5ms", "name": "full battery: LED on within 5 ms"},
+        {"pin": "PB0", "level": "low", "after": "short", "within": "5ms", "name": "the input shorted to ground reads zero"}])
+    assert result["passed"] is True and verdicts(result) == [True] * 4, result["assertions"]
+    assert not [h for h in result["hazards"] if h["severity"] != "info"]
+
+
+@needs_kicad_cli
+@needs_symbols
+def test_the_adc_on_an_unconnected_input_is_a_floating_hazard(tmp_path):
+    tb, path = circuit(tmp_path)  # BTN has only the open switch: it floats
+    result = run(tb, path, "adc_threshold", duration="20ms", assertions=[{"pin": "PB0", "level": "high", "at": "15ms", "name": "LED on (wrong: nothing is measured)"}])
+    hazard = next(h for h in result["hazards"] if h["rule"] == "floating_input")
+    assert hazard["pin"] == "PB3" and result["passed"] is False
+
+
+@needs_kicad_cli
+@needs_symbols
+def test_an_adc_interrupt_program_costs_almost_nothing(tmp_path):
+    tb, path = divider(tmp_path)
+    result = run(tb, path, "adc_irq", duration="200ms", stimuli=[{"at": "1ms", "drive": "VBAT", "level": 9.0}], assertions=[{"net": "BTN", "min": 2.8, "at": "100ms"}])
+    assert result["passed"] is True and result["instructions"] < 10_000 and result["aborted"] is None

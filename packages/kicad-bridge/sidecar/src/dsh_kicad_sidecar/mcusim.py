@@ -194,10 +194,11 @@ class Board:
                 drivers[bit] = (level, OUT_OHMS)
             elif avr.pin_pullup(bit):
                 sources.append((net, self.vcc, PULLUP_OHMS))
-        for net, level in forced.items():
+        fixed = dict(self.fixed)
+        for net, level in forced.items():  # an external drive is an ideal source (it also overrides a rail)
             if level is not None:
-                sources.append((net, level, 1.0))
-        volts = solve(self.nets, self.fixed, edges, sources)
+                fixed[net] = level
+        volts = solve(self.nets, fixed, edges, sources)
         currents = {}
         for bit, (level, ohms) in drivers.items():
             v = volts.get(self.pins[bit])
@@ -255,14 +256,23 @@ class Run:
         self.times: list[float] = []
         self.hazards: dict[tuple[str, int | str], dict[str, Any]] = {}
         self.undefined: dict[int, float] = {}
+        self.last_volts: dict[str, float | None] = {}
+        avr.vcc_volts = board.vcc
+        avr.adc_input = self.pin_volts
         avr.on_pin_change = self.update
         self.update()
+
+    def pin_volts(self, bit: int) -> float | None:
+        """What the ADC sees on a pin: the solved voltage of its net (None: the net floats)."""
+        net = self.board.pins.get(bit)
+        return None if net is None else self.last_volts.get(net)
 
     def update(self, stamp: float | None = None) -> None:
         """Resolve the board and record the state; ``stamp`` is the exact time of a stimulus (the chip may be a few cycles past it)."""
         avr, board = self.avr, self.board
         result = board.solve(avr, self.closed, self.forced)
         volts = result["volts"]
+        self.last_volts = volts
         levels: list[int | None] = [None] * 6
         for bit, net in board.pins.items():
             if avr.pin_driven(bit):
@@ -457,7 +467,10 @@ def simulate_firmware(netlist: dict[str, Any], mcu_ref: str, provider: dict[str,
         if kind == "drive":
             net = _net_name(board, s["drive"])
             if s.get("level") not in ("high", "low", "release"):
-                raise SimulationError("drive needs level: high, low or release")
+                try:
+                    parse_value(s.get("level"), "level")
+                except SimulationError:
+                    raise SimulationError("drive needs level: high, low, release, or a voltage such as 2.7 or \"3.3V\"") from None
         elif s[kind] not in board.switches:
             raise SimulationError(f"stimulus {s}: no switch {s[kind]} (switches: {', '.join(sorted(board.switches)) or 'none'})")
         if t > end:
@@ -482,7 +495,8 @@ def simulate_firmware(netlist: dict[str, Any], mcu_ref: str, provider: dict[str,
             advance(t)
             if "drive" in s:
                 net = _net_name(board, s["drive"])
-                run.forced[net] = {"high": board.vcc, "low": 0.0, "release": None}[s["level"]]
+                level = s["level"]
+                run.forced[net] = {"high": board.vcc, "low": 0.0, "release": None}[level] if level in ("high", "low", "release") else parse_value(level, "level")
             elif "press" in s:
                 run.closed.add(s["press"])
             elif "release" in s:
@@ -504,6 +518,8 @@ def simulate_firmware(netlist: dict[str, Any], mcu_ref: str, provider: dict[str,
                         "message": f"the firmware reads PB{bit} while net {net} floats (no pull-up, pull-down or driver reaches it): the value is arbitrary",
                         "fix": f"Enable the internal pull-up (PORTB |= 1 << PB{bit}) or add an external pull resistor."})
     for bit, t in sorted(run.undefined.items()):
+        if bit in chip.adc_used:
+            continue  # an analog level on a pin the ADC samples is what it is for
         net = short_name(board.pins[bit])
         hazards.append({"severity": "warning", "rule": "undefined_level", "pin": f"PB{bit}", "net": net, "t": t,
                         "message": f"PB{bit} (net {net}) sits between the logic levels while it is an input (a divider or a weak pull against a switch): it reads unpredictably",

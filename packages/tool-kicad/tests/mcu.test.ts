@@ -151,4 +151,40 @@ describe('kicad_simulate_firmware', () => {
     expect(bad.isError).toBe(true)
     expect(text(bad)).toMatch(/no switch SW9 \(switches: SW1\)/)
   })
+
+  it.runIf(hasKiCadCli())('verifies a battery monitor: a sagging battery on a divider read by the ADC', async () => {
+    const ctx = await bootKiCad([toolKiCad])
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-kicad-adc-'))
+    const path = join(dir, 'b.kicad_sch')
+    await ctx.kicad.run('create_schematic', { path })
+    await ctx.kicad.run('edit_schematic', {
+      path,
+      operations: [
+        { op: 'add_symbol', lib_id: 'MCU_Microchip_ATtiny:ATtiny85-20S', x: 127, y: 88.9, reference: 'U1', value: 'ATtiny85-20S' },
+        { op: 'add_symbol', lib_id: 'Device:R', x: 38.1, y: 38.1, reference: 'R4', value: '100k' },
+        { op: 'add_symbol', lib_id: 'Device:R', x: 38.1, y: 63.5, reference: 'R5', value: '47k' },
+        { op: 'connect_pin_to_net', pin: 'U1:8', net: '+5V', kind: 'power' },
+        { op: 'connect_pin_to_net', pin: 'U1:4', net: 'GND', kind: 'power' },
+        { op: 'connect_pin_to_net', pin: 'R4:1', net: 'VBAT', kind: 'label' },
+        { op: 'connect_pin_to_net', pin: 'R4:2', net: 'SENSE', kind: 'label' },
+        { op: 'connect_pin_to_net', pin: 'R5:1', net: 'SENSE', kind: 'label' },
+        { op: 'connect_pin_to_net', pin: 'R5:2', net: 'GND', kind: 'power' },
+        { op: 'connect_pin_to_net', pin: 'U1:2', net: 'SENSE', kind: 'label' },
+        { op: 'connect_pin_to_net', pin: 'U1:5', net: 'LOWBAT', kind: 'label' },
+      ],
+    })
+    const result = await runTool(ctx, 'kicad_simulate_firmware', {
+      path, firmware: join(SIDECAR_DIR, 'tests/fixtures/avr/adc_threshold.hex'),
+      stimuli: [{ at: '10ms', drive: 'VBAT', level: 7.4, name: 'sag' }, { at: '40ms', drive: 'VBAT', level: 9.0, name: 'charged' }],
+      assertions: [
+        { net: 'SENSE', min: 2.3, max: 2.4, at: '20ms', name: 'the divider gives 2.37 V at 7.4 V' },
+        { pin: 'PB0', level: 'low', at: '30ms', name: 'weak: PB0 low' },
+        { pin: 'PB0', level: 'high', after: 'charged', within: '5ms', name: 'charged: PB0 high within 5 ms' },
+      ],
+    })
+    expect(result.isError).toBeFalsy()
+    const out = text(result)
+    expect(out).toContain('PASSED')
+    expect(out).toContain('✓ charged: PB0 high within 5 ms')
+  })
 })

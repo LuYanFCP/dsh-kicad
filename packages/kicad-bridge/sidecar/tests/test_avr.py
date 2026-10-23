@@ -188,7 +188,8 @@ def test_int0_falling_edge_wakes_power_down_but_a_high_level_does_not():
     assert c.read_data(SYMS["int0_powerdown"]["wakes"]) == 1 and c.io[0x18] & 0x10
 
 
-@pytest.mark.parametrize("name, what, text", [("uses_adc", "ADC", "the ADC is not simulated"), ("uses_pwm", "Timer0", "PWM mode")])
+@pytest.mark.parametrize("name, what, text", [("uses_adc_diff", "ADC", "differential channel"), ("uses_timer1", "Timer1", "Timer1 is not simulated"),
+                                              ("uses_usi", "USI", "USI .I²C/SPI. is not simulated"), ("uses_pwm", "Timer0", "PWM mode")])
 def test_unsupported_peripherals_stop_the_run(name, what, text):
     c = cpu(name)
     with pytest.raises(Unsupported, match=text) as info:
@@ -201,3 +202,83 @@ def test_clock_prescaler_and_time():
     assert c.cycle_for(0.001) == 8000 and c.now() == 0
     c.run(8000)
     assert c.now() == pytest.approx(0.001, abs=1e-6)
+
+
+# ---- the ADC ---------------------------------------------------------------------------------
+def with_adc(name, volts, vcc=5.0):
+    c = cpu(name)
+    c.vcc_volts = vcc
+    c.adc_input = lambda bit: volts.get(bit)
+    return c
+
+
+@pytest.mark.parametrize("volts, counts", [(0.0, 0), (2.5, 512), (3.3, 675), (4.99, 1021), (5.0, 1023), (7.0, 1023)])
+def test_adc_10_bit_reading_against_vcc(volts, counts):
+    c = with_adc("adc_read10", {4: volts})  # ADC2 is PB4
+    c.run(c.cycle_for(0.01))
+    assert c.read_data(SYMS["adc_read10"]["reading"]) | c.read_data(SYMS["adc_read10"]["reading"] + 1) << 8 == counts  # ADC = V * 1024 / Vref, floored, at most 1023
+
+
+def test_adc_reference_follows_the_supply():
+    c = with_adc("adc_read10", {4: 1.65}, vcc=3.3)
+    c.run(c.cycle_for(0.01))
+    assert c.read_data(SYMS["adc_read10"]["reading"]) | c.read_data(SYMS["adc_read10"]["reading"] + 1) << 8 == 512
+
+
+def test_adc_left_adjusted_threshold_firmware():
+    levels = {3: 3.0}  # ADC3 is PB3
+    c = with_adc("adc_threshold", levels)
+    c.run(c.cycle_for(0.02))
+    assert c.read_data(SYMS["adc_threshold"]["last"]) == 614 >> 2 and c.io[0x18] & 1  # above half of Vcc: PB0 lit
+    levels[3] = 2.0
+    c.run(c.cycle_for(0.04))
+    assert c.read_data(SYMS["adc_threshold"]["last"]) == 409 >> 2 and not c.io[0x18] & 1
+
+
+def test_adc_bandgap_channel_and_internal_reference():
+    c = with_adc("adc_bandgap", {})
+    c.run(c.cycle_for(0.02))
+    word = lambda sym: c.read_data(SYMS["adc_bandgap"][sym]) | c.read_data(SYMS["adc_bandgap"][sym] + 1) << 8
+    assert word("vs_vcc") == int(1.1 / 5 * 1024) and word("vs_internal") == 1023  # 1.1 V against Vcc, and against itself (full scale)
+
+
+def test_adc_conversion_takes_13_adc_clocks_and_25_for_the_first():
+    flash = bytes([0x00, 0xC0] * 4096)[:8192]  # rjmp .+0 forever is c000; use NOPs so the program counter does not matter here
+    c = Avr(bytes(8192), 1_000_000)  # all zero words: nops
+    c.vcc_volts = 5.0
+    c.adc_input = lambda bit: 2.5
+    c.io_write(0x07, 0x03)                  # ADMUX: ADC3
+    c.io_write(0x06, 0x80 | 0x40 | 0x06)    # ADEN, ADSC, /64
+    assert c.io_read(0x06) & 0x40
+    c.cycle += 25 * 64 - 1
+    assert c.io_read(0x06) & 0x40 and not c.io_read(0x06) & 0x10   # still converting
+    c.cycle += 1
+    assert not c.io_read(0x06) & 0x40 and c.io_read(0x06) & 0x10   # done, ADIF set
+    assert c.io_read(0x04) | c.io_read(0x05) << 8 == 512
+    c.io_write(0x06, 0x80 | 0x40 | 0x10 | 0x06)                    # ADIF cleared by writing 1; start another
+    assert not c.io_read(0x06) & 0x10
+    c.cycle += 13 * 64 - 1
+    assert c.io_read(0x06) & 0x40
+    c.cycle += 1
+    assert not c.io_read(0x06) & 0x40
+
+
+def test_adc_free_running_interrupt_wakes_the_chip_and_costs_nothing_while_asleep():
+    c = with_adc("adc_irq", {3: 2.5})
+    c.run(c.cycle_for(0.1))
+    count = c.read_data(SYMS["adc_irq"]["count"])
+    assert 115 <= count <= 125  # one conversion per 13 * 64 cycles after the first
+    assert c.read_data(SYMS["adc_irq"]["reading"]) | c.read_data(SYMS["adc_irq"]["reading"] + 1) << 8 == 512
+    assert c.instructions < count * 40 and c.sleeping
+
+
+def test_adc_on_a_floating_pin_is_a_hazard_and_reads_zero():
+    c = with_adc("adc_read10", {4: None})
+    c.run(c.cycle_for(0.01))
+    assert 4 in c.floating_reads and c.read_data(SYMS["adc_read10"]["reading"]) == 0
+
+
+def test_adc_without_a_board_is_refused():
+    c = cpu("adc_read10")
+    with pytest.raises(Unsupported, match="no board is attached"):
+        c.run(c.cycle_for(0.01))
