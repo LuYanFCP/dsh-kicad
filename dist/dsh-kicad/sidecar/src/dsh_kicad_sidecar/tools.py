@@ -22,13 +22,17 @@ from .placement import OPERATIONS as PLACE_OPERATIONS, apply as apply_placement,
 from .board3d import QUALITIES, SIDES, export_glb, render_args, render_name
 from .autoroute import DEFAULT_TIMEOUT, MAX_TIMEOUT, autoroute
 from .freerouting import Cancelled, locate as locate_freerouting
-from . import mcu, simmodels, spice
+from . import mcu, mcusim, simmodels, spice
 from .spice import SimulationError
 from .footprints import FootprintLibraries, default_footprint_dirs
 from . import geometry
 from .symbols import LibraryError, SymbolLibraries, default_symbol_dirs
 
 __all__ = ["ToolError", "Toolbox", "TOOL_SPECS"]
+
+
+def Circuit_components(netlist):
+    return {c["reference"]: c for c in netlist["components"]}
 
 
 class ToolError(Exception):
@@ -223,6 +227,28 @@ TOOL_SPECS: list[ToolSpec] = [
                        "What the firmware needs from the board, e.g. [{net: 'VBAT_SENSE', needs: 'adc1'}, {pin: 'U1:IO25', needs: ['output', 'dac']}]. "
                        "needs: output (not input-only), input, adc (adc1 or adc2), adc1 (usable with WiFi), adc2, dac, touch, boot_free (not a strapping pin).")}},
                   ["path"])),
+    ToolSpec("simulate_firmware", "Run a firmware image on the simulated MCU against the schematic and judge assertions on what the board does: "
+             "press buttons, watch pins, nets and LEDs over time. Covered: ATtiny25/45/85 (a Python AVR core: GPIO, pin-change and INT0 interrupts, "
+             "Timer0 normal/CTC, sleep). Anything else the firmware uses (ADC, Timer1, USI, PWM, EEPROM, watchdog) stops the run with the reason and the "
+             "assertions after that point are cannot-verify, never passed. The board is a DC resistor network with switches, the chip's pin drivers and "
+             "pull-ups; LEDs report whether they would light; other parts are open circuits and are listed. Also reports hazards: a floating input read, "
+             "an output fighting a switch (overcurrent). Firmware: .hex or .elf built by the user; this tool never builds or invents one.",
+             _obj({"path": SCH,
+                   "firmware": {"type": "string", "description": "Intel HEX or ELF file for the ATtiny."},
+                   "reference": {"type": "string", "description": "The MCU (default: the one covered by a simulator)."},
+                   "duration": {"type": ["number", "string"], "description": "Simulated time, e.g. 200ms (default 100ms, at most 5 s)."},
+                   "clock_hz": {"type": ["number", "string"], "description": "CPU clock after any CKDIV8 (default 1000000: the factory 8 MHz RC with the divide-by-8 fuse)."},
+                   "stimuli": {"type": "array", "items": {"type": "object"}, "description": (
+                       "What happens to the board: {at: '50ms', press|release|toggle: 'SW1', name?} or {at, drive: 'NET', level: high|low|release}. "
+                       "name lets an assertion refer to that moment.")},
+                   "assertions": {"type": "array", "items": {"type": "object"}, "description": (
+                       "What must hold: subject {led: 'D2', is: on|off} | {pin: 'PB4', level: high|low} | {net: 'NAME', level: high|low} | {net, min?, max?} (volts); "
+                       "when {at: '40ms'} | {after: 'press', within: '20ms'} (holds at some moment) | {from: '50ms', to: '150ms'} (holds throughout). "
+                       "after/from/to take a time or a stimulus name. name? labels it.")},
+                   "initial": {"type": "object", "description": "Switch states at the start, e.g. {SW1: 'closed'} (default all open)."},
+                   "vcc": {"type": ["number", "string"], "description": "Supply voltage (default: from the supply net name, else 5)."},
+                   "led_vf": {"type": ["number", "string"], "description": "Forward voltage at which an LED counts as lit (default 1.8)."},
+                   "timeout": {"type": "number", "default": 60, "description": "Wall-clock seconds."}}, ["path", "firmware"])),
     ToolSpec("export_netlist", "Write a netlist file with kicad-cli.",
              _obj({"path": SCH, "output": {"type": "string"},
                    "format": {"type": "string", "enum": ["kicadsexpr", "kicadxml", "cadstar", "orcadpcb2", "spice", "spicemodel", "pads", "allegro"], "default": "kicadsexpr"}},
@@ -627,6 +653,32 @@ class Toolbox:
             result = mcu.check_schematic(self.cli.netlist(path), os.path.dirname(path), args.get("requirements"), args.get("reference"))
         except (mcu.McuError, SimulationError) as exc:
             raise ToolError(str(exc)) from exc
+        return {"path": path, **result}
+
+    def tool_simulate_firmware(self, args):
+        path = self.resolve(args["path"], ".kicad_sch")
+        firmware = self.resolve(args["firmware"])
+        netlist = self.cli.netlist(path)
+        providers = [p for p in mcu.load_providers(os.path.dirname(path)) if p.get("simulator") == "avr-attiny85"]
+        candidates = []
+        for ref, comp in sorted(Circuit_components(netlist).items()):
+            if args.get("reference") and ref != args["reference"]:
+                continue
+            provider = next((p for p in providers if mcu._patterns(p["match"], comp.get("lib_id", ""), comp.get("value", ""))), None)
+            if provider:
+                candidates.append((ref, provider))
+        if not candidates:
+            raise ToolError("no MCU with a firmware simulator in this schematic: only the ATtiny25/45/85 can be simulated" +
+                            (f" (there is no {args['reference']} among them)" if args.get("reference") else "") +
+                            "; kicad_check_mcu still checks the wiring of the MCUs it covers")
+        ref, provider = candidates[0]
+        try:
+            result = mcusim.simulate_firmware(netlist, ref, provider, firmware, args.get("stimuli"), args.get("assertions"), args.get("duration"), args.get("clock_hz"),
+                                              args.get("vcc"), args.get("led_vf"), args.get("initial"), timeout=float(args.get("timeout", 60)))
+        except (SimulationError, mcu.McuError) as exc:
+            raise ToolError(str(exc)) from exc
+        if len(candidates) > 1:
+            result["notes"].append(f"{len(candidates)} simulable MCUs found; simulated {ref} (pass reference to choose)")
         return {"path": path, **result}
 
     def tool_sim_model(self, args):

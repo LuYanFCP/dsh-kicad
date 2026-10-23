@@ -10,7 +10,7 @@
 
 | 能力 | 说明 |
 |---|---|
-| **工具**（`kicad_*`） | `doctor`（检查本机是否就绪：kicad-cli 与 KiCad 8+、库、Python，附修复方法和安装命令）、`read_schematic`、`list_components`、`get_symbol_pins`、`list_nets`（KiCad 网表）、`search_symbols`（已安装符号库）、`erc`、`drc`、`render`（SVG；模型支持图片时附带 PNG 图片；电路板可从任意方向和角度渲染 KiCad 的 3D 视图）、`export`（网表/BOM）、`simulate`（用 ngspice 做 SPICE 验证：工作点、瞬态与交流分析，需求以断言形式由工具依据数值判定，见[仿真验证](#仿真验证)）、`sim_model`（列出模型文件或目录中的 SPICE 模型及其引脚）、`check_mcu`（静态检查微控制器的接线，见[MCU 接线检查](#mcu-接线检查)）、`export_fab`（Gerber/钻孔/坐标/BOM 压缩包及 3D 预览，KiCad 判定电路板就绪前拒绝导出，见[制板输出](#制板输出)）、`fab_preset`（JLCPCB/PCBWay 设计规则）、`create_schematic`，以及原子批量编辑 `edit_schematic`（增删移动元件、设置值/封装/属性、导线、标签、电源符号、结点、不连接标记、绕开元件和其他网络自动布线的引脚到引脚导线、引脚到网络的连接，以及按功能分区布局：带标题的功能块框、连同导线一起移动元件或整个功能块、图纸尺寸与标题栏）；电路板有 `read_pcb`（外框、层、设计规则与网络类、带 courtyard 和焊盘网络的封装、覆铜区、DRC 给出的未布线数）和原子批量编辑 `edit_pcb`（板框与安装孔、移动/翻面/锁定封装、写入 `.kicad_pro` 的设计规则与网络类、以焊盘为端点的走线、过孔、覆铜区、禁布区、丝印文字与位号、按 uuid 删除）；以及 `update_pcb`——无界面地完成 KiCad 的“从原理图更新 PCB”：新板使用 KiCad 的空板、默认叠层和占位板框；已有电路板上已放置的封装保持原位，新封装放在板框旁等待布局，网络、值和字段随原理图更新；无法上板时拒绝执行并列出需修正的 `REF:PIN`，结果由 KiCad 的原理图一致性检查判定；以及 `autoroute`——用 [Freerouting](https://github.com/freerouting/freerouting) 自动布线，保留手工布好（锁定）的和已有的走线，重新填充覆铜，以 KiCad 的 DRC 结论为准（见[布线](#布线)）。未修改的文件文本逐字节保持不变。 |
+| **工具**（`kicad_*`） | `doctor`（检查本机是否就绪：kicad-cli 与 KiCad 8+、库、Python，附修复方法和安装命令）、`read_schematic`、`list_components`、`get_symbol_pins`、`list_nets`（KiCad 网表）、`search_symbols`（已安装符号库）、`erc`、`drc`、`render`（SVG；模型支持图片时附带 PNG 图片；电路板可从任意方向和角度渲染 KiCad 的 3D 视图）、`export`（网表/BOM）、`simulate`（用 ngspice 做 SPICE 验证：工作点、瞬态与交流分析，需求以断言形式由工具依据数值判定，见[仿真验证](#仿真验证)）、`sim_model`（列出模型文件或目录中的 SPICE 模型及其引脚）、`check_mcu`（静态检查微控制器的接线，见[MCU 接线检查](#mcu-接线检查)）、`simulate_firmware`（让 ATtiny 固件在板子上运行，见[固件与电路板联合仿真](#固件与电路板联合仿真)）、`export_fab`（Gerber/钻孔/坐标/BOM 压缩包及 3D 预览，KiCad 判定电路板就绪前拒绝导出，见[制板输出](#制板输出)）、`fab_preset`（JLCPCB/PCBWay 设计规则）、`create_schematic`，以及原子批量编辑 `edit_schematic`（增删移动元件、设置值/封装/属性、导线、标签、电源符号、结点、不连接标记、绕开元件和其他网络自动布线的引脚到引脚导线、引脚到网络的连接，以及按功能分区布局：带标题的功能块框、连同导线一起移动元件或整个功能块、图纸尺寸与标题栏）；电路板有 `read_pcb`（外框、层、设计规则与网络类、带 courtyard 和焊盘网络的封装、覆铜区、DRC 给出的未布线数）和原子批量编辑 `edit_pcb`（板框与安装孔、移动/翻面/锁定封装、写入 `.kicad_pro` 的设计规则与网络类、以焊盘为端点的走线、过孔、覆铜区、禁布区、丝印文字与位号、按 uuid 删除）；以及 `update_pcb`——无界面地完成 KiCad 的“从原理图更新 PCB”：新板使用 KiCad 的空板、默认叠层和占位板框；已有电路板上已放置的封装保持原位，新封装放在板框旁等待布局，网络、值和字段随原理图更新；无法上板时拒绝执行并列出需修正的 `REF:PIN`，结果由 KiCad 的原理图一致性检查判定；以及 `autoroute`——用 [Freerouting](https://github.com/freerouting/freerouting) 自动布线，保留手工布好（锁定）的和已有的走线，重新填充覆铜，以 KiCad 的 DRC 结论为准（见[布线](#布线)）。未修改的文件文本逐字节保持不变。 |
 | **策略** | 设计修改走 dsh 审批（`ask`）；写操作被单调 guard 限制在会话工作目录内；每次成功修改后自动运行 KiCad ERC（原理图）或 DRC（电路板修改或应用板厂预设后，先重新填充覆铜；`update_pcb` 之后另报原理图一致性问题数）并把结论附加到工具结果；系统提示中注入稳定的 KiCad 工作规范，以及动态的“当前目录中的 KiCad 工程 + 最近一次 ERC/DRC”上下文。 |
 | **技能** | `kicad-agent-workflow`、`kicad-erc-triage`、`kicad-drc-triage`、`kicad-schematic-design`、`kicad-simulate`、`kicad-mcu-check`。 |
 | **命令** | `/erc`、`/drc`、`/bom`、`/simulate`、`/mcu-check`（不经过模型，作用于工程根设计）、`/kicad-fab`（制板压缩包）、`/kicad-render`、`/kicad-doctor`（环境检查）、`/kicad-install`（安装 KiCad 或 Freerouting 自动布线器，见下文）。 |
@@ -144,6 +144,17 @@ Freerouting（GPL-3.0）是独立的 Java 程序，不随插件分发。`/kicad-
 - **无法验证，绝不算通过。**没有 provider 覆盖的 MCU（ESP32-S3、STM32、ATtiny、引脚名表里读不懂的自定义符号等）会报告为 `cannot_verify` 并说明原因；此时结论既不是通过也不是失败，对应的需求显示为 `?`。
 - **provider 就是数据。**`mcu_data/esp32.json`（经典 ESP32 模块和 PICO，以及 `attiny85.json`：8 脚 ATtiny25/45/85；表格由 Espressif 的数据手册和硬件设计指南转录而来，请以你所用型号的数据手册为准核对）声明它覆盖哪些符号，以及每个 GPIO 的关键属性。工程可以在原理图旁放 `<系列>.mcu.json` 添加自己的系列（`id`、`name`、`match`、`gpio_pin_pattern`、`gpios`，结构和规则相同；同一 `id` 以工程文件为准）。`/mcu-check` 不经过模型，对工程原理图做检查；`kicad-mcu-check` 技能指导 agent 先定需求、再修复检查结果。
 
+### 固件与电路板联合仿真
+
+`kicad_simulate_firmware {path, firmware, stimuli?, assertions?, duration?, clock_hz?}` 在模拟的 **ATtiny25/45/85** 上运行固件镜像，芯片按原理图连接，并判定电路板的行为，于是“按下按钮后 20 ms 内 LED 亮起”这类需求会被验证，而不是被假设。固件是你自己构建的 `.hex` 或 `.elf`（avr-gcc、PlatformIO、Arduino）；插件不会构建、编写或编造固件。
+
+- **芯片**是一个纯 Python 的小型 AVR 模拟器（无依赖）：ATtiny85 指令集、GPIO 端口、引脚变化中断和 INT0、Timer0 的普通与 CTC 模式、空闲与掉电休眠、时钟分频。它用 avr-gcc 在四个优化等级下编译的程序校验过（各种位宽的算术、移位、排序、CRC、跳转表、函数指针、flash 读取、软浮点，与 Python 中的同一计算对比），也校验了已知时序（`_delay_ms`、CTC 周期、溢出次数）。
+- **电路板**是一个直流网络：电阻、开关、引脚驱动器（40 Ω）和内部上拉（35 kΩ）、电源轨和地。场景按下按钮就闭合对应开关；芯片读到的是网络给这个引脚的电平；LED 报告它是否会亮（正向压降 1.8 V）。这些网络上的晶体管、IC 等其他元件按开路处理，并列在结果里。
+- **场景。** `stimuli`：`{at: "30ms", press: "SW1", name: "press"}`、`release`、`toggle`，或 `{at, drive: "NET", level: high|low|release}`。`assertions`：一个对象（`{led: "D2", is: "on"}`、`{pin: "PB4", level: "high"}`、`{net, level}`、以伏特计的 `{net, min, max}`）加一个时刻（`at`、`{after: "press", within: "20ms"}`、全程成立的 `{from, to}`）。每条都在仿真得到的时间线上判定。
+- **不请自来的隐患。**固件读取了悬空输入（按钮没有上拉）、输出与开关对抗（过流：驱动器经闭合的开关接地是 125 mA）、输入卡在逻辑电平之间。
+- **它不会假装的。**ADC、Timer1、USI（I²C/SPI）、Timer 的 PWM 模式、EEPROM 和看门狗都不仿真。固件用到其中之一时，运行会带着原因和时间停下；之后时刻的断言是 `cannot verify`，绝不算通过，总体结论也一样。其他 MCU（ESP32、STM32、其他 AVR）会被拒绝；`kicad_check_mcu` 仍会检查它们的接线。
+- 速度：休眠的芯片几乎不耗时；忙等循环每秒可执行数百万条指令（开发机上，1 MHz 下忙等闪灯仿真 1 s 用了 0.1 s），并有墙钟 `timeout`。`clock_hz` 默认 1 MHz（出厂 8 MHz RC 加除以 8 的熔丝）：请设成固件构建时使用的时钟。
+
 ### 3D 视图
 
 打开 `.kicad_pcb`，在“交互 / SVG”旁选择 **3D**，相当于 KiCad 的“视图 → 3D 查看器”。Host 把电路板导出为二进制 glTF 场景（`kicad-cli pcb export glb`，含铜皮、焊盘、覆铜、阻焊、丝印和封装的 3D 模型），存放在 `<工程>/.dsh-kicad/render/<板名>/`，按电路板内容缓存，再次打开即时显示。查看器通过 `remote.workspaceFiles` 读取（原始字节；超过 dsh 32 MiB 整文件上限时按 2 MiB 分段读取），用 three.js 显示：拖动旋转，右键或 Shift 拖动平移，滚轮缩放；**顶面 / 底面 / 前 / 后 / 左 / 右 / 轴测**、**透视 / 正交**、**元件**开关和**重置视角**。电路板变化时（agent 修改、KiCad 保存）静置一秒后重新导出，视角保持不变；导出失败时保留上一次的模型并说明原因。
@@ -230,7 +241,7 @@ python packages/kicad-bridge/sidecar/tests/make_fixtures.py   # 用编辑器本�
 
 - 电路板可以从原理图创建并保持同步（`kicad_update_pcb`），可以自动布局（`auto_place`）、编辑、自动布线（`kicad_autoroute`）、检查和制板输出（`kicad_export_fab`）。自动布线需要另行安装 Java 25+ 与 Freerouting（见[布线](#布线)）；高密度电路板可能留下少数未布通的连接，由 agent 手工补齐。
 - 仿真只覆盖 ngspice 能做的模拟行为；没有 SPICE 模型的元件会被排除，固件、信号完整性、EMC 与热行为不在仿真范围内。普通的 Device:LED / Device:D 符号需要设置 `Sim.Device`（见[仿真验证](#仿真验证)）。
-- MCU 检查是静态的，且只覆盖有 provider 的系列（目前是经典 ESP32 和 8 脚 ATtiny25/45/85）；不仿真固件行为（见 #31）。ESP32 引脚表的准确性取决于转录，请对照具体模块的数据手册核对。
+- 固件仿真只支持 ATtiny25/45/85，覆盖 GPIO、引脚变化/INT0 中断、Timer0 普通/CTC 模式和休眠；它不是通用的 AVR 模拟器，其余一律拒绝（见[固件与电路板联合仿真](#固件与电路板联合仿真)）。除此之外 MCU 检查是静态的，且只覆盖有 provider 的系列（目前是经典 ESP32 和 8 脚 ATtiny25/45/85）；不仿真固件行为（见 #31）。ESP32 引脚表的准确性取决于转录，请对照具体模块的数据手册核对。
 - 板厂预设数值读取自 JLCPCB 与 PCBWay 的工艺能力页面（2026-10-21），之后可能变化。JLC 的 CPL 保留 KiCad 的旋转角度，JLCPCB 预览中可能需要逐个修正。
 - 编辑覆盖元件、属性、导线、标签、电源符号、结点与不连接标记；不支持创建层次图纸、总线与图形元素。
 - 新放置在子图纸中的元件只向上查找一层根图纸来确定 instance 路径；更深的层次可能需要 KiCad 重新标注。

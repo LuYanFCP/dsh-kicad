@@ -160,6 +160,48 @@ export interface McuCheckValue {
   providers: string[]
 }
 
+export interface FirmwareAssertion {
+  name: string
+  when: string
+  passed: boolean | null
+  value?: string | number | null
+  reason?: string
+  first_at?: number
+}
+
+export interface FirmwareHazard {
+  severity: 'error' | 'warning' | 'info'
+  rule: string
+  pin: string
+  net: string
+  t: number
+  message: string
+  fix?: string
+}
+
+/** What kicad_simulate_firmware returns (the sidecar's simulate_firmware tool). */
+export interface FirmwareRun {
+  path: string
+  mcu: string
+  firmware: string
+  clock_hz: number
+  vcc: number
+  duration: number
+  cycles: number
+  instructions: number
+  simulated_to: number
+  aborted: { what: string, reason: string, t: number } | null
+  assertions: FirmwareAssertion[]
+  hazards: FirmwareHazard[]
+  timeline: Array<{ t: number, pins: Record<string, string>, leds: Record<string, boolean>, switches: string[] }>
+  /** true: every assertion held and no error hazard; false: one failed or an error hazard; null: something could not be verified. */
+  passed: boolean | null
+  switches: string[]
+  leds: string[]
+  pins: Record<string, string>
+  notes: string[]
+}
+
 /** What kicad_autoroute returns (the sidecar's autoroute tool). */
 export interface AutorouteValue {
   pcb: string
@@ -375,6 +417,33 @@ export function formatMcu(v: McuCheckValue): string {
       lines.push(`  ${mark} ${r.target} needs ${r.needs.join(' + ')}${r.pin ? ` (${r.pin})` : ''}${r.reason ? `: ${r.reason}` : ''}`)
     }
   }
+  return lines.join('\n')
+}
+
+const ms = (t: number): string => `${Number((t * 1000).toPrecision(4))} ms`
+
+/** The firmware run as the model reads it: the verdict, each assertion, what stopped the run, the hazards and the board's story. */
+export function formatFirmware(v: FirmwareRun): string {
+  const verdict = v.passed === null ? 'CANNOT VERIFY' : v.passed ? 'PASSED' : 'FAILED'
+  const lines = [`Firmware ${v.firmware.split('/').pop()} on ${v.mcu} (${eng(v.clock_hz)}Hz, ${v.vcc} V), ${ms(v.simulated_to)} of ${ms(v.duration)} simulated, ${v.instructions} instructions: ${verdict}.`]
+  if (v.aborted) lines.push(`Stopped at ${ms(v.aborted.t)}: ${v.aborted.reason}. What the firmware does after that is not simulated, so assertions about later times cannot be verified.`)
+  for (const a of v.assertions) {
+    const mark = a.passed === null ? '?' : a.passed ? '✓' : '✗'
+    lines.push(`${mark} ${a.name} (${a.when})${a.reason ? `: ${a.reason}` : ''}`)
+  }
+  for (const h of v.hazards) {
+    const mark = h.severity === 'error' ? '✗' : h.severity === 'warning' ? '!' : 'i'
+    lines.push(`${mark} ${h.severity}${h.pin ? ` ${h.pin}` : ''}${h.t ? ` at ${ms(h.t)}` : ''}: ${h.message}${h.fix ? ` → ${h.fix}` : ''}`)
+  }
+  if (v.timeline.length) {
+    lines.push(`Board over time (${v.timeline.length} change(s); pins ${Object.entries(v.pins).map(([p, n]) => `${p}=${n}`).join(', ')}):`)
+    for (const e of v.timeline.slice(0, 14)) {
+      const leds = Object.entries(e.leds).map(([k, on]) => `${k} ${on ? 'on' : 'off'}`)
+      lines.push(`  ${ms(e.t)}: ${Object.entries(e.pins).map(([p, s]) => `${p} ${s}`).join(', ')}${leds.length ? `; ${leds.join(', ')}` : ''}${e.switches.length ? `; closed: ${e.switches.join(', ')}` : ''}`)
+    }
+    if (v.timeline.length > 14) lines.push(`  … ${v.timeline.length - 14} more`)
+  }
+  lines.push(...v.notes)
   return lines.join('\n')
 }
 

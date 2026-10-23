@@ -164,6 +164,30 @@ function formatMcu(v) {
   }
   return lines.join("\n");
 }
+var ms = (t) => `${Number((t * 1e3).toPrecision(4))} ms`;
+function formatFirmware(v) {
+  const verdict = v.passed === null ? "CANNOT VERIFY" : v.passed ? "PASSED" : "FAILED";
+  const lines = [`Firmware ${v.firmware.split("/").pop()} on ${v.mcu} (${eng(v.clock_hz)}Hz, ${v.vcc} V), ${ms(v.simulated_to)} of ${ms(v.duration)} simulated, ${v.instructions} instructions: ${verdict}.`];
+  if (v.aborted) lines.push(`Stopped at ${ms(v.aborted.t)}: ${v.aborted.reason}. What the firmware does after that is not simulated, so assertions about later times cannot be verified.`);
+  for (const a of v.assertions) {
+    const mark = a.passed === null ? "?" : a.passed ? "\u2713" : "\u2717";
+    lines.push(`${mark} ${a.name} (${a.when})${a.reason ? `: ${a.reason}` : ""}`);
+  }
+  for (const h of v.hazards) {
+    const mark = h.severity === "error" ? "\u2717" : h.severity === "warning" ? "!" : "i";
+    lines.push(`${mark} ${h.severity}${h.pin ? ` ${h.pin}` : ""}${h.t ? ` at ${ms(h.t)}` : ""}: ${h.message}${h.fix ? ` \u2192 ${h.fix}` : ""}`);
+  }
+  if (v.timeline.length) {
+    lines.push(`Board over time (${v.timeline.length} change(s); pins ${Object.entries(v.pins).map(([p, n]) => `${p}=${n}`).join(", ")}):`);
+    for (const e of v.timeline.slice(0, 14)) {
+      const leds = Object.entries(e.leds).map(([k, on]) => `${k} ${on ? "on" : "off"}`);
+      lines.push(`  ${ms(e.t)}: ${Object.entries(e.pins).map(([p, s]) => `${p} ${s}`).join(", ")}${leds.length ? `; ${leds.join(", ")}` : ""}${e.switches.length ? `; closed: ${e.switches.join(", ")}` : ""}`);
+    }
+    if (v.timeline.length > 14) lines.push(`  \u2026 ${v.timeline.length - 14} more`);
+  }
+  lines.push(...v.notes);
+  return lines.join("\n");
+}
 function formatAutoroute(v) {
   const fr = v.freerouting;
   const router = fr.version ? `Freerouting ${fr.version}` : "Freerouting";
@@ -307,6 +331,7 @@ var TOOL_ACCESS = {
   kicad_simulate: "read",
   kicad_sim_model: "read",
   kicad_check_mcu: "read",
+  kicad_simulate_firmware: "read",
   kicad_export: "write",
   kicad_export_fab: "write",
   kicad_fab_preset: "write",
@@ -333,6 +358,7 @@ var PATH_ARGUMENTS = {
   kicad_simulate: ["path", "output_dir", "spec"],
   kicad_sim_model: ["path"],
   kicad_check_mcu: ["path"],
+  kicad_simulate_firmware: ["path", "firmware"],
   kicad_export: ["path", "output"],
   kicad_export_fab: ["pcb", "output_dir"],
   kicad_fab_preset: ["path"],
@@ -613,6 +639,39 @@ function apply(ctx, config = {}) {
       isConcurrencySafe: () => true,
       async execute(args, exec) {
         return await ctx.kicad.run("check_mcu", { ...args, path: at(exec, args.path) }, exec.signal);
+      }
+    }),
+    defineTool({
+      name: "kicad_simulate_firmware",
+      description: [
+        'Run a firmware image on the simulated MCU against the schematic and judge what the board does, so "press the button, the LED lights" is checked rather than assumed. The tool decides; report its verdict.',
+        "Covered: the 8-pin ATtiny25/45/85 (a Python AVR core: GPIO, pin-change and INT0 interrupts, Timer0 in normal and CTC mode, idle and power-down sleep). Anything else the firmware uses (ADC, Timer1, USI/I\xB2C, PWM, EEPROM, the watchdog) stops the run with the reason, and assertions about later times come back CANNOT VERIFY, never passed. Other MCUs: this tool refuses; kicad_check_mcu still checks their wiring.",
+        "The firmware is a .hex or .elf the user built (avr-gcc, PlatformIO, Arduino); this tool never builds, writes or invents one. Without one, say that firmware behaviour could not be verified.",
+        "The board is a DC network: resistors, closed switches, the chip's pin drivers and internal pull-ups, rails and ground. LEDs report whether they would light (forward voltage 1.8 V); transistors, ICs and anything else on those nets are open circuits and are listed in the result.",
+        `stimuli: [{at: "30ms", press: "SW1", name: "press"}, {at: "70ms", release: "SW1"}, {at, toggle: "SW1"}, {at, drive: "NET", level: "high"|"low"|"release"}]. assertions: subject {led: "D2", is: "on"|"off"} | {pin: "PB4", level: "high"|"low"} | {net: "NAME", level: ...} | {net, min?, max?} in volts; when {at: "40ms"} | {after: "press", within: "20ms"} (it becomes true in the window) | {from: "35ms", to: "69ms"} (true throughout). Use the user's timing requirements as the windows.`,
+        "Also reports hazards without being asked: a floating input the firmware reads (a button without a pull-up), an output fighting a switch (overcurrent), a level stuck between the thresholds.",
+        "duration defaults to 100 ms (at most 5 s); clock_hz to 1000000 (the factory 8 MHz RC with CKDIV8). A sleeping chip costs nothing to simulate; a busy loop costs wall-clock time."
+      ].join(" "),
+      parameters: {
+        path: SCH,
+        firmware: { type: "string", required: true, description: "Path to the Intel HEX or ELF firmware." },
+        reference: { type: "string", description: "The MCU, e.g. U1 (default: the simulable one)." },
+        duration: { type: "string", description: 'Simulated time, e.g. "200ms".' },
+        clock_hz: { type: "number", description: "CPU clock in Hz after any fuse divider (default 1000000)." },
+        stimuli: { type: "array", items: { type: "object", additionalProperties: true, properties: { at: { type: "string", required: true } } }, description: "What happens to the board and when." },
+        assertions: { type: "array", items: { type: "object", additionalProperties: true }, description: "What must hold." },
+        initial: { type: "object", additionalProperties: true, description: 'Switch states at the start, e.g. {"SW1": "closed"} (default all open).' },
+        vcc: { type: "number", description: "Supply voltage (default: from the supply net name, else 5)." },
+        led_vf: { type: "number", description: "Forward voltage at which an LED counts as lit (default 1.8)." },
+        timeout: { type: "number", description: "Wall-clock seconds (default 60)." }
+      },
+      output: {
+        schema: { type: "json" },
+        render: (_args, value) => [{ type: "text", text: formatFirmware(value) }]
+      },
+      async execute(args, exec) {
+        const seconds = Math.min(Math.max(Number(args.timeout ?? 60), 1), 600);
+        return await ctx.kicad.run("simulate_firmware", { ...args, path: at(exec, args.path), firmware: at(exec, args.firmware) }, exec.signal, { timeoutMs: seconds * 1e3 + 3e4 });
       }
     }),
     defineTool({
@@ -935,6 +994,7 @@ export {
   formatEdit,
   formatFab,
   formatFabGate,
+  formatFirmware,
   formatJson,
   formatMcu,
   formatPreset,
