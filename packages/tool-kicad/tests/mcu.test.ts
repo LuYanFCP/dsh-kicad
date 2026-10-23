@@ -79,6 +79,8 @@ const firmwareRun = (over: Partial<FirmwareRun> = {}): FirmwareRun => ({
   ],
   hazards: [{ severity: 'warning', rule: 'floating_input', pin: 'PB3', net: 'BTN', t: 0.000015, message: 'the firmware reads PB3 while net BTN floats', fix: 'Enable the internal pull-up.' }],
   timeline: [{ t: 0, pins: { PB4: 'in' }, leds: { D1: 0 }, switches: [] }, { t: 0.030006, pins: { PB4: 'out-high' }, leds: { D1: 1 }, switches: ['SW1'] }, { t: 0.04, pins: { PB0: 'pwm 25% 61Hz' }, leds: { D2: 0.254 }, switches: [] }],
+  eeprom: { changed: { 0: 3 }, writes: [{ t: 0.0035, address: 0, value: 3 }] }, usi_transfers: [{ t: 0.000132, tx: 0xA5, rx: 0x12 }],
+  scenario: { path: '/p/b.fw.json', loaded: ['assertions', 'stimuli'], saved: false },
   passed: false, switches: ['SW1'], leds: ['D1'], pins: { PB3: 'BTN', PB4: 'LEDDRV' }, notes: ['the supply voltage is not in the net name or the vcc argument: assumed 5 V'],
   ...over,
 })
@@ -92,6 +94,9 @@ describe('formatFirmware', () => {
     expect(out).toContain('! warning PB3 at 0.015 ms: the firmware reads PB3 while net BTN floats → Enable the internal pull-up.')
     expect(out).toContain('30.01 ms: PB4 out-high; D1 on; closed: SW1')
     expect(out).toContain('40 ms: PB0 pwm 25% 61Hz; D2 25%')
+    expect(out).toContain('EEPROM at the end: [0] = 3 (1 write(s)).')
+    expect(out).toContain('USI transfers: 0.132 ms sent 0xA5 received 0x12.')
+    expect(out).toContain('Scenario from /p/b.fw.json (assertions, stimuli).')
     expect(out).toContain('assumed 5 V')
   })
 
@@ -187,5 +192,44 @@ describe('kicad_simulate_firmware', () => {
     const out = text(result)
     expect(out).toContain('PASSED')
     expect(out).toContain('✓ charged: PB0 high within 5 ms')
+  })
+
+  it.runIf(hasKiCadCli())('saves the firmware scenario next to the schematic and runs it again from there', async () => {
+    const ctx = await bootKiCad([toolKiCad])
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-kicad-fwspec-'))
+    const path = join(dir, 'b.kicad_sch')
+    await ctx.kicad.run('create_schematic', { path })
+    await ctx.kicad.run('edit_schematic', {
+      path,
+      operations: [
+        { op: 'add_symbol', lib_id: 'MCU_Microchip_ATtiny:ATtiny85-20S', x: 127, y: 88.9, reference: 'U1', value: 'ATtiny85-20S' },
+        { op: 'add_symbol', lib_id: 'Switch:SW_Push', x: 50.8, y: 76.2, reference: 'SW1', value: 'BTN' },
+        { op: 'add_symbol', lib_id: 'Device:R', x: 76.2, y: 38.1, reference: 'R1', value: '330' },
+        { op: 'add_symbol', lib_id: 'Device:LED', x: 76.2, y: 63.5, reference: 'D1', value: 'LED' },
+        { op: 'connect_pin_to_net', pin: 'U1:8', net: '+5V', kind: 'power' },
+        { op: 'connect_pin_to_net', pin: 'U1:4', net: 'GND', kind: 'power' },
+        { op: 'connect_pin_to_net', pin: 'SW1:1', net: 'BTN', kind: 'label' },
+        { op: 'connect_pin_to_net', pin: 'SW1:2', net: 'GND', kind: 'power' },
+        { op: 'connect_pin_to_net', pin: 'U1:2', net: 'BTN', kind: 'label' },
+        { op: 'connect_pin_to_net', pin: 'U1:3', net: 'LEDDRV', kind: 'label' },
+        { op: 'connect_pin_to_net', pin: 'R1:1', net: 'LEDDRV', kind: 'label' },
+        { op: 'connect_pin_to_net', pin: 'R1:2', net: 'LEDMID', kind: 'label' },
+        { op: 'connect_pin_to_net', pin: 'D1:2', net: 'LEDMID', kind: 'label' },
+        { op: 'connect_pin_to_net', pin: 'D1:1', net: 'GND', kind: 'power' },
+      ],
+    })
+    const firmware = join(SIDECAR_DIR, 'tests/fixtures/avr/button_poll.hex')
+    const first = await runTool(ctx, 'kicad_simulate_firmware', {
+      path, firmware, duration: '60ms', save_scenario: true,
+      stimuli: [{ at: '30ms', press: 'SW1', name: 'press' }],
+      assertions: [{ led: 'D1', is: 'off', at: '20ms' }, { led: 'D1', is: 'on', after: 'press', within: '1ms' }],
+    })
+    expect(first.isError).toBeFalsy()
+    expect(text(first)).toContain('PASSED')
+    expect(text(first)).toContain('Scenario saved to')
+    const again = await runTool(ctx, 'kicad_simulate_firmware', { path })
+    expect(again.isError).toBeFalsy()
+    expect(text(again)).toContain('PASSED')
+    expect(text(again)).toMatch(/Scenario from .*b\.fw\.json \(/)
   })
 })

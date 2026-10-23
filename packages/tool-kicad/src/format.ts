@@ -201,6 +201,12 @@ export interface FirmwareRun {
   leds: string[]
   pins: Record<string, string>
   notes: string[]
+  device?: string
+  resets?: Array<{ t: number, cause: string }>
+  eeprom?: { changed: Record<string, number>, writes: Array<{ t: number, address: number, value: number }> }
+  usi_transfers?: Array<{ t: number, tx: number, rx: number }>
+  /** The scenario file this run read and/or wrote. */
+  scenario?: { path: string, loaded: string[], saved: boolean }
 }
 
 /** What kicad_autoroute returns (the sidecar's autoroute tool). */
@@ -444,6 +450,10 @@ export function formatFirmware(v: FirmwareRun): string {
     }
     if (v.timeline.length > 14) lines.push(`  … ${v.timeline.length - 14} more`)
   }
+  if (v.eeprom && Object.keys(v.eeprom.changed).length) lines.push(`EEPROM at the end: ${Object.entries(v.eeprom.changed).map(([a, x]) => `[${a}] = ${x}`).join(', ')} (${v.eeprom.writes.length} write(s)).`)
+  if (v.usi_transfers?.length) lines.push(`USI transfers: ${v.usi_transfers.slice(0, 8).map(x => `${ms(x.t)} sent 0x${x.tx.toString(16).toUpperCase().padStart(2, '0')} received 0x${x.rx.toString(16).toUpperCase().padStart(2, '0')}`).join('; ')}${v.usi_transfers.length > 8 ? ` … ${v.usi_transfers.length - 8} more` : ''}.`)
+  if (v.scenario?.loaded.length) lines.push(`Scenario from ${v.scenario.path} (${v.scenario.loaded.join(', ')}).`)
+  if (v.scenario?.saved) lines.push(`Scenario saved to ${v.scenario.path}.`)
   lines.push(...v.notes)
   return lines.join('\n')
 }
