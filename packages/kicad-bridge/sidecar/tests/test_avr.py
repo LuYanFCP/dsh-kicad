@@ -189,7 +189,7 @@ def test_int0_falling_edge_wakes_power_down_but_a_high_level_does_not():
 
 
 @pytest.mark.parametrize("name, what, text", [("uses_adc_diff", "ADC", "differential channel"), ("uses_timer1", "Timer1", "Timer1 is not simulated"),
-                                              ("uses_usi", "USI", "USI .I²C/SPI. is not simulated"), ("uses_pwm", "Timer0", "PWM mode")])
+                                              ("uses_usi", "USI", "USI .I²C/SPI. is not simulated"), ("uses_mode5", "Timer0", "waveform mode 5")])
 def test_unsupported_peripherals_stop_the_run(name, what, text):
     c = cpu(name)
     with pytest.raises(Unsupported, match=text) as info:
@@ -282,3 +282,73 @@ def test_adc_without_a_board_is_refused():
     c = cpu("adc_read10")
     with pytest.raises(Unsupported, match="no board is attached"):
         c.run(c.cycle_for(0.01))
+
+
+# ---- Timer0 PWM ------------------------------------------------------------------------------
+def test_fast_pwm_outputs_both_polarities():
+    c = cpu("pwm_fast")
+    c.run(c.cycle_for(0.005))
+    a, b = c.pwm_pin(0), c.pwm_pin(1)
+    assert a["duty"] == pytest.approx(65 / 256) and a["hz"] == pytest.approx(1e6 / 64 / 256)  # OCR0A + 1 of 256 ticks
+    assert b["duty"] == pytest.approx(1 - 192 / 256)  # inverting
+    assert c.pwm_pin(2) is None
+
+
+def test_phase_correct_pwm_duty_and_frequency():
+    c = cpu("pwm_pc")
+    c.run(c.cycle_for(0.005))
+    p = c.pwm_pin(0)
+    assert p["duty"] == pytest.approx(128 / 255) and p["hz"] == pytest.approx(1e6 / 8 / 510)
+
+
+def test_ctc_toggle_is_a_square_wave():
+    c = cpu("pwm_ctc_toggle")
+    c.run(c.cycle_for(0.005))
+    p = c.pwm_pin(0)
+    assert p["duty"] == 0.5 and p["hz"] == pytest.approx(1e6 / 64 / (2 * 125))
+
+
+def test_a_pwm_pin_must_be_an_output_to_count():
+    flash = bytes(8192)
+    c = Avr(flash)
+    c.io_write(0x2A, 0x83)  # COM0A1, WGM01, WGM00
+    c.io_write(0x33, 0x03)
+    c.io_write(0x29, 100)
+    assert c.pwm_pin(0) is None  # DDRB bit 0 is still an input
+    c.io_write(0x17, 0x01)
+    assert c.pwm_pin(0)["duty"] == pytest.approx(101 / 256)
+
+
+def test_the_fade_raises_the_duty_with_the_overflow_interrupt():
+    c = cpu("pwm_fade")
+    seen = []
+    for ms in (50, 150, 300, 500, 600):
+        c.run(c.cycle_for(ms / 1000))
+        seen.append(c.pwm_pin(0)["duty"])
+    assert seen == sorted(seen) and seen[0] < 0.15 and seen[-1] == pytest.approx(253 / 256)  # up to OCR0A = 252
+    assert c.read_data(SYMS["pwm_fade"]["n"]) == int(0.6 / 0.002048) & 0xFF  # one overflow per 2.048 ms at clk/8
+
+
+def test_the_arduino_style_millis_overflow_runs_in_fast_pwm_mode():
+    c = cpu("millis_blink")
+    log = watch(c)
+    c.run(c.cycle_for(0.5))
+    edges = toggles(log, 2)[1:]
+    gaps = [b[0] - a[0] for a, b in zip(edges, edges[1:])]
+    assert len(edges) >= 4 and all(98.2 < g < 98.5 for g in gaps)  # six overflows of 16.384 ms
+
+
+def test_phase_correct_timer_flags_and_counter():
+    c = Avr(bytes(8192))
+    c.io_write(0x2A, 0x01)  # WGM00: phase-correct, no outputs
+    c.io_write(0x29, 100)   # OCR0A
+    c.io_write(0x33, 0x01)  # clk/1
+    c.cycle += 100
+    assert c.io_read(0x32) == 100 and not c.io_read(0x38) & 0x10   # counting up, no match flag yet: it is set on leaving the match
+    c.cycle += 1
+    assert c.io_read(0x38) & 0x10
+    c.io_write(0x38, 0x10)
+    c.cycle += 255 - 100 + 5                                       # over the top: counting down
+    assert c.io_read(0x32) == 510 - (101 + 160)  # past the top, counting down
+    c.cycle += 300
+    assert c.io_read(0x38) & 0x02                                  # TOV0 at BOTTOM

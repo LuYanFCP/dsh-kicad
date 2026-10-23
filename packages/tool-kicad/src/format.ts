@@ -193,7 +193,8 @@ export interface FirmwareRun {
   aborted: { what: string, reason: string, t: number } | null
   assertions: FirmwareAssertion[]
   hazards: FirmwareHazard[]
-  timeline: Array<{ t: number, pins: Record<string, string>, leds: Record<string, boolean>, switches: string[] }>
+  /** leds: the fraction of the time each LED would light (1 on, 0 off, between: dimmed by PWM). */
+  timeline: Array<{ t: number, pins: Record<string, string>, leds: Record<string, number>, switches: string[], pwm?: Record<string, { duty: number, hz: number }> }>
   /** true: every assertion held and no error hazard; false: one failed or an error hazard; null: something could not be verified. */
   passed: boolean | null
   switches: string[]
@@ -438,7 +439,7 @@ export function formatFirmware(v: FirmwareRun): string {
   if (v.timeline.length) {
     lines.push(`Board over time (${v.timeline.length} change(s); pins ${Object.entries(v.pins).map(([p, n]) => `${p}=${n}`).join(', ')}):`)
     for (const e of v.timeline.slice(0, 14)) {
-      const leds = Object.entries(e.leds).map(([k, on]) => `${k} ${on ? 'on' : 'off'}`)
+      const leds = Object.entries(e.leds).map(([k, f]) => `${k} ${f >= 0.99 ? 'on' : f <= 0.01 ? 'off' : `${Math.round(f * 100)}%`}`)
       lines.push(`  ${ms(e.t)}: ${Object.entries(e.pins).map(([p, s]) => `${p} ${s}`).join(', ')}${leds.length ? `; ${leds.join(', ')}` : ''}${e.switches.length ? `; closed: ${e.switches.join(', ')}` : ''}`)
     }
     if (v.timeline.length > 14) lines.push(`  … ${v.timeline.length - 14} more`)

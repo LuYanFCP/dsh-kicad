@@ -1,6 +1,7 @@
-"""A small ATtiny25/45/85 simulator: the AVR instruction set, the GPIO port, pin-change and INT0 interrupts, Timer0 (normal and CTC)
-the ADC (single-ended, Vcc / 1.1 V / 2.56 V / AREF reference) and sleep. It is not a general AVR emulator. What it does not model it refuses
-(``Unsupported``): a firmware that touches Timer1, the USI, EEPROM, the watchdog, differential ADC channels or a PWM mode cannot be verified
+"""A small ATtiny25/45/85 simulator: the AVR instruction set, the GPIO port, pin-change and INT0 interrupts, Timer0 (normal, CTC,
+phase-correct and fast PWM, with the OC0A/OC0B output pins as duty cycle and frequency), the ADC (single-ended, Vcc / 1.1 V / 2.56 V / AREF
+reference) and sleep. It is not a general AVR emulator. What it does not model it refuses
+(``Unsupported``): a firmware that touches Timer1, the USI, EEPROM, the watchdog, differential ADC channels or Timer0 mode 5 cannot be verified
 here, and a wrong verdict is worse than none.
 
 Pure Python, no dependencies. The board around the chip (what is wired to the pins) is not here: the owner sets
@@ -177,6 +178,8 @@ class Avr:
         # timer 0
         self.t0_last = 0  # cycle up to which timer 0 has been advanced
         self.t0_psc = 0   # CPU cycles into the current prescaler period
+        self.t0_pos = 0   # phase-correct mode: position in the 510-tick up/down cycle
+        self._pwm_signature: tuple[Any, Any] = (None, None)
         self.t0_next = 1 << 62
         self.tcnt0 = 0
         self.ocr0a = 0
@@ -242,6 +245,9 @@ class Avr:
         return not (self.io[DDRB] >> bit & 1) and bool(self.io[PORTB] >> bit & 1) and not (self.mcucr & 0x40)
 
     def pin_out_level(self, bit: int) -> int:
+        pwm = self.pwm_pin(bit)
+        if pwm is not None:  # a timer output overrides PORTB; as a level it is the one that holds longer
+            return int(pwm["duty"] >= 0.5)
         return self.io[PORTB] >> bit & 1
 
     def pin_value(self, bit: int) -> int:
@@ -360,6 +366,7 @@ class Avr:
             before = (self.io[PORTB], self.io[DDRB])
             self.io[a] = v & 0x3F
             if (self.io[PORTB], self.io[DDRB]) != before:
+                self._pwm_signature = (self.pwm_pin(0), self.pwm_pin(1))
                 self.pin_config_changed()
         elif a == PINB:  # writing a 1 toggles the PORTB bit
             self.io[PORTB] ^= v & 0x3F
@@ -519,27 +526,72 @@ class Avr:
     def t0_divisor(self) -> int:
         return PRESCALERS.get(self.tccr0b & 7, 0)
 
+    def t0_mode(self) -> int:
+        """WGM02:0: 0 normal, 1 phase-correct PWM, 2 CTC, 3 fast PWM, 7 fast PWM with TOP = OCR0A."""
+        return (self.tccr0a & 3) | ((self.tccr0b >> 3 & 1) << 2)
+
+    def t0_check(self, tccr0a: int, tccr0b: int) -> None:
+        mode = (tccr0a & 3) | ((tccr0b >> 3 & 1) << 2)
+        if mode not in (0, 1, 2, 3, 7):
+            raise self.unsupported("Timer0", f"the firmware selects Timer0 waveform mode {mode} (phase-correct PWM with TOP = OCR0A); "
+                                             "normal, CTC, phase-correct PWM, fast PWM and fast PWM with TOP = OCR0A are simulated")
+        if (tccr0b & 7) in (6, 7):
+            raise self.unsupported("Timer0", "the firmware clocks Timer0 from the T0 pin; an external clock is not simulated")
+        for name, com in (("OC0A", tccr0a >> 6 & 3), ("OC0B", tccr0a >> 4 & 3)):
+            if com == 1 and not (mode in (0, 2) or (mode == 7 and name == "OC0A")):
+                raise self.unsupported("Timer0", f"the firmware sets COM0{name[-1]} = 1 (toggle) in a mode where it is reserved")
+            if com in (2, 3) and mode not in (1, 3, 7):
+                raise self.unsupported("Timer0", f"the firmware sets {name} to clear/set on compare match outside PWM mode; only toggling and PWM outputs are simulated")
+
     def t0_write(self, a: int, v: int) -> None:
         self.t0_sync()
         if a == TCCR0A:
-            if (v & 3) not in (0, 2):
-                raise self.unsupported("Timer0", "the firmware uses a Timer0 PWM mode (analogWrite-style output); only normal and CTC mode are simulated")
-            if v & 0xF0:
-                raise self.unsupported("Timer0", "the firmware drives an output pin from Timer0 (COM0x); timer output pins are not simulated")
+            self.t0_check(v, self.tccr0b)
             self.tccr0a = v
         elif a == TCCR0B:
-            if v & 0x08:
-                raise self.unsupported("Timer0", "the firmware uses a Timer0 WGM02 mode; only normal and CTC mode are simulated")
-            if (v & 7) in (6, 7):
-                raise self.unsupported("Timer0", "the firmware clocks Timer0 from the T0 pin; an external clock is not simulated")
-            self.tccr0b = v & 0xC7
+            self.t0_check(self.tccr0a, v)
+            self.tccr0b = v & 0xCF
+            if self.t0_mode() == 1 and self.t0_pos == 0:
+                self.t0_pos = self.tcnt0
         elif a == TCNT0:
             self.tcnt0 = v
+            self.t0_pos = v
         elif a == OCR0A:
             self.ocr0a = v
         elif a == OCR0B:
             self.ocr0b = v
         self.t0_plan()
+        self.pwm_changed()
+
+    # -- the output compare pins: a toggle or a PWM waveform, as a duty cycle and a frequency --
+    def pwm_pin(self, bit: int) -> dict[str, float] | None:
+        """``{"duty", "hz"}`` for PB0 (OC0A) / PB1 (OC0B) while Timer0 drives it, else None."""
+        if bit not in (0, 1) or not self.pin_driven(bit):
+            return None
+        com = (self.tccr0a >> (6 if bit == 0 else 4)) & 3
+        div = self.t0_divisor()
+        if not com or not div:
+            return None
+        mode = self.t0_mode()
+        ocr = self.ocr0a if bit == 0 else self.ocr0b
+        clk = self.clock_hz / div  # timer ticks per second
+        if com == 1:  # toggle on compare match
+            period = 512 if mode == 0 else 2 * (self.ocr0a + 1)
+            return {"duty": 0.5, "hz": clk / period}
+        top = self.ocr0a if mode == 7 else 0xFF
+        if mode == 1:
+            duty, hz = (min(ocr, top) / top if top else 0.0), clk / (2 * top)
+        else:  # fast PWM: high for OCR + 1 of TOP + 1 ticks (always high at OCR >= TOP)
+            duty, hz = (1.0 if ocr >= top else (ocr + 1) / (top + 1)), clk / (top + 1)
+        return {"duty": duty if com == 2 else 1.0 - duty, "hz": hz}
+
+    def pwm_changed(self) -> None:
+        signature = (self.pwm_pin(0), self.pwm_pin(1))
+        if signature != self._pwm_signature:
+            self._pwm_signature = signature
+            if any(signature) and self.pcmsk & 3 and self.gimsk & 0x20:
+                raise self.unsupported("Timer0", "the firmware enables a pin-change interrupt on a Timer0 PWM output pin, whose edges are not simulated")
+            self.pin_config_changed()
 
     def t0_sync(self) -> None:
         """Advance Timer 0 to the current cycle."""
@@ -550,11 +602,18 @@ class Avr:
             return
         total = self.t0_psc + elapsed
         ticks, self.t0_psc = divmod(total, div)
-        ctc = (self.tccr0a & 3) == 2
+        if ticks <= 0:
+            return
+        mode = self.t0_mode()
+        if mode == 1:
+            self.t0_sync_phase_correct(ticks)
+            return
+        reset_at_top = mode in (2, 7)
+        tov_value = self.ocr0a if mode == 7 else 0xFF
         while ticks > 0:
             # ticks until the counter reaches a value that matters (a compare value or the top), in one jump when possible
             t = self.tcnt0
-            targets = [self.ocr0a, self.ocr0b, 0xFF]
+            targets = [self.ocr0a, self.ocr0b, tov_value]
             gap = min((x - t) & 0xFF for x in targets)  # 0: the counter sits on a value whose leaving sets a flag
             if gap > 0:
                 step = min(ticks, gap)
@@ -566,10 +625,24 @@ class Avr:
                 self.tifr |= 0x10
             if t == self.ocr0b:
                 self.tifr |= 0x08
-            if t == 0xFF:
+            if t == tov_value:
                 self.tifr |= 0x02
-            self.tcnt0 = 0 if (ctc and t == self.ocr0a) else (t + 1) & 0xFF
+            self.tcnt0 = 0 if (reset_at_top and t == self.ocr0a) else (t + 1) & 0xFF
             ticks -= 1
+
+    def t0_positions(self) -> dict[int, list[int]]:
+        """Phase-correct counting runs 0..255..1 (510 ticks): where, in that cycle, each flag is set."""
+        def both(ocr: int) -> list[int]:
+            return sorted({(ocr + 1) % 510, (511 - ocr) % 510})  # the tick that leaves the matching value, going up and going down
+        return {0x10: both(self.ocr0a), 0x08: both(self.ocr0b), 0x02: [0]}
+
+    def t0_sync_phase_correct(self, ticks: int) -> None:
+        p = self.t0_pos
+        for flag, positions in self.t0_positions().items():
+            if any(((pos - p - 1) % 510) < ticks for pos in positions):
+                self.tifr |= flag
+        self.t0_pos = (p + ticks) % 510
+        self.tcnt0 = self.t0_pos if self.t0_pos <= 255 else 510 - self.t0_pos
 
     @property
     def sleeping_power_down(self) -> bool:
@@ -581,16 +654,24 @@ class Avr:
         self.t0_next = 1 << 62
         if not div or not (self.timsk & 0x1A):
             return
-        ctc = (self.tccr0a & 3) == 2
+        mode = self.t0_mode()
         best = None
-        for enabled, target in ((0x10, self.ocr0a), (0x08, self.ocr0b), (0x02, 0xFF)):
-            if not self.timsk & enabled:
-                continue
-            gap = (target - self.tcnt0) & 0xFF
-            ticks_to_leave = gap + 1  # the flag is set on the tick that leaves the value
-            if ctc and enabled == 0x02 and self.tcnt0 <= self.ocr0a != 0xFF:
-                continue  # the counter restarts at OCR0A before it can reach 0xFF
-            best = ticks_to_leave if best is None else min(best, ticks_to_leave)
+        if mode == 1:
+            for flag, positions in self.t0_positions().items():
+                if self.timsk & flag:
+                    for pos in positions:
+                        ticks = (pos - self.t0_pos - 1) % 510 + 1
+                        best = ticks if best is None else min(best, ticks)
+        else:
+            reset_at_top = mode in (2, 7)
+            tov_value = self.ocr0a if mode == 7 else 0xFF
+            for enabled, target in ((0x10, self.ocr0a), (0x08, self.ocr0b), (0x02, tov_value)):
+                if not self.timsk & enabled:
+                    continue
+                if reset_at_top and enabled == 0x02 and mode == 2 and self.tcnt0 <= self.ocr0a != 0xFF:
+                    continue  # the counter restarts at OCR0A before it can reach 0xFF
+                ticks = ((target - self.tcnt0) & 0xFF) + 1  # the flag is set on the tick that leaves the value
+                best = ticks if best is None else min(best, ticks)
         if best is not None:
             self.t0_next = self.t0_last + max(1, best * div - self.t0_psc)
 

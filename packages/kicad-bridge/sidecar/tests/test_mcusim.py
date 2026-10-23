@@ -202,8 +202,8 @@ def test_what_is_not_simulated_stops_the_run_and_nothing_after_it_is_passed(tmp_
     assert adc["assertions"][0]["passed"] is None and "cannot verify" in adc["assertions"][0]["reason"] and adc["passed"] is None
     timer1 = run(tb, path, "uses_timer1", duration="10ms", assertions=[{"pin": "PB0", "level": "low", "at": "5ms"}])
     assert timer1["aborted"]["what"] == "Timer1" and timer1["passed"] is None
-    pwm = run(tb, path, "uses_pwm", duration="10ms", assertions=[{"pin": "PB0", "level": "low", "at": "5ms"}])
-    assert pwm["aborted"]["what"] == "Timer0" and "PWM mode" in pwm["aborted"]["reason"] and pwm["passed"] is None
+    mode5 = run(tb, path, "uses_mode5", duration="10ms", assertions=[{"pin": "PB0", "level": "low", "at": "5ms"}])
+    assert mode5["aborted"]["what"] == "Timer0" and "waveform mode 5" in mode5["aborted"]["reason"] and mode5["passed"] is None
 
 
 @needs_kicad_cli
@@ -307,3 +307,73 @@ def test_an_adc_interrupt_program_costs_almost_nothing(tmp_path):
     tb, path = divider(tmp_path)
     result = run(tb, path, "adc_irq", duration="200ms", stimuli=[{"at": "1ms", "drive": "VBAT", "level": 9.0}], assertions=[{"net": "BTN", "min": 2.8, "at": "100ms"}])
     assert result["passed"] is True and result["instructions"] < 10_000 and result["aborted"] is None
+
+
+def pwm_led(tmp_path, name="pwm"):
+    """A second LED with its resistor on PB0 (the PWM output PWMOUT)."""
+    return circuit(tmp_path, [
+        {"op": "add_symbol", "lib_id": "Device:R", "x": 101.6, "y": 38.1, "reference": "R6", "value": "330"},
+        {"op": "add_symbol", "lib_id": "Device:LED", "x": 101.6, "y": 63.5, "reference": "D2", "value": "LED"},
+        {"op": "connect_pin_to_net", "pin": "U1:5", "net": "PWMOUT", "kind": "label"}, {"op": "connect_pin_to_net", "pin": "R6:1", "net": "PWMOUT", "kind": "label"},
+        {"op": "connect_pin_to_net", "pin": "R6:2", "net": "PWMLED", "kind": "label"}, {"op": "connect_pin_to_net", "pin": "D2:2", "net": "PWMLED", "kind": "label"},
+        {"op": "connect_pin_to_net", "pin": "D2:1", "net": "GND", "kind": "power"}], name=name)
+
+
+@needs_kicad_cli
+@needs_symbols
+def test_fast_pwm_duty_frequency_average_voltage_and_led_brightness(tmp_path):
+    tb, path = pwm_led(tmp_path)
+    result = run(tb, path, "pwm_fast", duration="20ms", assertions=[
+        {"pin": "PB0", "duty": 0.254, "tol": 0.005, "at": "10ms"}, {"pin": "PB0", "freq": 61.04, "tol_pct": 1, "at": "10ms"},
+        {"pin": "PB1", "duty": 0.25, "tol": 0.005, "at": "10ms", "name": "OC0B is inverting"},
+        {"led": "D2", "min": 0.24, "max": 0.27, "at": "10ms", "name": "the LED is lit a quarter of the time"},
+        {"net": "PWMOUT", "min": 1.2, "max": 1.35, "at": "10ms", "name": "the average voltage is a quarter of 5 V"},
+        {"led": "D2", "is": "on", "at": "10ms", "name": "on (wrong: it is dimmed)"},
+        {"pin": "PB0", "level": "high", "at": "10ms", "name": "high (wrong: it is PWM)"}])
+    assert verdicts(result) == [True] * 5 + [False, False], result["assertions"]
+    assert "dim 25%" in result["assertions"][5]["reason"] and "pwm 25% at 61 Hz" in result["assertions"][6]["reason"]
+    assert result["timeline"][-1]["pwm"]["PB0"]["duty"] == pytest.approx(0.2539, abs=1e-4) and "pwm 25% 61Hz" in result["timeline"][-1]["pins"]["PB0"]
+
+
+@needs_kicad_cli
+@needs_symbols
+def test_phase_correct_and_toggle_waveforms(tmp_path):
+    tb, path = pwm_led(tmp_path)
+    pc = run(tb, path, "pwm_pc", duration="10ms", assertions=[{"pin": "PB0", "duty": 0.502, "tol": 0.003, "at": "5ms"}, {"pin": "PB0", "freq": 245.1, "tol_pct": 1, "at": "5ms"},
+                                                           {"led": "D2", "min": 0.49, "max": 0.51, "at": "5ms"}])
+    assert verdicts(pc) == [True] * 3
+    toggle = run(tb, path, "pwm_ctc_toggle", duration="10ms", assertions=[{"pin": "PB0", "duty": 0.5, "tol": 0.001, "at": "5ms"}, {"pin": "PB0", "freq": 62.5, "tol_pct": 0.1, "at": "5ms"}])
+    assert verdicts(toggle) == [True] * 2
+
+
+@needs_kicad_cli
+@needs_symbols
+def test_a_fade_brightens_over_time_with_the_overflow_interrupt(tmp_path):
+    tb, path = pwm_led(tmp_path)
+    result = run(tb, path, "pwm_fade", duration="600ms", assertions=[
+        {"led": "D2", "max": 0.03, "at": "3ms", "name": "dark at the start"},
+        {"led": "D2", "min": 0.16, "max": 0.22, "at": "100ms"}, {"led": "D2", "min": 0.53, "max": 0.60, "at": "300ms"},
+        {"led": "D2", "min": 0.95, "at": "580ms", "name": "full at the end"},
+        {"led": "D2", "min": 0.9, "after": "0ms", "within": "600ms", "name": "it reaches 90 % brightness"}])
+    assert result["passed"] is True and verdicts(result) == [True] * 5, result["assertions"]
+
+
+@needs_kicad_cli
+@needs_symbols
+def test_the_arduino_millis_pattern_keeps_time(tmp_path):
+    tb, path = circuit(tmp_path, [{"op": "connect_pin_to_net", "pin": "U1:7", "net": "BLINK", "kind": "label"}])
+    result = run(tb, path, "millis_blink", duration="400ms", assertions=[
+        {"pin": "PB2", "level": "low", "at": "50ms"}, {"pin": "PB2", "level": "high", "at": "120ms"}, {"pin": "PB2", "level": "low", "at": "220ms"}, {"pin": "PB2", "level": "high", "at": "310ms"}])
+    assert verdicts(result) == [True] * 4, result["assertions"]
+
+
+@needs_kicad_cli
+@needs_symbols
+def test_pwm_assertion_arguments(tmp_path):
+    tb, path = pwm_led(tmp_path)
+    with pytest.raises(ToolError, match="use pin"):
+        run(tb, path, "pwm_fast", assertions=[{"net": "PWMOUT", "duty": 0.5, "at": "1ms"}])
+    with pytest.raises(ToolError, match="on or off .or give min/max"):
+        run(tb, path, "pwm_fast", assertions=[{"led": "D2", "is": "dim", "at": "1ms"}])
+    steady = run(tb, path, "button_poll", duration="10ms", assertions=[{"pin": "PB4", "duty": 0.0, "at": "5ms", "name": "a steady low pin has duty 0"}, {"pin": "PB4", "freq": 100, "at": "5ms"}])
+    assert verdicts(steady) == [True, False]  # a steady pin has no frequency

@@ -78,7 +78,7 @@ const firmwareRun = (over: Partial<FirmwareRun> = {}): FirmwareRun => ({
     { name: 'LED D1 is off', when: 'at 20ms', passed: false, value: 'on', reason: 'it was on at 20 ms, expected off' },
   ],
   hazards: [{ severity: 'warning', rule: 'floating_input', pin: 'PB3', net: 'BTN', t: 0.000015, message: 'the firmware reads PB3 while net BTN floats', fix: 'Enable the internal pull-up.' }],
-  timeline: [{ t: 0, pins: { PB4: 'in' }, leds: { D1: false }, switches: [] }, { t: 0.030006, pins: { PB4: 'out-high' }, leds: { D1: true }, switches: ['SW1'] }],
+  timeline: [{ t: 0, pins: { PB4: 'in' }, leds: { D1: 0 }, switches: [] }, { t: 0.030006, pins: { PB4: 'out-high' }, leds: { D1: 1 }, switches: ['SW1'] }, { t: 0.04, pins: { PB0: 'pwm 25% 61Hz' }, leds: { D2: 0.254 }, switches: [] }],
   passed: false, switches: ['SW1'], leds: ['D1'], pins: { PB3: 'BTN', PB4: 'LEDDRV' }, notes: ['the supply voltage is not in the net name or the vcc argument: assumed 5 V'],
   ...over,
 })
@@ -91,6 +91,7 @@ describe('formatFirmware', () => {
     expect(out).toContain('✗ LED D1 is off (at 20ms): it was on at 20 ms, expected off')
     expect(out).toContain('! warning PB3 at 0.015 ms: the firmware reads PB3 while net BTN floats → Enable the internal pull-up.')
     expect(out).toContain('30.01 ms: PB4 out-high; D1 on; closed: SW1')
+    expect(out).toContain('40 ms: PB0 pwm 25% 61Hz; D2 25%')
     expect(out).toContain('assumed 5 V')
   })
 

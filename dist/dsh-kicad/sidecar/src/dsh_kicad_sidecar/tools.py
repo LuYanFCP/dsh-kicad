@@ -229,7 +229,7 @@ TOOL_SPECS: list[ToolSpec] = [
                   ["path"])),
     ToolSpec("simulate_firmware", "Run a firmware image on the simulated MCU against the schematic and judge assertions on what the board does: "
              "press buttons, watch pins, nets and LEDs over time. Covered: ATtiny25/45/85 (a Python AVR core: GPIO, pin-change and INT0 interrupts, "
-             "Timer0 normal/CTC, the ADC on PB2-PB5 and the bandgap with Vcc/1.1 V/2.56 V/AREF references, sleep). Anything else the firmware uses (differential ADC, Timer1, USI, PWM, EEPROM, watchdog) stops the run with the reason and the "
+             "Timer0 normal/CTC/phase-correct/fast PWM with its OC0A/OC0B outputs, the ADC on PB2-PB5 and the bandgap with Vcc/1.1 V/2.56 V/AREF references, sleep). Anything else the firmware uses (differential ADC, Timer1, USI, Timer0 mode 5, EEPROM, watchdog) stops the run with the reason and the "
              "assertions after that point are cannot-verify, never passed. The board is a DC resistor network with switches, the chip's pin drivers and "
              "pull-ups; LEDs report whether they would light; other parts are open circuits and are listed. Also reports hazards: a floating input read, "
              "an output fighting a switch (overcurrent). Firmware: .hex or .elf built by the user; this tool never builds or invents one.",
@@ -242,7 +242,7 @@ TOOL_SPECS: list[ToolSpec] = [
                        "What happens to the board: {at: '50ms', press|release|toggle: 'SW1', name?} or {at, drive: 'NET', level: high|low|release|<volts>}. "
                        "name lets an assertion refer to that moment.")},
                    "assertions": {"type": "array", "items": {"type": "object"}, "description": (
-                       "What must hold: subject {led: 'D2', is: on|off} | {pin: 'PB4', level: high|low} | {net: 'NAME', level: high|low} | {net, min?, max?} (volts); "
+                       "What must hold: subject {led: 'D2', is: on|off} | {led, min?, max?} (brightness 0-1) | {pin: 'PB4', level: high|low} | {pin: 'PB0', duty: 0.25, tol?} | {pin, freq: 490, tol_pct?} (a PWM pin) | {net: 'NAME', level: high|low} | {net, min?, max?} (volts; the average on a PWM net); "
                        "when {at: '40ms'} | {after: 'press', within: '20ms'} (holds at some moment) | {from: '50ms', to: '150ms'} (holds throughout). "
                        "after/from/to take a time or a stimulus name. name? labels it.")},
                    "initial": {"type": "object", "description": "Switch states at the start, e.g. {SW1: 'closed'} (default all open)."},
