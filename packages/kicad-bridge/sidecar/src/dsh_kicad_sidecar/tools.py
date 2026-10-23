@@ -229,7 +229,7 @@ TOOL_SPECS: list[ToolSpec] = [
                   ["path"])),
     ToolSpec("simulate_firmware", "Run a firmware image on the simulated MCU against the schematic and judge assertions on what the board does: "
              "press buttons, watch pins, nets and LEDs over time. Covered: ATtiny25/45/85 (a Python AVR core: GPIO, pin-change and INT0 interrupts, "
-             "Timer0 normal/CTC, sleep). Anything else the firmware uses (ADC, Timer1, USI, PWM, EEPROM, watchdog) stops the run with the reason and the "
+             "Timer0 normal/CTC, the ADC on PB2-PB5 and the bandgap with Vcc/1.1 V/2.56 V/AREF references, sleep). Anything else the firmware uses (differential ADC, Timer1, USI, PWM, EEPROM, watchdog) stops the run with the reason and the "
              "assertions after that point are cannot-verify, never passed. The board is a DC resistor network with switches, the chip's pin drivers and "
              "pull-ups; LEDs report whether they would light; other parts are open circuits and are listed. Also reports hazards: a floating input read, "
              "an output fighting a switch (overcurrent). Firmware: .hex or .elf built by the user; this tool never builds or invents one.",
@@ -239,7 +239,7 @@ TOOL_SPECS: list[ToolSpec] = [
                    "duration": {"type": ["number", "string"], "description": "Simulated time, e.g. 200ms (default 100ms, at most 5 s)."},
                    "clock_hz": {"type": ["number", "string"], "description": "CPU clock after any CKDIV8 (default 1000000: the factory 8 MHz RC with the divide-by-8 fuse)."},
                    "stimuli": {"type": "array", "items": {"type": "object"}, "description": (
-                       "What happens to the board: {at: '50ms', press|release|toggle: 'SW1', name?} or {at, drive: 'NET', level: high|low|release}. "
+                       "What happens to the board: {at: '50ms', press|release|toggle: 'SW1', name?} or {at, drive: 'NET', level: high|low|release|<volts>}. "
                        "name lets an assertion refer to that moment.")},
                    "assertions": {"type": "array", "items": {"type": "object"}, "description": (
                        "What must hold: subject {led: 'D2', is: on|off} | {pin: 'PB4', level: high|low} | {net: 'NAME', level: high|low} | {net, min?, max?} (volts); "

@@ -1,6 +1,7 @@
 """A small ATtiny25/45/85 simulator: the AVR instruction set, the GPIO port, pin-change and INT0 interrupts, Timer0 (normal and CTC)
-and sleep. It is not a general AVR emulator. What it does not model it refuses (``Unsupported``): a firmware that touches the ADC,
-Timer1, the USI, EEPROM, the watchdog or a PWM mode cannot be verified here, and a wrong verdict is worse than none.
+the ADC (single-ended, Vcc / 1.1 V / 2.56 V / AREF reference) and sleep. It is not a general AVR emulator. What it does not model it refuses
+(``Unsupported``): a firmware that touches Timer1, the USI, EEPROM, the watchdog, differential ADC channels or a PWM mode cannot be verified
+here, and a wrong verdict is worse than none.
 
 Pure Python, no dependencies. The board around the chip (what is wired to the pins) is not here: the owner sets
 ``input_levels`` and gets ``on_pin_change`` calls (see mcusim.py).
@@ -31,14 +32,16 @@ OSCCAL, TCNT0, TCCR0B, MCUSR, MCUCR, SPMCSR, TIFR, TIMSK, GIFR, GIMSK = 0x31, 0x
 SPL, SPH, SREG = 0x3D, 0x3E, 0x3F
 
 # interrupt vectors (word addresses)
-V_INT0, V_PCINT0, V_TIM0_OVF, V_TIM0_COMPA, V_TIM0_COMPB = 1, 2, 5, 10, 11
+V_INT0, V_PCINT0, V_TIM0_OVF, V_ADC, V_TIM0_COMPA, V_TIM0_COMPB = 1, 2, 5, 8, 10, 11
+ADC_PRESCALERS = {0: 2, 1: 2, 2: 4, 3: 8, 4: 16, 5: 32, 6: 64, 7: 128}
+ADC_PINS = {0: 5, 1: 2, 2: 4, 3: 3}  # single-ended channel → PORTB bit
 PRESCALERS = {1: 1, 2: 8, 3: 64, 4: 256, 5: 1024}
 
 NAMES = {ADCSRB: "ADCSRB", ADCL: "ADCL", ADCH: "ADCH", ADCSRA: "ADCSRA", ADMUX: "ADMUX", ACSR: "ACSR", USICR: "USICR", USISR: "USISR", USIDR: "USIDR",
          USIBR: "USIBR", EECR: "EECR", EEDR: "EEDR", EEARL: "EEARL", EEARH: "EEARH", WDTCR: "WDTCR", DWDR: "DWDR", PLLCSR: "PLLCSR",
          OCR1B: "OCR1B", GTCCR: "GTCCR", OCR1C: "OCR1C", OCR1A: "OCR1A", TCNT1: "TCNT1", TCCR1: "TCCR1", SPMCSR: "SPMCSR"}
 UNSUPPORTED_WHY = {
-    "ADC": "the ADC is not simulated", "USI": "the USI (I²C/SPI) is not simulated", "EEPROM": "EEPROM is not simulated",
+    "ADC": "this ADC feature is not simulated", "USI": "the USI (I²C/SPI) is not simulated", "EEPROM": "EEPROM is not simulated",
     "Timer1": "Timer1 is not simulated", "watchdog": "the watchdog is not simulated", "debugWIRE": "debugWIRE is not simulated",
     "SPM": "self-programming is not simulated", "comparator": "the analog comparator is not simulated", "PLL": "the PLL is not simulated",
 }
@@ -160,6 +163,17 @@ class Avr:
         self.on_pin_change: Callable[[], None] | None = None
         self.floating_reads: dict[int, int] = {}  # pin → first cycle the firmware used its value while it floated
         self.watch: dict[int, tuple[int, int]] = {}  # register → (floating pin mask, expiry cycle) after an IN from PINB
+        # ADC
+        self.admux = 0
+        self.adcsra = 0
+        self.adcsrb = 0
+        self.adc_data = 0
+        self.adc_next = 1 << 62          # cycle the running conversion completes
+        self.adc_result = 0
+        self.adc_first = True            # the first conversion after ADEN takes 25 ADC clocks, the others 13
+        self.adc_input: Callable[[int], float | None] | None = None  # the board: volts on a PORTB pin (None: floating)
+        self.vcc_volts = 5.0
+        self.adc_used: set[int] = set()  # pins the firmware sampled: an analog level there is no hazard
         # timer 0
         self.t0_last = 0  # cycle up to which timer 0 has been advanced
         self.t0_psc = 0   # CPU cycles into the current prescaler period
@@ -305,7 +319,15 @@ class Avr:
             return self.gifr
         if a in (DDRB, PORTB, PCMSK, GIMSK, MCUCR, TIMSK, OCR0A, OCR0B, TCCR0A, TCCR0B, OSCCAL, DIDR0, PRR, MCUSR, GTCCR, CLKPR):
             return self.io_regs_value(a)
-        if a in (ADCL, ADCH, ADCSRA, ADMUX, ADCSRB, ACSR, USICR, USISR, USIDR, USIBR, EECR, EEDR, EEARL, EEARH, WDTCR, DWDR, TCNT1, TCCR1, OCR1A, OCR1B, OCR1C, PLLCSR, SPMCSR):
+        if a in (ADCL, ADCH, ADCSRA, ADMUX, ADCSRB):
+            if self.cycle >= self.adc_next:
+                self.adc_finish()
+            if a == ADCL:
+                return self.adc_data & 0xFF
+            if a == ADCH:
+                return self.adc_data >> 8 & 0xFF
+            return {ADCSRA: self.adcsra, ADMUX: self.admux, ADCSRB: self.adcsrb}[a]
+        if a in (ACSR, USICR, USISR, USIDR, USIBR, EECR, EEDR, EEARL, EEARH, WDTCR, DWDR, TCNT1, TCCR1, OCR1A, OCR1B, OCR1C, PLLCSR, SPMCSR):
             raise self.unsupported(self.peripheral(a), f"the firmware reads {NAMES[a]}, but {UNSUPPORTED_WHY[self.peripheral(a)]}")
         raise self.unsupported("register", f"the firmware reads I/O address 0x{a:02X}, which is not an ATtiny85 register this simulator knows")
 
@@ -381,12 +403,8 @@ class Avr:
             if v & 0x48:  # WDE or WDIE
                 raise self.unsupported("watchdog")
             self.io[a] = v
-        elif a == ADCSRA:
-            if v & 0x80:  # ADEN
-                raise self.unsupported("ADC")
-            self.io[a] = v
-        elif a in (ADMUX, ADCSRB):
-            self.io[a] = v
+        elif a in (ADCSRA, ADMUX, ADCSRB):
+            self.adc_write(a, v)
         elif a == ACSR:
             if v & ~0x80 & 0xFF:
                 raise self.unsupported("comparator")
@@ -400,7 +418,7 @@ class Avr:
             if v:
                 raise self.unsupported(self.peripheral(a), f"the firmware writes {NAMES[a]}, but {UNSUPPORTED_WHY[self.peripheral(a)]}")
         elif a in (ADCL, ADCH):
-            pass
+            pass  # read-only
         else:
             raise self.unsupported("register", f"the firmware writes I/O address 0x{a:02X}, which is not an ATtiny85 register this simulator knows")
 
@@ -415,6 +433,87 @@ class Avr:
             self.clock_hz = self.base_clock_hz >> (v & 0x0F) if (v & 0x0F) <= 8 else self.base_clock_hz
             self.clkpr_enable_until = -1
             self.t0_plan()
+
+    # ---- ADC ----
+    def adc_write(self, a: int, v: int) -> None:
+        if self.cycle >= self.adc_next:
+            self.adc_finish()
+        if a == ADMUX:
+            self.admux = v
+        elif a == ADCSRB:
+            if v & 0xE0:
+                raise self.unsupported("ADC", "the firmware sets ADCSRB bipolar/polarity/comparator-multiplexer bits (BIN, ACME, IPR); only plain single-ended conversions are simulated")
+            self.adcsrb = v
+        else:  # ADCSRA
+            busy = self.adcsra & 0x40
+            keep_flag = self.adcsra & 0x10 & ~v  # writing 1 to ADIF clears it
+            self.adcsra = (v & 0xAF) | keep_flag | busy  # ADSC is hardware-cleared; ADIF is write-1-to-clear
+            if not v & 0x80:  # ADEN off: the converter stops, and the next start is a first conversion again
+                self.adcsra &= ~0x40
+                self.adc_next = 1 << 62
+                self.adc_first = True
+            elif v & 0x40 and not busy:
+                self.adc_start()
+
+    def adc_start(self) -> None:
+        mux = self.admux & 0x0F
+        refs = ((self.admux >> 6) & 3) | ((self.admux >> 4 & 1) << 2)
+        if self.adcsra & 0x20 and self.adcsrb & 7:
+            raise self.unsupported("ADC", "the firmware auto-triggers the ADC from a source other than free running; only free running (ADTS = 0) is simulated")
+        bit = ADC_PINS.get(mux)
+        if bit is not None:
+            if self.adc_input is None:
+                raise self.unsupported("ADC", "the firmware starts an ADC conversion, but no board is attached to say what is on the pin")
+            self.adc_used.add(bit)
+            volts = self.adc_input(bit)
+            if volts is None:
+                self.floating_reads.setdefault(bit, self.cycle)
+                volts = 0.0
+        elif mux == 0b1101:
+            volts = 0.0
+        elif mux == 0b1100:
+            volts = 1.1  # the bandgap reference
+        elif mux == 0b1111:
+            raise self.unsupported("ADC", "the firmware reads the internal temperature sensor (ADC4); it is not simulated")
+        else:
+            raise self.unsupported("ADC", f"the firmware selects ADC input 0b{mux:04b}, a differential channel (with gain); differential conversions are not simulated")
+        if refs == 0:
+            vref = self.vcc_volts
+        elif refs == 1:
+            aref = self.adc_input(0) if self.adc_input else None
+            if aref is None:
+                self.floating_reads.setdefault(0, self.cycle)
+                raise self.unsupported("ADC", "the firmware uses AREF (PB0) as the ADC reference, but PB0 floats")
+            vref = aref
+        elif refs == 2:
+            vref = 1.1
+        elif refs in (6, 7):
+            vref = 2.56
+            if self.vcc_volts < 3.0:
+                raise self.unsupported("ADC", f"the firmware selects the 2.56 V reference with a {self.vcc_volts:g} V supply: the reference needs the supply above it")
+        else:
+            raise self.unsupported("ADC", f"the firmware selects the reserved ADC reference setting REFS = 0b{refs:03b}")
+        if vref <= 0:
+            raise self.unsupported("ADC", "the ADC reference voltage is 0 V")
+        result = max(0, min(1023, int(volts / vref * 1024)))
+        self.adc_result = result
+        clocks = 25 if self.adc_first else 13
+        self.adc_first = False
+        self.adcsra |= 0x40
+        self.adc_next = self.cycle + clocks * ADC_PRESCALERS[self.adcsra & 7]
+
+    def adc_finish(self) -> None:
+        """The running conversion is done: the result registers, ADIF, and the next conversion in free-running mode."""
+        done = self.adc_next
+        result = self.adc_result
+        self.adc_data = (((result >> 2) << 8) | ((result & 3) << 6)) if self.admux & 0x20 else result  # ADLAR: ADCH holds the top 8 bits
+        self.adcsra = (self.adcsra & ~0x40) | 0x10
+        self.adc_next = 1 << 62
+        if self.adcsra & 0x20:  # ADATE with ADTS = 0: free running, the next conversion starts at once
+            at = self.cycle
+            self.cycle = max(self.cycle, done)
+            self.adc_start()
+            self.cycle = at
 
     # ---- timer 0 ----
     def t0_divisor(self) -> int:
@@ -503,6 +602,8 @@ class Avr:
             return V_PCINT0
         if self.timsk & self.tifr & 0x02:
             return V_TIM0_OVF
+        if self.adcsra & 0x18 == 0x18:
+            return V_ADC
         if self.timsk & self.tifr & 0x10:
             return V_TIM0_COMPA
         if self.timsk & self.tifr & 0x08:
@@ -518,6 +619,8 @@ class Avr:
             self.gifr &= ~0x20
         elif vector == V_TIM0_OVF:
             self.tifr &= ~0x02
+        elif vector == V_ADC:
+            self.adcsra &= ~0x10
         elif vector == V_TIM0_COMPA:
             self.tifr &= ~0x10
         elif vector == V_TIM0_COMPB:
@@ -546,6 +649,8 @@ class Avr:
             if self.cycle >= self.t0_next:
                 self.t0_sync()
                 self.t0_plan()
+            if self.cycle >= self.adc_next:
+                self.adc_finish()
             if self.sreg & I and not self.skip_interrupt:
                 vector = self.pending_vector()
                 if vector is not None:
@@ -556,7 +661,7 @@ class Avr:
                 if not (self.sreg & I) and self.pending_vector() is not None:
                     self.sleeping = False
                 else:
-                    self.cycle = min(until, self.t0_next if not self.sleeping_power_down else until)
+                    self.cycle = min(until, self.adc_next, self.t0_next if not self.sleeping_power_down else until)
                     if self.cycle < until:
                         self.t0_sync()
                         self.t0_plan()

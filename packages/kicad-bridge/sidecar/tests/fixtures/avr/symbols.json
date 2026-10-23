@@ -22,5 +22,19 @@
  },
  "int0_powerdown": {
   "wakes": 96
+ },
+ "adc_threshold": {
+  "last": 96
+ },
+ "adc_read10": {
+  "reading": 96
+ },
+ "adc_irq": {
+  "reading": 97,
+  "count": 96
+ },
+ "adc_bandgap": {
+  "vs_vcc": 98,
+  "vs_internal": 96
  }
 }
