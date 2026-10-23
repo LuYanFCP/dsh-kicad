@@ -144,7 +144,7 @@ def test_an_mcu_no_provider_covers_cannot_be_verified(tmp_path):
 
 def test_a_schematic_without_an_mcu_reports_nothing(tmp_path):
     tb, path = build(tmp_path, base=False, lib="Device:R", value="1k")
-    assert tb.call("check_mcu", {"path": path}) == {"path": path, "mcus": [], "requirements": [], "passed": None, "providers": ["esp32"]}
+    assert tb.call("check_mcu", {"path": path}) == {"path": path, "mcus": [], "requirements": [], "passed": None, "providers": ["attiny85", "esp32"]}
 
 
 def test_a_project_can_add_its_own_provider(tmp_path):
@@ -177,8 +177,8 @@ def test_net_classification():
 
 
 def test_a_custom_symbol_with_unknown_pin_names_is_not_called_checked(tmp_path):
-    # ATtiny pins are PB0..PB5: the ESP32 provider matches by value here but cannot read any pin name.
-    tb, path = build(tmp_path, lib="MCU_Microchip_ATtiny:ATtiny85-20S", value="ESP32-WROOM-32", base=False)
+    # STM32 pins are PA0..: the ESP32 provider matches by value here but cannot read any pin name.
+    tb, path = build(tmp_path, lib="MCU_ST_STM32F1:STM32F103C8Tx", value="ESP32-WROOM-32", base=False)
     entry = tb.call("check_mcu", {"path": path})["mcus"][0]
     assert entry["status"] == "cannot_verify" and "none of its pin names are GPIO names it knows" in entry["reason"]
 
@@ -187,3 +187,74 @@ def test_not_covered_families_are_named_even_from_a_custom_library(tmp_path):
     tb, path = build(tmp_path, lib="MCU_Espressif:ESP32-C3", value="ESP32-C3-MINI", base=False)
     entry = tb.call("check_mcu", {"path": path})["mcus"][0]
     assert entry["status"] == "cannot_verify" and "RISC-V" in entry["reason"]
+
+
+# ---- ATtiny85 (the second provider) ----------------------------------------------------------
+# ATtiny85 pins: 1 ~RESET/PB5, 2 XTAL1/PB3, 3 XTAL2/PB4, 4 GND, 5 AREF/PB0, 6 PB1, 7 PB2, 8 VCC
+
+
+def attiny(tmp_path, extra=(), reset_pullup=True, vcc_cap=True, name="avr"):
+    ops = [
+        {"op": "connect_pin_to_net", "pin": "U1:8", "net": "+5V", "kind": "power"},
+        {"op": "connect_pin_to_net", "pin": "U1:4", "net": "GND", "kind": "power"},
+    ]
+    if vcc_cap:
+        ops += [{"op": "add_symbol", "lib_id": "Device:C", "x": 50.8, "y": 25.4, "reference": "C1", "value": "100n"},
+                {"op": "connect_pin_to_net", "pin": "C1:1", "net": "+5V", "kind": "power"},
+                {"op": "connect_pin_to_net", "pin": "C1:2", "net": "GND", "kind": "power"}]
+    if reset_pullup:
+        ops += [{"op": "add_symbol", "lib_id": "Device:R", "x": 76.2, "y": 50.8, "reference": "R1", "value": "10k"},
+                {"op": "connect_pin_to_net", "pin": "R1:1", "net": "+5V", "kind": "power"},
+                {"op": "connect_pin_to_net", "pin": "R1:2", "net": "RST", "kind": "label"},
+                {"op": "connect_pin_to_net", "pin": "U1:1", "net": "RST", "kind": "label"}]
+    return build(tmp_path, [*ops, *extra], lib="MCU_Microchip_ATtiny:ATtiny85-20S", value="ATtiny85-20S", base=False, name=name)
+
+
+def test_attiny85_sound_wiring(tmp_path):
+    tb, path = attiny(tmp_path)
+    result = tb.call("check_mcu", {"path": path})
+    entry = result["mcus"][0]
+    assert (entry["provider"], entry["errors"], entry["warnings"]) == ("attiny85", 0, 0) and result["passed"] is True
+
+
+def test_attiny85_reset_and_decoupling(tmp_path):
+    tb, path = attiny(tmp_path / "bare", reset_pullup=False, vcc_cap=False)
+    found = rules(tb.call("check_mcu", {"path": path}))
+    assert found[("enable_unconnected", None)]["severity"] == "warning" and "internal pull-up" in found[("enable_unconnected", None)]["message"]
+    assert "100 nF" in found[("supply_decoupling", None)]["fix"] and found[("supply_decoupling", None)]["severity"] == "warning"
+    tb, path = attiny(tmp_path / "floating", reset_pullup=False, extra=[
+        {"op": "add_symbol", "lib_id": "Switch:SW_Push", "x": 76.2, "y": 50.8, "reference": "SW1", "value": "RESET"},
+        {"op": "connect_pin_to_net", "pin": "SW1:1", "net": "RST", "kind": "label"},
+        {"op": "connect_pin_to_net", "pin": "SW1:2", "net": "GND", "kind": "power"},
+        {"op": "connect_pin_to_net", "pin": "U1:1", "net": "RST", "kind": "label"}])
+    assert "relies on the weak internal pull-up" in rules(tb.call("check_mcu", {"path": path}))[("enable_no_pullup", None)]["message"]
+
+
+def test_attiny85_fixed_peripherals_are_requirements_not_a_pin_matrix(tmp_path):
+    tb, path = attiny(tmp_path, [
+        {"op": "connect_pin_to_net", "pin": "U1:5", "net": "SDA", "kind": "label"},
+        {"op": "connect_pin_to_net", "pin": "U1:7", "net": "SCL", "kind": "label"},
+        {"op": "connect_pin_to_net", "pin": "U1:3", "net": "LED", "kind": "label"},
+        {"op": "connect_pin_to_net", "pin": "U1:6", "net": "SENSE", "kind": "label"}])
+    out = tb.call("check_mcu", {"path": path, "requirements": [
+        {"net": "SDA", "needs": "i2c_sda"}, {"net": "SCL", "needs": "i2c_scl"}, {"net": "LED", "needs": "pwm"},
+        {"net": "SENSE", "needs": "adc"}, {"net": "SENSE", "needs": "pwm"}, {"net": "LED", "needs": "i2c_sda"}]})["requirements"]
+    assert [r["passed"] for r in out] == [True, True, True, False, True, False]
+    assert out[3]["reason"] == "GPIO1 — adc: it has no ADC" and out[5]["reason"] == "GPIO4 — i2c_sda: it cannot do i2c_sda"
+    with pytest.raises(ToolError, match="unknown capability 'warp'.*i2c_sda"):
+        tb.call("check_mcu", {"path": path, "requirements": [{"net": "SDA", "needs": "warp"}]})
+
+
+def test_other_avr_parts_are_not_covered(tmp_path):
+    tb, path = build(tmp_path, lib="MCU_Microchip_ATmega:ATmega328P-A", value="ATmega328P", base=False)
+    entry = tb.call("check_mcu", {"path": path})["mcus"][0]
+    assert entry["status"] == "cannot_verify" and "8-pin ATtiny25/45/85" in entry["reason"]
+
+
+def test_the_usb_attiny_design_of_the_evals_is_clean(tmp_path):
+    import os, shutil
+    from conftest import FIXTURES
+
+    shutil.copytree(os.path.join(FIXTURES, "usb_attiny"), tmp_path / "u")
+    result = Toolbox(roots=[str(tmp_path)]).call("check_mcu", {"path": str(tmp_path / "u" / "usb_attiny.kicad_sch")})
+    assert [(m["reference"], m["provider"], m["errors"], m["warnings"]) for m in result["mcus"]] == [("U1", "attiny85", 0, 0)] and result["passed"] is True

@@ -139,10 +139,10 @@ Freerouting（GPL-3.0）是独立的 Java 程序，不随插件分发。`/kicad-
 
 `kicad_check_mcu {path, reference?, requirements?}` 依据 KiCad 网表和每个系列的引脚表（MCU *provider*）检查微控制器的接线，并由工具自己判定。这是静态检查，不是固件仿真：它不知道固件会怎样使用某个引脚。
 
-- **检查项**（error / warning / info，带引脚、网络和修复建议）。以经典 ESP32 为例：strapping 引脚在复位时电平错误（GPIO0 直接接地；GPIO12 接高或被强上拉，会选择 1.8 V flash 导致无法启动；GPIO2 被上拉）、占用了保留的 flash/PSRAM 引脚（GPIO6-11，以及 PICO、WROVER、-R2 模块上的 16/17）、输入专用 GPIO（34-39）没有任何东西能驱动它，或接按键却悬空、EN 未连接或没有上拉、电源滤波不足 10 µF。
+- **检查项**（error / warning / info，带引脚、网络和修复建议）。以经典 ESP32 为例：strapping 引脚在复位时电平错误（GPIO0 直接接地；GPIO12 接高或被强上拉，会选择 1.8 V flash 导致无法启动；GPIO2 被上拉）、占用了保留的 flash/PSRAM 引脚（GPIO6-11，以及 PICO、WROVER、-R2 模块上的 16/17）、输入专用 GPIO（34-39）没有任何东西能驱动它，或接按键却悬空、EN 未连接或没有上拉、电源滤波不足 10 µF。ATtiny85：RESET 未连接或只靠较弱的内部上拉、VCC 滤波不足 100 nF；它的外设在固定引脚上，所以 `i2c_sda`、`i2c_scl`、`spi_*`、`pwm`、`adc` 等需求会按固定引脚判定（SDA 接在 PB4 上就会失败）。
 - **需求（requirements）**说明固件需要板子提供什么：`[{net: "VBAT_SENSE", needs: "adc1"}, {pin: "U1:IO25", needs: ["output", "dac"]}]`；`needs` 可以是 `output`（非输入专用）、`input`、`adc` / `adc1`（WiFi 开启时可用）/ `adc2`、`dac`、`touch` 或 `boot_free`（不是 strapping 引脚）。每条需求按信号所在的 GPIO 判定；agent 被要求在接线前就按需求选 GPIO。
 - **无法验证，绝不算通过。**没有 provider 覆盖的 MCU（ESP32-S3、STM32、ATtiny、引脚名表里读不懂的自定义符号等）会报告为 `cannot_verify` 并说明原因；此时结论既不是通过也不是失败，对应的需求显示为 `?`。
-- **provider 就是数据。**`mcu_data/esp32.json`（经典 ESP32 模块和 PICO；表格由 Espressif 的数据手册和硬件设计指南转录而来，请以你所用型号的数据手册为准核对）声明它覆盖哪些符号，以及每个 GPIO 的关键属性。工程可以在原理图旁放 `<系列>.mcu.json` 添加自己的系列（`id`、`name`、`match`、`gpio_pin_pattern`、`gpios`，结构和规则相同；同一 `id` 以工程文件为准）。`/mcu-check` 不经过模型，对工程原理图做检查；`kicad-mcu-check` 技能指导 agent 先定需求、再修复检查结果。
+- **provider 就是数据。**`mcu_data/esp32.json`（经典 ESP32 模块和 PICO，以及 `attiny85.json`：8 脚 ATtiny25/45/85；表格由 Espressif 的数据手册和硬件设计指南转录而来，请以你所用型号的数据手册为准核对）声明它覆盖哪些符号，以及每个 GPIO 的关键属性。工程可以在原理图旁放 `<系列>.mcu.json` 添加自己的系列（`id`、`name`、`match`、`gpio_pin_pattern`、`gpios`，结构和规则相同；同一 `id` 以工程文件为准）。`/mcu-check` 不经过模型，对工程原理图做检查；`kicad-mcu-check` 技能指导 agent 先定需求、再修复检查结果。
 
 ### 3D 视图
 
@@ -230,7 +230,7 @@ python packages/kicad-bridge/sidecar/tests/make_fixtures.py   # 用编辑器本�
 
 - 电路板可以从原理图创建并保持同步（`kicad_update_pcb`），可以自动布局（`auto_place`）、编辑、自动布线（`kicad_autoroute`）、检查和制板输出（`kicad_export_fab`）。自动布线需要另行安装 Java 25+ 与 Freerouting（见[布线](#布线)）；高密度电路板可能留下少数未布通的连接，由 agent 手工补齐。
 - 仿真只覆盖 ngspice 能做的模拟行为；没有 SPICE 模型的元件会被排除，固件、信号完整性、EMC 与热行为不在仿真范围内。普通的 Device:LED / Device:D 符号需要设置 `Sim.Device`（见[仿真验证](#仿真验证)）。
-- MCU 检查是静态的，且只覆盖有 provider 的系列（目前是经典 ESP32）；不仿真固件行为（见 #31）。ESP32 引脚表的准确性取决于转录，请对照具体模块的数据手册核对。
+- MCU 检查是静态的，且只覆盖有 provider 的系列（目前是经典 ESP32 和 8 脚 ATtiny25/45/85）；不仿真固件行为（见 #31）。ESP32 引脚表的准确性取决于转录，请对照具体模块的数据手册核对。
 - 板厂预设数值读取自 JLCPCB 与 PCBWay 的工艺能力页面（2026-10-21），之后可能变化。JLC 的 CPL 保留 KiCad 的旋转角度，JLCPCB 预览中可能需要逐个修正。
 - 编辑覆盖元件、属性、导线、标签、电源符号、结点与不连接标记；不支持创建层次图纸、总线与图形元素。
 - 新放置在子图纸中的元件只向上查找一层根图纸来确定 instance 路径；更深的层次可能需要 KiCad 重新标注。
