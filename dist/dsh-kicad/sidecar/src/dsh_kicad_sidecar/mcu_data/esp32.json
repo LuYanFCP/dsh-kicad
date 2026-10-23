@@ -1,0 +1,56 @@
+{
+  "id": "esp32",
+  "name": "ESP32 (classic, Xtensa LX6)",
+  "source": "Espressif ESP32 datasheet (strapping pins, GPIO and ADC/DAC/touch tables) and ESP32 Hardware Design Guidelines; hand-transcribed, check against the datasheet of the exact part",
+  "match": {
+    "lib_id": ["RF_Module:ESP32-WROOM-32*", "MCU_Espressif:ESP32-PICO-D4", "MCU_Espressif:ESP32-PICO-V3*"],
+    "value": ["^ESP32-WROOM-32", "^ESP32-WROVER(?!-?S)", "^ESP32-PICO-(D4|V3)"]
+  },
+  "not_covered": [
+    {"lib_id": ["*:ESP32-S2*"], "why": "ESP32-S2 has different strapping and reserved pins"},
+    {"lib_id": ["*:ESP32-S3*"], "why": "ESP32-S3 has different strapping and reserved pins (and octal-PSRAM variants reserve more)"},
+    {"lib_id": ["*:ESP32-C3*"], "why": "ESP32-C3 is a RISC-V part with different strapping pins"},
+    {"lib_id": ["*:ESP32-C6*"], "why": "ESP32-C6 is a RISC-V part with different strapping pins"},
+    {"lib_id": ["*:ESP8266*", "*:ESP-01*", "*:ESP-07*", "*:ESP-12*"], "why": "ESP8266 is a different chip"}
+  ],
+  "gpio_pin_pattern": "(?:^|/)(?:U0)?IO(\\d+)$",
+  "pin_aliases": {
+    "SENSOR_VP": 36, "SENSOR_CAPP": 37, "SENSOR_CAPN": 38, "SENSOR_VN": 39,
+    "SHD/SD2": 9, "SWP/SD3": 10, "SCS/CMD": 11, "SCK/CLK": 6, "SDO/SD0": 7, "SDI/SD1": 8,
+    "SD0": 7, "SD1": 8, "CMD": 11, "CLK": 6
+  },
+  "enable_pin": "EN",
+  "supply_pins": ["VDD", "VDD3P3", "VDD3P3_RTC", "VDD3P3_CPU", "VDDA", "VDDA3P3"],
+  "supply_bulk_uf": 10,
+  "gpios": {
+    "0":  {"strapping": {"internal": "pull-up", "avoid": "low", "severity": "error", "why": "low at reset starts the serial bootloader (download mode) instead of your program"}, "adc": "adc2", "touch": true},
+    "2":  {"strapping": {"internal": "pull-down", "avoid": "high", "severity": "warning", "why": "must be low or floating at reset for the serial bootloader to start automatically"}, "adc": "adc2", "touch": true},
+    "4":  {"adc": "adc2", "touch": true},
+    "5":  {"strapping": {"internal": "pull-up", "why": "sets the SDIO slave timing at reset; leave at its default unless you know you need it"}},
+    "12": {"strapping": {"internal": "pull-down", "avoid": "high", "severity": "error", "why": "high at reset selects 1.8 V flash (MTDI); a 3.3 V flash then fails and the chip does not boot"}, "adc": "adc2", "touch": true},
+    "13": {"adc": "adc2", "touch": true},
+    "14": {"adc": "adc2", "touch": true},
+    "15": {"strapping": {"internal": "pull-up", "why": "low at reset silences the boot log on UART0"}, "adc": "adc2", "touch": true},
+    "25": {"adc": "adc2", "dac": true},
+    "26": {"adc": "adc2", "dac": true},
+    "27": {"adc": "adc2", "touch": true},
+    "32": {"adc": "adc1", "touch": true},
+    "33": {"adc": "adc1", "touch": true},
+    "34": {"adc": "adc1", "input_only": true},
+    "35": {"adc": "adc1", "input_only": true},
+    "36": {"adc": "adc1", "input_only": true},
+    "37": {"adc": "adc1", "input_only": true},
+    "38": {"adc": "adc1", "input_only": true},
+    "39": {"adc": "adc1", "input_only": true},
+    "6":  {"reserved": "connected to the SPI flash"},
+    "7":  {"reserved": "connected to the SPI flash"},
+    "8":  {"reserved": "connected to the SPI flash"},
+    "9":  {"reserved": "connected to the SPI flash"},
+    "10": {"reserved": "connected to the SPI flash"},
+    "11": {"reserved": "connected to the SPI flash"}
+  },
+  "variants": [
+    {"match": {"lib_id": ["MCU_Espressif:ESP32-PICO-*"]}, "reserved": {"16": "connected to the in-package flash", "17": "connected to the in-package flash"}},
+    {"match": {"value": ["^ESP32-WROVER", "^ESP32-WROOM-32E-R2", "^ESP32-WROOM-32UE-R2"]}, "reserved": {"16": "connected to the PSRAM", "17": "connected to the PSRAM"}}
+  ]
+}

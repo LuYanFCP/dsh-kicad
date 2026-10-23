@@ -1,8 +1,8 @@
-/** /erc, /drc, /bom, /simulate, /kicad-fab and /kicad-render: direct UI commands that never involve the model. */
+/** /erc, /drc, /bom, /simulate, /mcu-check, /kicad-fab and /kicad-render: direct UI commands that never involve the model. */
 import { readdirSync, realpathSync } from 'node:fs'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { DoctorReport, InstallJob, InstallOption } from 'dsh-kicad-bridge'
-import { FAB_EXTRAS, formatCheck, formatFab, formatSimulate, type CheckReport, type FabResult, type SimulateValue } from 'dsh-tool-kicad'
+import { FAB_EXTRAS, formatCheck, formatFab, formatMcu, formatSimulate, type CheckReport, type FabResult, type McuCheckValue, type SimulateValue } from 'dsh-tool-kicad'
 import { agentCwd, followup, type CommandDefinition, type CommandInvocation, type CommandResult, type Context } from './dsh.ts'
 
 /** The design file a command targets: the argument, else the project's root schematic / board. */
@@ -78,6 +78,15 @@ export function createCommands(ctx: Context): CommandDefinition[] {
       handler: wrap(async (inv, cwd) => {
         const result = await ctx.kicad.run<SimulateValue>('simulate', { path: targetFile(cwd, inv.rawInput, '.kicad_sch') }, inv.signal, { timeoutMs: 120_000 })
         return formatSimulate(result)
+      }),
+    },
+    {
+      name: 'mcu-check',
+      description: 'Check how the project schematic wires its microcontroller (strapping pins, reserved pins, EN, decoupling); an MCU no provider covers is reported as cannot verify',
+      input: { hint: '[path/to/file.kicad_sch]' },
+      handler: wrap(async (inv, cwd) => {
+        const result = await ctx.kicad.run<McuCheckValue>('check_mcu', { path: targetFile(cwd, inv.rawInput, '.kicad_sch') }, inv.signal)
+        return formatMcu(result)
       }),
     },
     {

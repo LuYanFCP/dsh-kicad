@@ -44,6 +44,7 @@ var TOOL_ACCESS = {
   kicad_render: "read",
   kicad_simulate: "read",
   kicad_sim_model: "read",
+  kicad_check_mcu: "read",
   kicad_export: "write",
   kicad_export_fab: "write",
   kicad_fab_preset: "write",
@@ -69,6 +70,7 @@ var PATH_ARGUMENTS = {
   kicad_render: ["path"],
   kicad_simulate: ["path", "output_dir", "spec"],
   kicad_sim_model: ["path"],
+  kicad_check_mcu: ["path"],
   kicad_export: ["path", "output"],
   kicad_export_fab: ["pcb", "output_dir"],
   kicad_fab_preset: ["path"],
@@ -232,6 +234,7 @@ var GUIDANCE = `# KiCad (EDA) work
 - Routing: after placement, route critical nets by hand (power, USB/differential pairs, crystal) with add_track / add_via locked: true, then kicad_autoroute routes the rest without touching them; add a GND pour (add_zone on both copper layers), which kicad_autoroute refills. If it reports Freerouting or Java missing, give the user its install guidance (/kicad-install freerouting); do not install anything yourself.
 - To order a board: kicad_export_fab writes Gerber, drill, position and BOM files in one zip, and refuses while KiCad reports DRC errors, unrouted connections or schematic parity issues; pass force only when the user explicitly asks. kicad_fab_preset makes a fab house's limits (JLCPCB, PCBWay) the project's design rules.
 - Verify behaviour, not only wiring: when the user states a requirement (a rail voltage, an LED current, a filter cutoff), add the simulation sources and models the circuit needs (Simulation_SPICE VDC/VSIN/VPULSE, a ground, set_sim_model on diodes, LEDs, regulators and ICs: find vendor models with kicad_sim_model, never invent one) and run kicad_simulate with one assertion per requirement; add monte_carlo when the requirement must hold across part tolerances. Report its verdict, never your own estimate. If ngspice is missing, give the user the install guidance from kicad_doctor; do not install anything yourself.
+- Microcontrollers: state what the firmware needs from each signal (ADC usable with WiFi, a real output, a DAC, a pin that is not a strapping pin) and choose GPIOs for it before wiring, then run kicad_check_mcu with those requirements (kicad-mcu-check skill) and fix its errors. If it says CANNOT VERIFY, tell the user that MCU's wiring was not checked; never call it checked.
 - KiCad decides correctness: after edits read the ERC/DRC verdict appended to the result (or run kicad_erc / kicad_drc). Do not declare a design correct while KiCad reports errors or unrouted connections.
 - Coordinates are millimetres, Y grows downward, on the 1.27 mm grid.
 - If a kicad_* tool fails because KiCad or Python is missing or too old, run kicad_doctor and give the user its fix. Do not install software yourself; the user installs KiCad (the doctor panel's Install button or /kicad-install).`;

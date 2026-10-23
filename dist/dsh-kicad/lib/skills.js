@@ -73,6 +73,30 @@ function formatSimulate(v) {
   lines.push(`Netlist and log: ${v.netlist}`);
   return lines.join("\n");
 }
+var MARK = { error: "\u2717", warning: "!", info: "i" };
+function formatMcu(v) {
+  if (v.mcus.length === 0)
+    return `MCU check on ${v.path}: no microcontroller found in the schematic.`;
+  const verdict = v.passed === null ? "CANNOT VERIFY (no MCU is covered by a provider)" : v.passed ? "PASSED" : "FAILED";
+  const lines = [`MCU check on ${v.path}: ${verdict}.`];
+  for (const m of v.mcus) {
+    if (m.status === "cannot_verify") {
+      lines.push(`${m.reference} ${m.value} (${m.lib_id}): CANNOT VERIFY \u2014 ${m.reason}`);
+      continue;
+    }
+    lines.push(`${m.reference} ${m.value} (provider ${m.provider}): ${m.errors} error(s), ${m.warnings} warning(s)`);
+    for (const f of m.findings ?? [])
+      lines.push(`  ${MARK[f.severity]} ${f.severity} ${f.pin}${f.pin_name ? ` ${f.pin_name}` : ""}: ${f.message}${f.fix ? ` \u2192 ${f.fix}` : ""}`);
+  }
+  if (v.requirements.length) {
+    lines.push("Requirements:");
+    for (const r of v.requirements) {
+      const mark = r.passed === null ? "?" : r.passed ? "\u2713" : "\u2717";
+      lines.push(`  ${mark} ${r.target} needs ${r.needs.join(" + ")}${r.pin ? ` (${r.pin})` : ""}${r.reason ? `: ${r.reason}` : ""}`);
+    }
+  }
+  return lines.join("\n");
+}
 function violationLine(v) {
   const where = v.items.map((i) => `${i.description ?? ""}${i.pos ? ` @ (${round(i.pos.x)}, ${round(i.pos.y)})` : ""}`).filter(Boolean).join("; ");
   return `- [${v.severity}] ${v.type}: ${v.description}${where ? ` \u2014 ${where}` : ""}${v.sheet && v.sheet !== "/" ? ` [sheet ${v.sheet}]` : ""}`;
@@ -212,6 +236,15 @@ function createCommands(ctx) {
       handler: wrap(async (inv, cwd) => {
         const result = await ctx.kicad.run("simulate", { path: targetFile(cwd, inv.rawInput, ".kicad_sch") }, inv.signal, { timeoutMs: 12e4 });
         return formatSimulate(result);
+      })
+    },
+    {
+      name: "mcu-check",
+      description: "Check how the project schematic wires its microcontroller (strapping pins, reserved pins, EN, decoupling); an MCU no provider covers is reported as cannot verify",
+      input: { hint: "[path/to/file.kicad_sch]" },
+      handler: wrap(async (inv, cwd) => {
+        const result = await ctx.kicad.run("check_mcu", { path: targetFile(cwd, inv.rawInput, ".kicad_sch") }, inv.signal);
+        return formatMcu(result);
       })
     },
     {
@@ -369,14 +402,14 @@ Run \`/kicad-install ${option.id} --yes\` to confirm.` : formatOption(option);
   return json ? JSON.stringify({ job }) : `Started: ${job.command}
 Follow it with /kicad-install status; KiCad is checked again when it finishes.`;
 }
-var MARK = { ok: "\u2713", warn: "!", error: "\u2717" };
+var MARK2 = { ok: "\u2713", warn: "!", error: "\u2717" };
 function optionalInstalls(report) {
   return report.checks.flatMap((c) => c.install ?? []);
 }
 function formatDoctor(report) {
   const lines = [`**${report.summary}**`, ""];
   for (const c of report.checks) {
-    lines.push(`- ${MARK[c.status]} **${c.label}**: ${c.summary}`);
+    lines.push(`- ${MARK2[c.status]} **${c.label}**: ${c.summary}`);
     if (c.fix) lines.push(`  - fix: ${c.fix}`);
   }
   if (report.install.length) lines.push("", "Install KiCad: run `/kicad-install` to see the options for this machine.");
