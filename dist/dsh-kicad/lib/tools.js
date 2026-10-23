@@ -597,8 +597,8 @@ function apply(ctx, config = {}) {
       name: "kicad_check_mcu",
       description: [
         "Check how each microcontroller is wired, from KiCad's netlist and a per-family pin table (MCU providers), and let the tool judge it: strapping pins held at the wrong level at reset (ESP32 GPIO0, GPIO2, GPIO12), reserved flash/PSRAM pins in use, input-only GPIOs left floating or used to drive, an EN pin without pull-up, thin supply decoupling.",
-        'requirements states what the firmware needs from the board, one per signal: [{net: "VBAT_SENSE", needs: "adc1"}, {pin: "U1:IO25", needs: ["output", "dac"]}]; needs is output (not input-only), input, adc, adc1 (usable with WiFi), adc2, dac, touch or boot_free (not a strapping pin). Derive them from what the user says the board must do, then choose GPIOs that satisfy them before checking.',
-        "Covered now: classic ESP32 modules and PICO (a project can add its own provider as <family>.mcu.json next to the schematic). An MCU no provider covers comes back as CANNOT VERIFY: say so to the user, do not call that design checked.",
+        'requirements states what the firmware needs from the board, one per signal: [{net: "VBAT_SENSE", needs: "adc1"}, {pin: "U1:IO25", needs: ["output", "dac"]}]; needs is output (not input-only), input, adc, adc1 (ESP32: usable with WiFi), adc2, dac, touch, boot_free (not a strapping pin) or, per MCU, a fixed peripheral such as pwm, i2c_sda, i2c_scl, spi_mosi, spi_miso, spi_sck. Derive them from what the user says the board must do, then choose GPIOs that satisfy them before checking.',
+        "Covered now: classic ESP32 modules and PICO, and the 8-pin ATtiny25/45/85 (a project can add its own provider as <family>.mcu.json next to the schematic). An MCU no provider covers comes back as CANNOT VERIFY: say so to the user, do not call that design checked.",
         "This is a static wiring check, not a firmware simulation: it cannot tell what the firmware does with a pin. Report the tool's verdict and fixes; run it after placing or changing an MCU, and fix every error before calling the design done."
       ].join(" "),
       parameters: {

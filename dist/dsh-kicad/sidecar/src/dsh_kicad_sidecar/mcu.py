@@ -166,8 +166,9 @@ def check_mcu(circuit: Circuit, ref: str, provider: dict[str, Any]) -> tuple[lis
     comp = circuit.components[ref]
     table = _gpio_table(provider, comp.get("lib_id", ""), comp.get("value", ""))
     findings: list[dict[str, Any]] = []
-    en_pin = provider.get("enable_pin")
-    supply = {s.upper() for s in provider.get("supply_pins", [])}
+    enable = provider.get("enable") or {}
+    en_pattern = re.compile(enable["pin_pattern"]) if enable.get("pin_pattern") else None
+    supply = {s.upper() for s in (provider.get("supply") or {}).get("pins", [])}
     supply_nets: dict[str, str] = {}  # net → the first supply pin on it
     recognised = 0
     for pin, net in circuit.by_ref.get(ref, []):
@@ -175,8 +176,8 @@ def check_mcu(circuit: Circuit, ref: str, provider: dict[str, Any]) -> tuple[lis
         name = (node.get("pin_function") or "").rsplit("_", 1)[0] if node.get("pin_function") else ""
         if name.upper() in supply and circuit.kind(net) != "ground":
             supply_nets.setdefault(net, pin)
-        if en_pin and name == en_pin:
-            findings += _check_enable(circuit, ref, pin, name, net, provider)
+        if en_pattern and en_pattern.search(name):
+            findings += _check_enable(circuit, ref, pin, name, net, enable)
             continue
         gpio = _gpio_of(provider, name)
         if gpio is None:
@@ -240,19 +241,20 @@ def _check_input_only(circuit: Circuit, ref: str, pin: str, name: str, gpio: int
     return out
 
 
-def _check_enable(circuit: Circuit, ref: str, pin: str, name: str, net: str, provider: dict[str, Any]) -> list[dict[str, Any]]:
+def _check_enable(circuit: Circuit, ref: str, pin: str, name: str, net: str, enable: dict[str, Any]) -> list[dict[str, Any]]:
+    advice = enable.get("advice", "Pull it up to the supply with 10 kΩ.")
     if not _connected(circuit, net, ref, pin):
-        return [_finding("error", "enable_unconnected", ref, pin, name, None, net, f"{name} is not connected: the chip stays off or resets at random",
-                         f"Pull {name} up to the supply with 10 kΩ (and about 1 µF to ground for a clean power-up).")]
+        return [_finding(enable.get("unconnected_severity", "error"), "enable_unconnected", ref, pin, name, None, net,
+                         f"{name} is not connected: {enable.get('unconnected_why', 'the chip stays off or resets at random')}", advice)]
     if circuit.kind(net) == "rail" or any(r["to"] == "rail" for r in circuit.resistors(net, ref, pin)):
         return []
-    return [_finding("warning", "enable_no_pullup", ref, pin, name, None, net,
-                     f"{name} has no pull-up to the supply on net {short_name(net)}; the vendor's reference design uses 10 kΩ to the supply and about 1 µF to ground",
-                     f"Add the pull-up resistor from {short_name(net)} to the supply.")]
+    return [_finding(enable.get("no_pullup_severity", "warning"), "enable_no_pullup", ref, pin, name, None, net,
+                     f"{name} has no pull-up to the supply on net {short_name(net)}: {enable.get('no_pullup_why', 'it can float')}", advice)]
 
 
 def _check_supply(circuit: Circuit, ref: str, supply_nets: dict[str, str], provider: dict[str, Any]) -> list[dict[str, Any]]:
-    need = float(provider.get("supply_bulk_uf", 0)) * 1e-6
+    supply = provider.get("supply") or {}
+    need = float(supply.get("min_uf", 0)) * 1e-6
     if not need:
         return []
     out = []
@@ -261,8 +263,8 @@ def _check_supply(circuit: Circuit, ref: str, supply_nets: dict[str, str], provi
         if total < need:
             have = f"{total * 1e6:.3g} µF" if total else "no capacitor"
             out.append(_finding("warning", "supply_decoupling", ref, supply_nets[net], "supply", None, net,
-                                f"Supply net {short_name(net)} has {have} to ground; the vendor recommends at least {need * 1e6:g} µF close to the module",
-                                f"Add a {need * 1e6:g} µF capacitor (plus 100 nF) from {short_name(net)} to ground next to {ref}."))
+                                f"Supply net {short_name(net)} has {have} to ground; the vendor recommends at least {need * 1e6:g} µF close to the chip",
+                                f"Add a {supply.get('advice', f'{need * 1e6:g} µF capacitor')} from {short_name(net)} to ground next to {ref}."))
     return out
 
 
@@ -277,7 +279,7 @@ def _ohms(value: float) -> str:
 CAPABILITIES = ("output", "input", "adc", "adc1", "adc2", "dac", "touch", "boot_free")
 
 
-def _capability(attrs: dict[str, Any], needs: str) -> tuple[bool, str]:
+def _capability(attrs: dict[str, Any], needs: str, known: set[str] = frozenset()) -> tuple[bool, str]:  # type: ignore[assignment]
     reserved = attrs.get("reserved")
     if reserved:
         return False, f"it is {reserved}"
@@ -298,7 +300,12 @@ def _capability(attrs: dict[str, Any], needs: str) -> tuple[bool, str]:
         return bool(attrs.get("touch")), "it has no touch sensor"
     if needs == "boot_free":
         return (not attrs.get("strapping")), "it is a strapping pin: its level at reset changes how the chip boots"
-    raise McuError(f"unknown capability {needs!r}; use one of {', '.join(CAPABILITIES)}")
+    caps = attrs.get("caps") or []
+    if needs in caps:
+        return True, ""
+    if needs in known:
+        return False, f"it cannot do {needs}"
+    raise McuError(f"unknown capability {needs!r} for this MCU; use one of {', '.join(sorted(set(CAPABILITIES) | known))}")
 
 
 def check_requirements(circuit: Circuit, mcus: dict[str, dict[str, Any]], requirements: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -316,7 +323,8 @@ def check_requirements(circuit: Circuit, mcus: dict[str, dict[str, Any]], requir
         for ref, pin, gpio, attrs in gpios:
             problems = []
             for need in needs:
-                ok, why = _capability(attrs, need)
+                known = {c for a in mcus[ref]["table"].values() for c in a.get("caps", [])}
+                ok, why = _capability(attrs, need, known)
                 if not ok:
                     problems.append(f"{need}: {why}")
             results.append({"target": label, "needs": needs, "pin": f"{ref}:{pin}", "gpio": gpio, "passed": not problems,

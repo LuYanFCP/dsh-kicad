@@ -4,10 +4,11 @@
 
 Exit code 0 only when ERC has no errors and every requirement holds.
 """
-import json, sys
+import json, os, sys
 sys.path.insert(0, sys.argv[1])
 from dsh_kicad_sidecar.kicad_cli import KiCadCli
 from dsh_kicad_sidecar.schematic import Schematic
+from dsh_kicad_sidecar import mcu
 path = sys.argv[2]
 cli = KiCadCli()
 erc = cli.erc(path); print('ERC:', 'PASSED' if erc['passed'] else 'FAILED', erc['counts'], erc['by_type'])
@@ -53,6 +54,10 @@ c('PB3 -> button -> GND, no external pull-up', sw and net_of(sw[0], '2') == 'GND
 pb4 = net_of(u1, 'PB4'); r4 = [r for r, p, f in nets.get(pb4, set()) if r.startswith('R')]
 c('PB4 -> 330R -> LED -> GND', r4 and comps[r4[0]]['value'].startswith('330') and net_of('D2', 'K') == 'GND')
 c('every board part has a footprint', all(cmp['footprint'] for r, cmp in comps.items() if not cmp['lib_id'].startswith('power:')))
+mcu_report = mcu.check_schematic(net, os.path.dirname(os.path.abspath(path)))
+for m in mcu_report['mcus']:
+    for f in m.get('findings', []): print(f"  MCU {f['severity']}: {f['pin']} {f['message']}")
+c('MCU wiring (kicad_check_mcu, attiny85 provider): checked, no errors', mcu_report['passed'] is True)
 
 print('\nREQUIREMENTS:'); [print(('  OK  ' if ok else '  FAIL'), name) for name, ok in checks]
 print(f'\n{sum(ok for _, ok in checks)}/{len(checks)} requirements satisfied')

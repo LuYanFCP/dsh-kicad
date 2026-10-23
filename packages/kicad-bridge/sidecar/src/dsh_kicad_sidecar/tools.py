@@ -213,7 +213,7 @@ TOOL_SPECS: list[ToolSpec] = [
              _obj({"path": {"type": "string", "description": "A model file, or a folder to search (e.g. the project folder)."},
                    "name": {"type": "string", "description": "Only models whose name contains this text (case-insensitive)."}}, ["path"])),
     ToolSpec("check_mcu", "Static check of how each microcontroller is wired, from KiCad's netlist and a per-family pin table (MCU providers; covered now: "
-             "ESP32 classic modules and PICO). Finds strapping pins held at the wrong level at reset (ESP32 GPIO0/2/12), reserved flash/PSRAM pins in use, "
+             "classic ESP32 modules and PICO, ATtiny25/45/85). Finds strapping pins held at the wrong level at reset (ESP32 GPIO0/2/12), reserved flash/PSRAM pins in use, "
              "input-only pins used to drive or left floating, an EN pin without pull-up, a thin supply decoupling; and judges requirements "
              "{net|pin, needs: output|input|adc|adc1|adc2|dac|touch|boot_free} against the GPIO the signal is on. An MCU no provider covers is reported "
              "as cannot_verify, never as passing. A project can add its own provider as <family>.mcu.json next to the schematic. Read-only.",
