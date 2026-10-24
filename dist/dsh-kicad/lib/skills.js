@@ -126,6 +126,10 @@ function formatFirmware(v) {
     lines.push(`EEPROM at the end: ${Object.entries(v.eeprom.changed).map(([a, x]) => `[${a}] = ${x}`).join(", ")} (${v.eeprom.writes.length} write(s)).`);
   if (v.usi_transfers?.length)
     lines.push(`USI transfers: ${v.usi_transfers.slice(0, 8).map((x) => `${ms(x.t)} sent 0x${x.tx.toString(16).toUpperCase().padStart(2, "0")} received 0x${x.rx.toString(16).toUpperCase().padStart(2, "0")}`).join("; ")}${v.usi_transfers.length > 8 ? ` \u2026 ${v.usi_transfers.length - 8} more` : ""}.`);
+  if (v.interrupts?.length) {
+    const more = (v.interrupt_count ?? v.interrupts.length) - Math.min(v.interrupts.length, 8);
+    lines.push(`GPIO interrupts: ${v.interrupts.slice(0, 8).map((i) => `${ms(i.t)} ${i.gpio} ${i.type}`).join("; ")}${more > 0 ? ` \u2026 ${more} more` : ""}.`);
+  }
   if (v.strap?.download_mode)
     lines.push(`The strapping pins (GPIO_STRAP ${v.strap.value}) started the serial bootloader: the firmware did not run.`);
   if (v.uart?.trim()) {

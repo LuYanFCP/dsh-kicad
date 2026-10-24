@@ -213,6 +213,9 @@ export interface FirmwareRun {
   /** ESP32: the end of the UART0 output, and how many bytes the firmware sent in all. */
   uart?: string
   uart_bytes?: number
+  /** ESP32: the GPIO interrupts the board's edges and levels latched (the first ones), and how many in all. */
+  interrupts?: Array<{ t: number, gpio: string, type: string }>
+  interrupt_count?: number
   /** ESP32: hardware the firmware used that QEMU does not emulate. */
   not_emulated?: Record<string, { reads: number, writes: number, accesses?: number }>
   /** The scenario file this run read and/or wrote. */
@@ -464,6 +467,10 @@ export function formatFirmware(v: FirmwareRun): string {
   }
   if (v.eeprom && Object.keys(v.eeprom.changed).length) lines.push(`EEPROM at the end: ${Object.entries(v.eeprom.changed).map(([a, x]) => `[${a}] = ${x}`).join(', ')} (${v.eeprom.writes.length} write(s)).`)
   if (v.usi_transfers?.length) lines.push(`USI transfers: ${v.usi_transfers.slice(0, 8).map(x => `${ms(x.t)} sent 0x${x.tx.toString(16).toUpperCase().padStart(2, '0')} received 0x${x.rx.toString(16).toUpperCase().padStart(2, '0')}`).join('; ')}${v.usi_transfers.length > 8 ? ` … ${v.usi_transfers.length - 8} more` : ''}.`)
+  if (v.interrupts?.length) {
+    const more = (v.interrupt_count ?? v.interrupts.length) - Math.min(v.interrupts.length, 8)
+    lines.push(`GPIO interrupts: ${v.interrupts.slice(0, 8).map(i => `${ms(i.t)} ${i.gpio} ${i.type}`).join('; ')}${more > 0 ? ` … ${more} more` : ''}.`)
+  }
   if (v.strap?.download_mode) lines.push(`The strapping pins (GPIO_STRAP ${v.strap.value}) started the serial bootloader: the firmware did not run.`)
   if (v.uart?.trim()) {
     const tail = v.uart.replace(/\x1b\[[0-9;]*m/g, '').trimEnd().split('\n').slice(-8)  // without ESP-IDF's log colours
