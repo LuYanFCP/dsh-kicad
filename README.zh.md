@@ -10,10 +10,10 @@
 
 | 能力 | 说明 |
 |---|---|
-| **工具**（`kicad_*`） | `doctor`（检查本机是否就绪：kicad-cli 与 KiCad 8+、库、Python，附修复方法和安装命令）、`read_schematic`、`list_components`、`get_symbol_pins`、`list_nets`（KiCad 网表）、`search_symbols`（已安装符号库）、`erc`、`drc`、`render`（SVG；模型支持图片时附带 PNG 图片；电路板可从任意方向和角度渲染 KiCad 的 3D 视图）、`export`（网表/BOM）、`simulate`（用 ngspice 做 SPICE 验证：工作点、瞬态与交流分析，需求以断言形式由工具依据数值判定，见[仿真验证](#仿真验证)）、`sim_model`（列出模型文件或目录中的 SPICE 模型及其引脚）、`check_mcu`（静态检查微控制器的接线，见[MCU 接线检查](#mcu-接线检查)）、`simulate_firmware`（让 ATtiny 固件在板子上运行，见[固件与电路板联合仿真](#固件与电路板联合仿真)）、`export_fab`（Gerber/钻孔/坐标/BOM 压缩包及 3D 预览，KiCad 判定电路板就绪前拒绝导出，见[制板输出](#制板输出)）、`fab_preset`（JLCPCB/PCBWay 设计规则）、`create_schematic`，以及原子批量编辑 `edit_schematic`（增删移动元件、设置值/封装/属性、导线、标签、电源符号、结点、不连接标记、绕开元件和其他网络自动布线的引脚到引脚导线、引脚到网络的连接，以及按功能分区布局：带标题的功能块框、连同导线一起移动元件或整个功能块、图纸尺寸与标题栏）；电路板有 `read_pcb`（外框、层、设计规则与网络类、带 courtyard 和焊盘网络的封装、覆铜区、DRC 给出的未布线数）和原子批量编辑 `edit_pcb`（板框与安装孔、移动/翻面/锁定封装、写入 `.kicad_pro` 的设计规则与网络类、以焊盘为端点的走线、过孔、覆铜区、禁布区、丝印文字与位号、按 uuid 删除）；以及 `update_pcb`——无界面地完成 KiCad 的“从原理图更新 PCB”：新板使用 KiCad 的空板、默认叠层和占位板框；已有电路板上已放置的封装保持原位，新封装放在板框旁等待布局，网络、值和字段随原理图更新；无法上板时拒绝执行并列出需修正的 `REF:PIN`，结果由 KiCad 的原理图一致性检查判定；以及 `autoroute`——用 [Freerouting](https://github.com/freerouting/freerouting) 自动布线，保留手工布好（锁定）的和已有的走线，重新填充覆铜，以 KiCad 的 DRC 结论为准（见[布线](#布线)）。未修改的文件文本逐字节保持不变。 |
+| **工具**（`kicad_*`） | `doctor`（检查本机是否就绪：kicad-cli 与 KiCad 8+、库、Python，附修复方法和安装命令）、`read_schematic`、`list_components`、`get_symbol_pins`、`list_nets`（KiCad 网表）、`search_symbols`（已安装符号库）、`erc`、`drc`、`render`（SVG；模型支持图片时附带 PNG 图片；电路板可从任意方向和角度渲染 KiCad 的 3D 视图）、`export`（网表/BOM）、`simulate`（用 ngspice 做 SPICE 验证：工作点、瞬态与交流分析，需求以断言形式由工具依据数值判定，见[仿真验证](#仿真验证)）、`sim_model`（列出模型文件或目录中的 SPICE 模型及其引脚）、`check_mcu`（静态检查微控制器的接线，见[MCU 接线检查](#mcu-接线检查)）、`simulate_firmware`（让 ATtiny 或 ESP32 固件在板子上运行，见[固件与电路板联合仿真](#固件与电路板联合仿真)）、`export_fab`（Gerber/钻孔/坐标/BOM 压缩包及 3D 预览，KiCad 判定电路板就绪前拒绝导出，见[制板输出](#制板输出)）、`fab_preset`（JLCPCB/PCBWay 设计规则）、`create_schematic`，以及原子批量编辑 `edit_schematic`（增删移动元件、设置值/封装/属性、导线、标签、电源符号、结点、不连接标记、绕开元件和其他网络自动布线的引脚到引脚导线、引脚到网络的连接，以及按功能分区布局：带标题的功能块框、连同导线一起移动元件或整个功能块、图纸尺寸与标题栏）；电路板有 `read_pcb`（外框、层、设计规则与网络类、带 courtyard 和焊盘网络的封装、覆铜区、DRC 给出的未布线数）和原子批量编辑 `edit_pcb`（板框与安装孔、移动/翻面/锁定封装、写入 `.kicad_pro` 的设计规则与网络类、以焊盘为端点的走线、过孔、覆铜区、禁布区、丝印文字与位号、按 uuid 删除）；以及 `update_pcb`——无界面地完成 KiCad 的“从原理图更新 PCB”：新板使用 KiCad 的空板、默认叠层和占位板框；已有电路板上已放置的封装保持原位，新封装放在板框旁等待布局，网络、值和字段随原理图更新；无法上板时拒绝执行并列出需修正的 `REF:PIN`，结果由 KiCad 的原理图一致性检查判定；以及 `autoroute`——用 [Freerouting](https://github.com/freerouting/freerouting) 自动布线，保留手工布好（锁定）的和已有的走线，重新填充覆铜，以 KiCad 的 DRC 结论为准（见[布线](#布线)）。未修改的文件文本逐字节保持不变。 |
 | **策略** | 设计修改走 dsh 审批（`ask`）；写操作被单调 guard 限制在会话工作目录内；每次成功修改后自动运行 KiCad ERC（原理图）或 DRC（电路板修改或应用板厂预设后，先重新填充覆铜；`update_pcb` 之后另报原理图一致性问题数）并把结论附加到工具结果；系统提示中注入稳定的 KiCad 工作规范，以及动态的“当前目录中的 KiCad 工程 + 最近一次 ERC/DRC”上下文。 |
 | **技能** | `kicad-agent-workflow`、`kicad-erc-triage`、`kicad-drc-triage`、`kicad-schematic-design`、`kicad-simulate`、`kicad-mcu-check`。 |
-| **命令** | `/erc`、`/drc`、`/bom`、`/simulate`、`/mcu-check`、`/mcu-sim`（不经过模型，作用于工程根设计）、`/kicad-fab`（制板压缩包）、`/kicad-render`、`/kicad-doctor`（环境检查）、`/kicad-install`（安装 KiCad 或 Freerouting 自动布线器，见下文）。 |
+| **命令** | `/erc`、`/drc`、`/bom`、`/simulate`、`/mcu-check`、`/mcu-sim`（不经过模型，作用于工程根设计）、`/kicad-fab`（制板压缩包）、`/kicad-render`、`/kicad-doctor`（环境检查）、`/kicad-install`（安装 KiCad、Freerouting 自动布线器或用于 ESP32 固件仿真的 Espressif QEMU，见下文）。 |
 | **Agent 预设** | `eda`：与 standard 类似的工具集 + 电子设计人设。KiCad 工具为全局注册，任何预设都可使用。 |
 | **Web 界面** | 右侧边栏 `*.kicad_sch` / `*.kicad_pcb` 查看器，两种模式：**交互**——内嵌 [KiCanvas](https://github.com/theacodes/kicanvas)（层次图纸、查看元件/封装/网络、图层开关、KiCad 或 Witch Hazel 主题、文件变化时自动刷新）；**SVG**——kicad-cli 渲染（平移缩放、多图纸、渲染按钮，PCB 文件变化时自动重新渲染，也是交互模式失败时的自动回退）；电路板还有仿照 KiCad 3D 查看器的 **3D** 模式（见 [3D 视图](#3d-视图)）；ERC/DRC、原理图修改与环境检查的对话卡片；sidecar（kicad-cli 路径、Python，以及 KiCad 环境检查和 **安装 KiCad**）与策略（审批、自动 ERC、自动渲染）的设置页。KiCad 缺失或版本过低时，查看器和失败的工具卡片会显示带 **安装 KiCad** 按钮的提示。 |
 | **独立 MCP server** | Python sidecar 通过 stdio 说 MCP 协议，Claude Code 或 RL 环境可以不经 dsh 直接复用同一套工具。 |
@@ -146,15 +146,23 @@ Freerouting（GPL-3.0）是独立的 Java 程序，不随插件分发。`/kicad-
 
 ### 固件与电路板联合仿真
 
-`kicad_simulate_firmware {path, firmware?, stimuli?, assertions?, duration?, clock_hz?, ...}` 在模拟的 **ATtiny25/45/85** 上运行固件镜像，芯片按原理图连接，并判定电路板的行为，于是“按下按钮后 20 ms 内 LED 亮起”这类需求会被验证，而不是被假设。固件是你自己构建的 `.hex` 或 `.elf`（avr-gcc、PlatformIO、Arduino；ELF 还带有 EEPROM 初始内容）；插件不会构建、编写或编造固件。
+`kicad_simulate_firmware {path, firmware?, stimuli?, assertions?, duration?, clock_hz?, ...}` 在模拟的 **ATtiny25/45/85** 或**经典 ESP32** 上运行固件镜像，芯片按原理图连接，并判定电路板的行为，于是“按下按钮后 20 ms 内 LED 亮起”这类需求会被验证，而不是被假设。固件是你自己构建的：ATtiny 用 `.hex` 或 `.elf`（avr-gcc、PlatformIO、Arduino；ELF 还带有 EEPROM 初始内容），ESP32 用合并后的 flash 镜像（见下文）；插件不会构建、编写或编造固件。
 
 - **芯片**是一个纯 Python 的 AVR 模拟器（无依赖），按数据手册（Atmel 2586Q，本次完整读过）实现：ATtiny25/45/85 指令集和存储器大小；GPIO；外部中断、引脚变化中断和所有外设中断（按向量顺序）；**Timer0 与 Timer1**（普通、CTC、相位修正和快速 PWM、翻转输出；比较值像硬件那样在 TOP/BOTTOM 锁存；Timer1 含 64 MHz PLL 时钟、以 OCR1C 为顶点和互补输出）；**ADC**（单端与带增益的差分通道、单极与双极、带隙、温度传感器、Vcc / 1.1 V / 2.56 V / AREF 基准、连续转换、13/25 个时钟的转换时间）；**模拟比较器**；**EEPROM**（3.4 ms 写入、只擦除和只写模式、复位后保留、可从 ELF 的 `.eeprom` 加载）；**看门狗**（复位和中断模式、定时序列规则、掉电唤醒）；**复位**（RESET 引脚、看门狗、64 ms 启动延时、MCUSR 标志）；**三线模式的 USI**（SPI 主机或从机、软件选通或外部时钟）；空闲与掉电休眠。它用 avr-gcc 在四个优化等级下编译的程序校验过（148 字节的算术、排序、CRC、软浮点结果与 Python 对比），也校验了已知时序。
 - **电路板**是一个直流网络：电阻、开关、引脚驱动器（40 Ω）和内部上拉（35 kΩ）、RESET 引脚自带的上拉（45 kΩ）、电源轨和地。场景按下按钮就闭合对应开关（RESET 网络到地的开关会让芯片复位）；芯片读到的是网络给这个引脚的电平；LED 报告它是否会亮（正向压降 1.8 V）；PWM 引脚在占空比内为高电平，网络会对每种组合求解。这些网络上的晶体管、IC 等其他元件按开路处理，并列在结果里。
 - **场景。** `stimuli`：`{at: "30ms", press: "SW1", name: "press"}`、`release`、`toggle`、`{at, drive: "NET", level: high|low|release|<伏特数>}`（理想电压源，也能覆盖电源轨，比如电量下降的电池）、`{at, temperature: 85}`。`assertions`：一个对象（`{led: "D2", is: "on"}`、`{pin: "PB4", level: "high"}`、`{net, level}`、以伏特计的 `{net, min, max}`、PWM 引脚的 `{pin, duty, tol}` / `{pin, freq, tol_pct}`、LED 点亮时间占比的 `{led, min, max}`）加一个时刻（`at`、`{after: "press", within: "20ms"}`、全程成立的 `{from, to}`），或记录下来的事件：`{reset: "watchdog", after, within}`、`{resets: 0, at}`、`{eeprom: 0, is: 42, at}`、`{usi: "tx", nth: 1, is: 165, by}`。其他输入：`eeprom`（初始字节）、`usi_input`（从机移入的数据）、`startup_ms`、`rstdisbl`（PB5 作 GPIO）、`vcc`、`led_vf`。
 - **跟着工程走。**`save_scenario: true` 把参数写入 `<原理图名>.fw.json`；之后的调用和 `/mcu-sim` 在该文件存在时直接使用它，改动后所有已保存的需求都会被重新检查（调用中明确给出的参数会替换文件里的同名键）。
 - **不请自来的隐患。**固件读取了悬空输入（按钮没有上拉）、输出与开关对抗（过流：驱动器经闭合的开关接地是 125 mA）、输入卡在逻辑电平之间，以及每一次复位。
-- **它不会假装的。**两线模式的 USI（I²C）、死区发生器、强制输出比较、由 Timer0 计时的 USI、Timer0 的模式 5 和掉电检测复位都不仿真。固件用到其中之一时，运行会带着原因和时间停下；之后时刻的断言是 `cannot verify`，绝不算通过，总体结论也一样。其他 MCU（ESP32、STM32、其他 AVR）会被拒绝；`kicad_check_mcu` 仍会检查它们的接线。
+- **它不会假装的。**两线模式的 USI（I²C）、死区发生器、强制输出比较、由 Timer0 计时的 USI、Timer0 的模式 5 和掉电检测复位都不仿真。固件用到其中之一时，运行会带着原因和时间停下；之后时刻的断言是 `cannot verify`，绝不算通过，总体结论也一样。其他 MCU（STM32、ESP32-S2/S3/C3、其他 AVR）会被拒绝；`kicad_check_mcu` 仍会检查它们的接线。
 - 速度：休眠的芯片几乎不耗时；忙等循环每秒可执行数百万条指令，并有墙钟 `timeout`。`clock_hz` 默认 1 MHz（出厂 8 MHz RC 加除以 8 的熔丝）：请设成固件构建时使用的时钟。
+
+**经典 ESP32**（WROOM/WROVER 模块和 PICO）运行在 [Espressif 的 QEMU](https://github.com/espressif/qemu)（`qemu-system-xtensa -machine esp32`）上：ROM、二级 bootloader、你的应用和双核 FreeRTOS 都在跑，所以 ESP-IDF 或 Arduino-ESP32 的构建产物可以原样运行。QEMU 需要单独安装：`kicad_doctor` 会报告它，`/kicad-install qemu-esp32` 下载 Espressif 的发布包（校验 SHA-256，不需要 root），ESP-IDF 自带安装的版本（`idf_tools.py install qemu-xtensa`）也能被找到；用 `qemu` 设置或 `$QEMU_XTENSA` 指向其他位置。
+
+- **固件**：合并后的 flash 镜像（bootloader 在 0x1000、分区表、应用：在 ESP-IDF 构建目录里执行 `esptool.py --chip esp32 merge_bin -o flash.bin @flash_args`，或 Arduino 的 `.merged.bin`），也可以直接给构建目录里的 `flasher_args.json`，由插件合并。镜像会被补齐到 QEMU 接受的 flash 大小；原文件不会被改写。
+- **引脚。**QEMU 的 ESP32 GPIO 外设只是个空壳，IO_MUX 和 RTC_IO 也没有模拟，所以 sidecar 通过 QEMU 的 gdb stub 观察芯片，并亲自完成对这些寄存器的每一次读写：输出、开漏、内部上拉下拉、输入使能和 GPIO 矩阵都跟着固件走；读-改-写（ESP-IDF 配置引脚的方式）从芯片实际保存的值开始；读 `GPIO_IN` 得到电路板给引脚的电平。断言里引脚写作 `GPIO2`、`IO2` 或 `U1:IO2`。电路板一侧是同一个直流网络（引脚驱动按驱动强度计，默认约 33 Ω；45 kΩ 上下拉；ESP32 的逻辑阈值）。
+- **启动与复位。**上电时求解 strapping 引脚（GPIO0、2、4、5、12、15）的电平并交给 QEMU：GPIO0 被拉低时芯片真的会进入串口下载模式，GPIO12 为高是错误（选择 1.8 V flash）。EN 为低时芯片保持复位，直到 EN 升高；每次复位都会记录原因（`{reset: "watchdog"}`，还有 `power-on`、`software`、`external`、`deep-sleep`、`brownout`）。UART0 的输出会被捕获：`{uart: "ready", by: "2s"}` 或 `{uart: "Guru Meditation", is: "absent"}`。
+- **时间**是 QEMU 的虚拟时钟（`-icount`）：每条指令让它前进 8 ns，所以忙碌的代码在任何主机上耗费的仿真时间都相同；空闲时间（CPU 在 WAITI 中等待，FreeRTOS 的空闲任务就是这样）则按真实时间流逝。因此一次运行至少要花与仿真时长相当的墙钟时间。应用内部的时序在各次运行之间的差异远小于 1 毫秒；双核固件的启动过程会相差几十毫秒（QEMU 让两个核轮流运行）。仿真时间包含启动过程：小程序约 0.2 s，MicroPython 约 2 s，所以激励应放在固件配置好引脚之后（时间线会显示何时）。`duration` 默认 2 s（最多 30 s）。
+- **它不会假装的。**电路板上由外设驱动的引脚（LEDC PWM、I2C、SPI、RMT）电平未知，运行到此停止；会触发的 GPIO 中断（QEMU 无法投递）、崩溃（`Guru Meditation`、`abort()`）以及等待永远不会响应的硬件的固件也一样。此后的断言为 `cannot verify`。固件用到的、QEMU 没有模拟的硬件（WiFi、蓝牙、ADC 等）会列在 `not_emulated` 中。
 
 ### 3D 视图
 
@@ -214,6 +222,8 @@ PYTHONPATH=packages/kicad-bridge/sidecar/src python3 -m dsh_kicad_sidecar --root
 | | `kicadCli` *（实时）* | 自动 | kicad-cli 路径 |
 | | `java` *（实时）* | 自动 | Freerouting 使用的 Java 25+（依次查找 `$JAVA_HOME`、PATH） |
 | | `freerouting` *（实时）* | 自动 | `freerouting.jar`（依次查找 `$FREEROUTING_JAR`、`/kicad-install freerouting` 下载的 jar） |
+| | `ngspice` *（实时）* | 自动 | `kicad_simulate` 使用的 ngspice（依次查找 `$NGSPICE`、PATH） |
+| | `qemu` *（实时）* | 自动 | ESP32 固件仿真使用的 Espressif `qemu-system-xtensa`（依次查找 `$QEMU_XTENSA`、PATH、ESP-IDF 的工具目录、`/kicad-install qemu-esp32` 下载的版本） |
 | | `requestTimeoutMs` | `300000` | |
 | `kicad-policy` | `approval` *（实时）* | `ask` | 设计修改 `ask` / `allow` |
 | | `autoErc` *（实时）* | `true` | 每次修改原理图后运行 ERC |
@@ -242,7 +252,7 @@ python packages/kicad-bridge/sidecar/tests/make_fixtures.py   # 用编辑器本�
 
 - 电路板可以从原理图创建并保持同步（`kicad_update_pcb`），可以自动布局（`auto_place`）、编辑、自动布线（`kicad_autoroute`）、检查和制板输出（`kicad_export_fab`）。自动布线需要另行安装 Java 25+ 与 Freerouting（见[布线](#布线)）；高密度电路板可能留下少数未布通的连接，由 agent 手工补齐。
 - 仿真只覆盖 ngspice 能做的模拟行为；没有 SPICE 模型的元件会被排除，固件、信号完整性、EMC 与热行为不在仿真范围内。普通的 Device:LED / Device:D 符号需要设置 `Sim.Device`（见[仿真验证](#仿真验证)）。
-- 固件仿真只支持 ATtiny25/45/85；它不是通用的 AVR 模拟器，没有实现的一律拒绝（见[固件与电路板联合仿真](#固件与电路板联合仿真)）。除此之外 MCU 检查是静态的，且只覆盖有 provider 的系列（目前是经典 ESP32 和 8 脚 ATtiny25/45/85）；不仿真固件行为（见 #31）。ESP32 引脚表的准确性取决于转录，请对照具体模块的数据手册核对。
+- 固件仿真覆盖 ATtiny25/45/85 和经典 ESP32（运行在需单独安装的 Espressif QEMU 上）；没有实现的一律拒绝（见[固件与电路板联合仿真](#固件与电路板联合仿真)），ESP32 的 LEDC PWM、ADC 和 GPIO 中断暂未仿真（#41）。除此之外 MCU 检查是静态的，且只覆盖有 provider 的系列（目前是经典 ESP32 和 8 脚 ATtiny25/45/85）；其他 MCU 见 #31。ESP32 引脚表的准确性取决于转录，请对照具体模块的数据手册核对。
 - 板厂预设数值读取自 JLCPCB 与 PCBWay 的工艺能力页面（2026-10-21），之后可能变化。JLC 的 CPL 保留 KiCad 的旋转角度，JLCPCB 预览中可能需要逐个修正。
 - 编辑覆盖元件、属性、导线、标签、电源符号、结点与不连接标记；不支持创建层次图纸、总线与图形元素。
 - 新放置在子图纸中的元件只向上查找一层根图纸来确定 instance 路径；更深的层次可能需要 KiCad 重新标注。

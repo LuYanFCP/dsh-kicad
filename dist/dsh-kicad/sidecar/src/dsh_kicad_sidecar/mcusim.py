@@ -104,6 +104,9 @@ def rail_volts(name: str) -> float | None:
 
 
 class Board:
+    GPIOS = 6           # the chip's pins are PB0 .. PB5
+    DEFAULT_VCC = 5.0
+
     def __init__(self, netlist: dict[str, Any], ref: str, provider: dict[str, Any], vcc: float | None = None, led_vf: float = 1.8, rstdisbl: bool = False):
         self.circuit = Circuit(netlist)
         self.ref = ref
@@ -118,19 +121,20 @@ class Board:
                     self.pin_names[(node["ref"], node["pin"])] = node["pin_function"].rsplit("_", 1)[0]
         self.pins: dict[int, str] = {}   # chip pin bit → net
         self.supply_net: str | None = None
+        supply = self.supply_pin_names(provider)
         for pin, net in c.by_ref.get(ref, []):
             name = self.pin_names.get((ref, pin), "")
             bit = _gpio_of(provider, name)
-            if bit is not None and 0 <= bit < 6:
+            if bit is not None and 0 <= bit < self.GPIOS:
                 self.pins[bit] = net
-            elif name.upper() == "VCC":
+            elif name.upper() in supply:
                 self.supply_net = net
         self.nets = [n["name"] for n in netlist["nets"]]
         self.fixed: dict[str, float] = {}
         guessed = vcc if vcc is not None else (rail_volts(self.supply_net) if self.supply_net else None)
         if guessed is None:
-            guessed = 5.0
-            self.notes.append("the supply voltage is not in the net name or the vcc argument: assumed 5 V")
+            guessed = self.DEFAULT_VCC
+            self.notes.append(f"the supply voltage is not in the net name or the vcc argument: assumed {self.DEFAULT_VCC:g} V")
         self.vcc = guessed
         for n in self.nets:
             kind = c.kind(n)
@@ -166,6 +170,15 @@ class Board:
             elif lib.startswith("Device:C") or lib.startswith("power:") or r.startswith("#"):
                 modelled.add(r)
         self.unmodelled = self._unmodelled(modelled)
+
+    def supply_pin_names(self, provider: dict[str, Any]) -> set[str]:
+        return {"VCC"}
+
+    def parse_pin(self, text: str) -> int:
+        return _pin_bit(text)
+
+    def pin_label(self, bit: int) -> str:
+        return f"PB{bit}"
 
     def _unmodelled(self, modelled: set[str]) -> list[str]:
         """Parts on a net the chip touches (or one step away through a resistor or switch) that this model does not simulate."""
@@ -281,8 +294,31 @@ def _pin_bit(text: str) -> int:
     return int(m.group(1))
 
 
-class Run:
+class Timeline:
+    """The recorded states of a run: ``timeline`` (snapshots, each in effect until the next) and their ``times``."""
+
+    timeline: list[dict[str, Any]]
+    times: list[float]
+
+    def state_at(self, t: float) -> dict[str, Any]:
+        i = bisect.bisect_right(self.times, t + 1e-12) - 1
+        return self.timeline[max(i, 0)]
+
+    def segments(self, start: float, end: float) -> list[tuple[float, float, dict[str, Any]]]:
+        """The piecewise-constant states overlapping ``(start, end]``."""
+        out = []
+        for i, snap in enumerate(self.timeline):
+            lo = snap["t"]
+            hi = self.timeline[i + 1]["t"] if i + 1 < len(self.timeline) else float("inf")
+            if hi > start and lo < end + 1e-12 and hi > lo:
+                out.append((max(lo, start), min(hi, end), snap))
+        return out
+
+
+class Run(Timeline):
     """One simulation: the chip, the board, the stimuli and the recorded timeline."""
+
+    RESET_CAUSES = ("any", "external", "watchdog")
 
     def __init__(self, avr: Avr, board: Board, initial_closed: set[str]):
         self.avr, self.board = avr, board
@@ -370,19 +406,9 @@ class Run:
                 finally:
                     self._in_reset = False
 
-    def state_at(self, t: float) -> dict[str, Any]:
-        i = bisect.bisect_right(self.times, t + 1e-12) - 1
-        return self.timeline[max(i, 0)]
-
-    def segments(self, start: float, end: float) -> list[tuple[float, float, dict[str, Any]]]:
-        """The piecewise-constant states overlapping ``(start, end]``."""
-        out = []
-        for i, snap in enumerate(self.timeline):
-            lo = snap["t"]
-            hi = self.timeline[i + 1]["t"] if i + 1 < len(self.timeline) else float("inf")
-            if hi > start and lo < end + 1e-12 and hi > lo:
-                out.append((max(lo, start), min(hi, end), snap))
-        return out
+    @property
+    def chip(self) -> Avr:
+        return self.avr
 
 
 def _led_label(fraction: float) -> str:
@@ -399,20 +425,21 @@ def _measure(board: Board, snap: dict[str, Any], a: dict[str, Any]) -> tuple[Any
         fraction = snap["leds"].get(ref, 0.0)
         return (fraction if "min" in a or "max" in a else _led_label(fraction)), f"LED {ref}"
     if "pin" in a:
-        bit = _pin_bit(a["pin"])
+        bit = board.parse_pin(a["pin"])
+        label = board.pin_label(bit)
         if bit not in board.pins:
-            raise SimulationError(f"PB{bit} is not connected to anything")
-        wave = snap["pwm"].get(f"PB{bit}")
+            raise SimulationError(f"{label} is not connected to anything")
+        wave = snap["pwm"].get(label)
         if "duty" in a:
             if wave:
-                return wave["duty"], f"PB{bit}"
+                return wave["duty"], label
             level = board.logic(volts[board.pins[bit]])
-            return (None if level is None else float(level)), f"PB{bit}"
+            return (None if level is None else float(level)), label
         if "freq" in a:
-            return (wave["hz"] if wave else None), f"PB{bit}"
+            return (wave["hz"] if wave else None), label
         if wave and "min" not in a and "max" not in a:
-            return f"pwm {wave['duty']:.0%} at {wave['hz']:.0f} Hz", f"PB{bit}"
-        return _level_or_volts(board, volts[board.pins[bit]], a), f"PB{bit}"
+            return f"pwm {wave['duty']:.0%} at {wave['hz']:.0f} Hz", label
+        return _level_or_volts(board, volts[board.pins[bit]], a), label
     if "net" in a:
         net = _net_name(board, a["net"])
         return _level_or_volts(board, volts.get(net), a), short_name(net)
@@ -455,7 +482,7 @@ def _within(value: float, lo: Any, hi: Any) -> bool:
 
 def _judge_logged(run: Run, a: dict[str, Any], names: dict[str, float], abort_at: float | None, end: float) -> dict[str, Any]:
     """Assertions about what the chip logged rather than what a pin did: resets, EEPROM contents, USI transfers."""
-    chip = run.avr
+    chip = run.chip
     when = a.get("at", a.get("by"))
     t0 = t1 = None
     if "after" in a or "from" in a:
@@ -475,8 +502,8 @@ def _judge_logged(run: Run, a: dict[str, Any], names: dict[str, float], abort_at
         raise SimulationError(f"assertion {a}: it looks at {t1 * 1000:g} ms but the simulation ends at {end * 1000:g} ms: raise duration")
     if "reset" in a:
         cause = a["reset"]
-        if cause not in ("any", "external", "watchdog"):
-            raise SimulationError("reset must be any, external or watchdog")
+        if cause not in run.RESET_CAUSES:
+            raise SimulationError("reset must be " + ", ".join(run.RESET_CAUSES[:-1]) + " or " + run.RESET_CAUSES[-1])
         hits = [(t, c) for t, c in chip.resets if (cause == "any" or c == cause) and (t0 is None or t > t0) and t <= t1 + 1e-12]
         name = a.get("name") or f"{cause} reset"
         text = f"within {a['within']} after {a.get('after', a.get('from'))}" if "within" in a else f"from {a.get('from')} to {a.get('to')}" if "to" in a else f"by {a.get('at', a.get('by'))}"
@@ -589,6 +616,52 @@ def _judge(run: Run, a: dict[str, Any], names: dict[str, float], abort_at: float
     return {**result, "passed": True, "value": values[0][2] if values else None}
 
 
+def parse_initial(board: Board, initial: dict[str, str] | None) -> set[str]:
+    """The switches closed at the start."""
+    closed = set()
+    for ref, state in (initial or {}).items():
+        if ref not in board.switches:
+            raise SimulationError(f"initial: no switch {ref} (switches: {', '.join(sorted(board.switches)) or 'none'})")
+        if state not in ("open", "closed"):
+            raise SimulationError("initial switch state must be open or closed")
+        if state == "closed":
+            closed.add(ref)
+    return closed
+
+
+def parse_stimuli(board: Board, stimuli: list[dict[str, Any]] | None, end: float,
+                  kinds: tuple[str, ...] = ("press", "release", "toggle", "drive", "temperature")) -> tuple[list[tuple[float, int, dict[str, Any]]], dict[str, float]]:
+    """``(events in time order, the times of the named ones)``."""
+    events: list[tuple[float, int, dict[str, Any]]] = []
+    names: dict[str, float] = {}
+    for i, s in enumerate(stimuli or []):
+        if not isinstance(s, dict) or "at" not in s:
+            raise SimulationError("each stimulus needs at, e.g. {at: \"50ms\", press: \"SW1\"}")
+        t = _seconds(s["at"], "at")
+        given = [k for k in kinds if k in s]
+        if len(given) != 1:
+            raise SimulationError(f"stimulus {s}: give exactly one of {', '.join(kinds)}")
+        kind = given[0]
+        if kind == "temperature":
+            parse_value(s["temperature"], "temperature")
+        elif kind == "drive":
+            _net_name(board, s["drive"])
+            if s.get("level") not in ("high", "low", "release"):
+                try:
+                    parse_value(s.get("level"), "level")
+                except SimulationError:
+                    raise SimulationError("drive needs level: high, low, release, or a voltage such as 2.7 or \"3.3V\"") from None
+        elif s[kind] not in board.switches:
+            raise SimulationError(f"stimulus {s}: no switch {s[kind]} (switches: {', '.join(sorted(board.switches)) or 'none'})")
+        if t > end:
+            raise SimulationError(f"stimulus at {s['at']} is after the end of the simulation ({end * 1000:g} ms)")
+        if s.get("name"):
+            names[str(s["name"])] = t
+        events.append((t, i, s))
+    events.sort(key=lambda e: (e[0], e[1]))
+    return events, names
+
+
 def simulate_firmware(netlist: dict[str, Any], mcu_ref: str, provider: dict[str, Any], firmware: str, stimuli: list[dict[str, Any]] | None,
                       assertions: list[dict[str, Any]] | None, duration: Any = None, clock_hz: Any = None, vcc: Any = None, led_vf: Any = None,
                       initial: dict[str, str] | None = None, timeout: float = 60.0, device: str = "attiny85", eeprom: Any = None,
@@ -616,14 +689,7 @@ def simulate_firmware(netlist: dict[str, Any], mcu_ref: str, provider: dict[str,
                   led_vf=parse_value(led_vf, "led_vf") if led_vf is not None else 1.8, rstdisbl=bool(rstdisbl))
     if not board.pins:
         raise SimulationError(f"{mcu_ref} has no pin connected to a PB0-PB5 net")
-    closed = set()
-    for ref, state in (initial or {}).items():
-        if ref not in board.switches:
-            raise SimulationError(f"initial: no switch {ref} (switches: {', '.join(sorted(board.switches)) or 'none'})")
-        if state not in ("open", "closed"):
-            raise SimulationError("initial switch state must be open or closed")
-        if state == "closed":
-            closed.add(ref)
+    closed = parse_initial(board, initial)
     chip = Avr(flash, clock, device=device, eeprom=bytes(eeprom_bytes), usi_input=queue, temperature_c=celsius, rstdisbl=bool(rstdisbl))
     if startup_ms is not None:  # a number is milliseconds, a string like "4ms" is a time
         delay = parse_value(startup_ms, "startup_ms")
@@ -632,33 +698,7 @@ def simulate_firmware(netlist: dict[str, Any], mcu_ref: str, provider: dict[str,
             raise SimulationError("startup_ms must be between 0 and 1000")
     run = Run(chip, board, closed)
     run.initial_eeprom = bytes(eeprom_bytes)
-    events: list[tuple[float, int, dict[str, Any]]] = []
-    names: dict[str, float] = {}
-    for i, s in enumerate(stimuli or []):
-        if not isinstance(s, dict) or "at" not in s:
-            raise SimulationError("each stimulus needs at, e.g. {at: \"50ms\", press: \"SW1\"}")
-        t = _seconds(s["at"], "at")
-        kinds = [k for k in ("press", "release", "toggle", "drive", "temperature") if k in s]
-        if len(kinds) != 1:
-            raise SimulationError(f"stimulus {s}: give exactly one of press, release, toggle, drive, temperature")
-        kind = kinds[0]
-        if kind == "temperature":
-            parse_value(s["temperature"], "temperature")
-        elif kind == "drive":
-            net = _net_name(board, s["drive"])
-            if s.get("level") not in ("high", "low", "release"):
-                try:
-                    parse_value(s.get("level"), "level")
-                except SimulationError:
-                    raise SimulationError("drive needs level: high, low, release, or a voltage such as 2.7 or \"3.3V\"") from None
-        elif s[kind] not in board.switches:
-            raise SimulationError(f"stimulus {s}: no switch {s[kind]} (switches: {', '.join(sorted(board.switches)) or 'none'})")
-        if t > end:
-            raise SimulationError(f"stimulus at {s['at']} is after the end of the simulation ({end * 1000:g} ms)")
-        if s.get("name"):
-            names[str(s["name"])] = t
-        events.append((t, i, s))
-    events.sort(key=lambda e: (e[0], e[1]))
+    events, names = parse_stimuli(board, stimuli, end)
     deadline = time.monotonic() + timeout
     aborted: dict[str, Any] | None = None
 

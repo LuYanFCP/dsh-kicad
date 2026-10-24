@@ -19,6 +19,11 @@ describe('launchSpec', () => {
     expect(spec.argv).toEqual(['python3', '-m', 'dsh_kicad_sidecar', '--ngspice', '/opt/ngspice/bin/ngspice'])
   })
 
+  it('passes the QEMU setting to the sidecar', () => {
+    const spec = launchSpec({ launcher: 'python', executable: 'python3', sidecarDir: '/x', qemu: '/opt/qemu/bin/qemu-system-xtensa', platform: 'linux' })
+    expect(spec.argv).toEqual(['python3', '-m', 'dsh_kicad_sidecar', '--qemu', '/opt/qemu/bin/qemu-system-xtensa'])
+  })
+
   it('runs through uv with extras', () => {
     const spec = launchSpec({ launcher: 'uv', executable: 'uv', sidecarDir: '/x/sidecar', extras: ['png', 'ipc'] })
     expect(spec.argv).toEqual(['uv', 'run', '--quiet', '--project', '/x/sidecar', '--extra', 'png', '--extra', 'ipc', 'python', '-m', 'dsh_kicad_sidecar'])

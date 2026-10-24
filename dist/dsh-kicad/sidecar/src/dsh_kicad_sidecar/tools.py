@@ -22,7 +22,7 @@ from .placement import OPERATIONS as PLACE_OPERATIONS, apply as apply_placement,
 from .board3d import QUALITIES, SIDES, export_glb, render_args, render_name
 from .autoroute import DEFAULT_TIMEOUT, MAX_TIMEOUT, autoroute
 from .freerouting import Cancelled, locate as locate_freerouting
-from . import mcu, mcusim, simmodels, spice
+from . import esp32sim, mcu, mcusim, simmodels, spice
 from .spice import SimulationError
 from .footprints import FootprintLibraries, default_footprint_dirs
 from . import geometry
@@ -232,23 +232,29 @@ TOOL_SPECS: list[ToolSpec] = [
              "datasheet: GPIO, external/pin-change interrupts, Timer0 and Timer1 with their PWM outputs and the PLL clock, the ADC incl. differential "
              "channels, the bandgap and the temperature sensor, the analog comparator, EEPROM, the watchdog, resets incl. the RESET pin, the USI in "
              "three-wire mode, sleep). Anything else the firmware uses (USI two-wire, dead-time generators, forced output compares, Timer0 mode 5) stops the "
-             "run with the reason and the assertions after that point are cannot-verify, never passed. The board is a DC resistor network with switches, the "
+             "run with the reason and the assertions after that point are cannot-verify, never passed. Classic ESP32 (WROOM/WROVER modules, PICO): the flash "
+             "image runs on Espressif's QEMU (kicad_doctor says how to install it) with the ROM, bootloader and FreeRTOS; the pins (outputs, open drain, pulls, "
+             "inputs, the GPIO matrix), the strapping pins at reset (GPIO0 low really enters download mode), EN, resets and the UART0 output are simulated; "
+             "a pad on the board driven by a peripheral (LEDC, I2C, SPI, ...), a GPIO interrupt that would fire, a crash or a firmware waiting for hardware "
+             "QEMU lacks stops the run (cannot-verify after it), and hardware QEMU does not emulate is listed. The board is a DC resistor network with switches, the "
              "chip's pin drivers and pull-ups; LEDs report whether they would light; other parts are open circuits and are listed. Also reports hazards: a "
-             "floating input read, an output fighting a switch (overcurrent). Firmware: .hex or .elf built by the user (its .eeprom section is loaded); this "
-             "tool never builds or invents one. The scenario can be kept next to the schematic as <name>.fw.json (save_scenario) and is used again when it exists.",
+             "floating input read, an output fighting a switch (overcurrent). Firmware built by the user: ATtiny .hex or .elf (its .eeprom section is loaded); "
+             "ESP32 merged flash image (.bin with the bootloader at 0x1000) or the ESP-IDF build's flasher_args.json; this tool never builds or invents one. "
+             "The scenario can be kept next to the schematic as <name>.fw.json (save_scenario) and is used again when it exists.",
              _obj({"path": SCH,
-                   "firmware": {"type": "string", "description": "Intel HEX or ELF file for the ATtiny (relative to the schematic's folder, or absolute). Optional when the scenario file names it."},
+                   "firmware": {"type": "string", "description": "ATtiny: Intel HEX or ELF. ESP32: the merged flash image (.bin) or the ESP-IDF build's flasher_args.json. Relative to the schematic's folder, or absolute; optional when the scenario file names it."},
                    "reference": {"type": "string", "description": "The MCU (default: the one covered by a simulator)."},
-                   "duration": {"type": ["number", "string"], "description": "Simulated time, e.g. 200ms (default 100ms, at most 5 s)."},
+                   "duration": {"type": ["number", "string"], "description": "Simulated time, e.g. 200ms (ATtiny: default 100ms, at most 5 s; ESP32: default 2s, at most 30 s, boot included)."},
                    "clock_hz": {"type": ["number", "string"], "description": "CPU clock after any CKDIV8 (default 1000000: the factory 8 MHz RC with the divide-by-8 fuse)."},
                    "stimuli": {"type": "array", "items": {"type": "object"}, "description": (
                        "What happens to the board: {at: '50ms', press|release|toggle: 'SW1', name?} or {at, drive: 'NET', level: high|low|release|<volts>} or "
                        "{at, temperature: 85} (the chip's temperature sensor, °C). name lets an assertion refer to that moment. A switch on the RESET pin resets the chip.")},
                    "assertions": {"type": "array", "items": {"type": "object"}, "description": (
-                       "What must hold: subject {led: 'D2', is: on|off} | {led, min?, max?} (brightness 0-1) | {pin: 'PB4', level: high|low} | {pin: 'PB0', duty: 0.25, tol?} | "
-                       "{pin, freq: 490, tol_pct?} (a PWM pin) | {net: 'NAME', level: high|low} | {net, min?, max?} (volts; the average on a PWM net); when {at: '40ms'} | "
-                       "{after: 'press', within: '20ms'} (holds at some moment) | {from: '50ms', to: '150ms'} (holds throughout). Logged events: "
-                       "{reset: any|external|watchdog, after, within} | {resets: N | {min, max}, at} | {eeprom: 0, is: 42, at} | {usi: tx|rx, nth: 1, is: 165, by}. "
+                       "What must hold: subject {led: 'D2', is: on|off} | {led, min?, max?} (brightness 0-1) | {pin: 'PB4' (ESP32: 'GPIO2'), level: high|low} | "
+                       "{pin: 'PB0', duty: 0.25, tol?} | {pin, freq: 490, tol_pct?} (an ATtiny PWM pin) | {net: 'NAME', level: high|low} | {net, min?, max?} (volts; the "
+                       "average on a PWM net); when {at: '40ms'} | {after: 'press', within: '20ms'} (holds at some moment) | {from: '50ms', to: '150ms'} (holds throughout). "
+                       "Logged events: {reset: any|external|watchdog (ESP32 also power-on|software|deep-sleep|brownout), after, within} | {resets: N | {min, max}, at} | "
+                       "{eeprom: 0, is: 42, at} | {usi: tx|rx, nth: 1, is: 165, by} (ATtiny) | {uart: 'text', is?: present|absent, by?} (ESP32 UART0 output). "
                        "after/from/to take a time or a stimulus name. name? labels it.")},
                    "initial": {"type": "object", "description": "Switch states at the start, e.g. {SW1: 'closed'} (default all open)."},
                    "eeprom": {"type": ["object", "array"], "description": "Initial EEPROM bytes, {address: value} or a list from address 0 (over the ELF's .eeprom section; the rest is 0xFF)."},
@@ -338,11 +344,12 @@ SPEC_BY_NAME = {s.name: s for s in TOOL_SPECS}
 
 class Toolbox:
     def __init__(self, kicad_cli: str | None = None, roots: list[str] | None = None, cwd: str | None = None,
-                 java: str | None = None, freerouting: str | None = None, ngspice: str | None = None):
+                 java: str | None = None, freerouting: str | None = None, ngspice: str | None = None, qemu: str | None = None):
         self.cli = KiCadCli(kicad_cli)
         self.java = java  # the bridge's java / freerouting settings (None: search)
         self.freerouting = freerouting
         self.ngspice = ngspice  # None: $NGSPICE, then PATH
+        self.qemu = qemu  # QEMU for the ESP32 (None: $QEMU_XTENSA, PATH, ESP-IDF's tools, the downloaded one)
         self.roots = [os.path.realpath(r) for r in roots or []]
         self.cwd = cwd or os.getcwd()
         self._libraries: dict[str, SymbolLibraries] = {}
@@ -419,7 +426,7 @@ class Toolbox:
         }
 
     def tool_doctor(self, _args):
-        report = run_doctor(self.cli, router=self.router(), ngspice=spice.locate_ngspice(self.ngspice))
+        report = run_doctor(self.cli, router=self.router(), ngspice=spice.locate_ngspice(self.ngspice), qemu=self.qemu)
         return {**report, "text": format_report(report)}
 
     def tool_read_schematic(self, args):
@@ -690,7 +697,8 @@ class Toolbox:
         given = {k: args[k] for k in self.SCENARIO_KEYS if args.get(k) is not None}
         use = {**scenario, **given}  # what the call names replaces the same key of the file
         if not use.get("firmware"):
-            raise ToolError("give firmware (a .hex or .elf file), or a scenario file that names it")
+            raise ToolError("give firmware (an ATtiny .hex or .elf file, or an ESP32 flash image .bin or the ESP-IDF build's flasher_args.json), "
+                            "or a scenario file that names it")
         fw_value = str(use["firmware"])
         # a firmware named in the call is resolved like any path; one named by the scenario file is relative to the schematic's folder
         firmware = self.resolve(fw_value) if "firmware" in given else self.resolve(os.path.join(os.path.dirname(path), fw_value))
@@ -705,25 +713,35 @@ class Toolbox:
                     json.dump(to_save, fh, indent=2, ensure_ascii=False)
                     fh.write("\n")
         netlist = self.cli.netlist(path)
-        providers = [p for p in mcu.load_providers(os.path.dirname(path)) if p.get("simulator") == "avr-attiny85"]
+        providers = [p for p in mcu.load_providers(os.path.dirname(path)) if p.get("simulator") in ("avr-attiny85", "qemu-esp32")]
         candidates = []
         for ref, comp in sorted(Circuit_components(netlist).items()):
             if use.get("reference") and ref != use["reference"]:
                 continue
             provider = next((p for p in providers if mcu._patterns(p["match"], comp.get("lib_id", ""), comp.get("value", ""))), None)
-            if provider:
+            if provider and provider["simulator"] == "qemu-esp32":
+                candidates.append((ref, provider, "esp32"))
+            elif provider:
                 match = re.search(r"attiny(25|45|85)", f"{comp.get('lib_id', '')} {comp.get('value', '')}", re.I)
                 candidates.append((ref, provider, f"attiny{match.group(1)}" if match else "attiny85"))
         if not candidates:
-            raise ToolError("no MCU with a firmware simulator in this schematic: only the ATtiny25/45/85 can be simulated" +
-                            (f" (there is no {use['reference']} among them)" if use.get("reference") else "") +
+            raise ToolError("no MCU with a firmware simulator in this schematic: the ATtiny25/45/85 and the classic ESP32 (WROOM/WROVER modules, PICO) "
+                            "can be simulated" + (f" (there is no {use['reference']} among them)" if use.get("reference") else "") +
                             "; kicad_check_mcu still checks the wiring of the MCUs it covers")
         ref, provider, device = candidates[0]
         try:
-            result = mcusim.simulate_firmware(netlist, ref, provider, firmware, use.get("stimuli"), use.get("assertions"), use.get("duration"), use.get("clock_hz"),
-                                              use.get("vcc"), use.get("led_vf"), use.get("initial"), timeout=float(use.get("timeout", 60)), device=device,
-                                              eeprom=use.get("eeprom"), usi_input=use.get("usi_input"), temperature=use.get("temperature"),
-                                              rstdisbl=bool(use.get("rstdisbl")), startup_ms=use.get("startup_ms"))
+            if device == "esp32":
+                context = _CALL.get() or CallContext()
+                result = esp32sim.simulate_firmware(netlist, ref, provider, firmware, use.get("stimuli"), use.get("assertions"), use.get("duration"),
+                                                    use.get("vcc"), use.get("led_vf"), use.get("initial"), timeout=float(use.get("timeout", 60)),
+                                                    qemu=self.qemu, allow=lambda p: self.resolve(p), cancel=context.cancel, progress=context.progress,
+                                                    **{k: use.get(k) for k in esp32sim.ATTINY_ONLY})
+            else:
+                result = mcusim.simulate_firmware(netlist, ref, provider, firmware, use.get("stimuli"), use.get("assertions"), use.get("duration"),
+                                                  use.get("clock_hz"), use.get("vcc"), use.get("led_vf"), use.get("initial"),
+                                                  timeout=float(use.get("timeout", 60)), device=device, eeprom=use.get("eeprom"),
+                                                  usi_input=use.get("usi_input"), temperature=use.get("temperature"),
+                                                  rstdisbl=bool(use.get("rstdisbl")), startup_ms=use.get("startup_ms"))
         except (SimulationError, mcu.McuError) as exc:
             raise ToolError(str(exc)) from exc
         if len(candidates) > 1:

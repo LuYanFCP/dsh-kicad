@@ -184,11 +184,12 @@ export interface FirmwareRun {
   path: string
   mcu: string
   firmware: string
-  clock_hz: number
+  /** ATtiny: the CPU clock, the cycles and the instructions run (an ESP32 run on QEMU has none of them). */
+  clock_hz?: number
   vcc: number
   duration: number
-  cycles: number
-  instructions: number
+  cycles?: number
+  instructions?: number
   simulated_to: number
   aborted: { what: string, reason: string, t: number } | null
   assertions: FirmwareAssertion[]
@@ -205,6 +206,15 @@ export interface FirmwareRun {
   resets?: Array<{ t: number, cause: string }>
   eeprom?: { changed: Record<string, number>, writes: Array<{ t: number, address: number, value: number }> }
   usi_transfers?: Array<{ t: number, tx: number, rx: number }>
+  /** ESP32: the QEMU that ran the flash image, and how it read the time (rtc: the RTC timer; ccount: the CPU cycle counter). */
+  qemu?: { path: string | null, version: string | null, source: string | null, clock: string | null }
+  /** ESP32: the strapping pins' levels at reset (GPIO_STRAP) and whether they selected the serial bootloader. */
+  strap?: { value: string, levels: Record<string, number>, download_mode: boolean }
+  /** ESP32: the end of the UART0 output, and how many bytes the firmware sent in all. */
+  uart?: string
+  uart_bytes?: number
+  /** ESP32: hardware the firmware used that QEMU does not emulate. */
+  not_emulated?: Record<string, { reads: number, writes: number, accesses?: number }>
   /** The scenario file this run read and/or wrote. */
   scenario?: { path: string, loaded: string[], saved: boolean }
 }
@@ -432,7 +442,9 @@ const ms = (t: number): string => `${Number((t * 1000).toPrecision(4))} ms`
 /** The firmware run as the model reads it: the verdict, each assertion, what stopped the run, the hazards and the board's story. */
 export function formatFirmware(v: FirmwareRun): string {
   const verdict = v.passed === null ? 'CANNOT VERIFY' : v.passed ? 'PASSED' : 'FAILED'
-  const lines = [`Firmware ${v.firmware.split('/').pop()} on ${v.mcu} (${eng(v.clock_hz)}Hz, ${v.vcc} V), ${ms(v.simulated_to)} of ${ms(v.duration)} simulated, ${v.instructions} instructions: ${verdict}.`]
+  const chip = v.device === 'esp32' ? `ESP32 on QEMU${v.qemu?.version ? ` ${v.qemu.version}` : ''}, ${v.vcc} V` : `${eng(v.clock_hz ?? 0)}Hz, ${v.vcc} V`
+  const work = v.instructions === undefined ? '' : `, ${v.instructions} instructions`
+  const lines = [`Firmware ${v.firmware.split('/').pop()} on ${v.mcu} (${chip}), ${ms(v.simulated_to)} of ${ms(v.duration)} simulated${work}: ${verdict}.`]
   if (v.aborted) lines.push(`Stopped at ${ms(v.aborted.t)}: ${v.aborted.reason}. What the firmware does after that is not simulated, so assertions about later times cannot be verified.`)
   for (const a of v.assertions) {
     const mark = a.passed === null ? '?' : a.passed ? '✓' : '✗'
@@ -452,6 +464,11 @@ export function formatFirmware(v: FirmwareRun): string {
   }
   if (v.eeprom && Object.keys(v.eeprom.changed).length) lines.push(`EEPROM at the end: ${Object.entries(v.eeprom.changed).map(([a, x]) => `[${a}] = ${x}`).join(', ')} (${v.eeprom.writes.length} write(s)).`)
   if (v.usi_transfers?.length) lines.push(`USI transfers: ${v.usi_transfers.slice(0, 8).map(x => `${ms(x.t)} sent 0x${x.tx.toString(16).toUpperCase().padStart(2, '0')} received 0x${x.rx.toString(16).toUpperCase().padStart(2, '0')}`).join('; ')}${v.usi_transfers.length > 8 ? ` … ${v.usi_transfers.length - 8} more` : ''}.`)
+  if (v.strap?.download_mode) lines.push(`The strapping pins (GPIO_STRAP ${v.strap.value}) started the serial bootloader: the firmware did not run.`)
+  if (v.uart?.trim()) {
+    const tail = v.uart.replace(/\x1b\[[0-9;]*m/g, '').trimEnd().split('\n').slice(-8)  // without ESP-IDF's log colours
+    lines.push(`UART0 output (${v.uart_bytes ?? v.uart.length} bytes; the last lines):`, ...tail.map(l => `  ${l.trimEnd()}`))
+  }
   if (v.scenario?.loaded.length) lines.push(`Scenario from ${v.scenario.path} (${v.scenario.loaded.join(', ')}).`)
   if (v.scenario?.saved) lines.push(`Scenario saved to ${v.scenario.path}.`)
   lines.push(...v.notes)

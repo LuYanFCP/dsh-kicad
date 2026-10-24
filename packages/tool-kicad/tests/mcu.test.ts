@@ -110,6 +110,21 @@ describe('formatFirmware', () => {
     expect(out).toContain('? LED D1 is off (at 5ms): cannot verify')
     expect(out).not.toContain('PASSED')
   })
+
+  it('reads an ESP32 run on QEMU: no instruction count, the boot mode and the end of the UART output', () => {
+    const out = formatFirmware(firmwareRun({
+      device: 'esp32', firmware: '/p/flash.bin', clock_hz: undefined, cycles: undefined, instructions: undefined, vcc: 3.3, duration: 2, simulated_to: 2,
+      eeprom: undefined, usi_transfers: undefined, passed: true, assertions: [], hazards: [], timeline: [], notes: [], scenario: undefined,
+      qemu: { path: '/q/qemu-system-xtensa', version: '9.2.2', source: 'PATH', clock: 'rtc' },
+      strap: { value: '0x03', levels: { GPIO0: 0 }, download_mode: true },
+      uart: 'rst:0x1 (POWERON_RESET),boot:0x3 (DOWNLOAD_BOOT(UART0/UART1/SDIO_REI_REO_V2))\n\x1b[0;32mI (31) boot: ok\x1b[0m\nwaiting for download\n', uart_bytes: 120,
+    }))
+    expect(out).toContain('Firmware flash.bin on U1 (ESP32 on QEMU 9.2.2, 3.3 V), 2000 ms of 2000 ms simulated: PASSED.')
+    expect(out).toContain('The strapping pins (GPIO_STRAP 0x03) started the serial bootloader: the firmware did not run.')
+    expect(out).toContain('UART0 output (120 bytes; the last lines):\n  rst:0x1 (POWERON_RESET)')
+    expect(out).toContain('\n  I (31) boot: ok\n  waiting for download')
+    expect(out).not.toContain('instructions')
+  })
 })
 
 describe('kicad_simulate_firmware', () => {

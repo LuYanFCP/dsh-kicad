@@ -100,7 +100,9 @@ function formatMcu(v) {
 var ms = (t) => `${Number((t * 1e3).toPrecision(4))} ms`;
 function formatFirmware(v) {
   const verdict = v.passed === null ? "CANNOT VERIFY" : v.passed ? "PASSED" : "FAILED";
-  const lines = [`Firmware ${v.firmware.split("/").pop()} on ${v.mcu} (${eng(v.clock_hz)}Hz, ${v.vcc} V), ${ms(v.simulated_to)} of ${ms(v.duration)} simulated, ${v.instructions} instructions: ${verdict}.`];
+  const chip = v.device === "esp32" ? `ESP32 on QEMU${v.qemu?.version ? ` ${v.qemu.version}` : ""}, ${v.vcc} V` : `${eng(v.clock_hz ?? 0)}Hz, ${v.vcc} V`;
+  const work = v.instructions === void 0 ? "" : `, ${v.instructions} instructions`;
+  const lines = [`Firmware ${v.firmware.split("/").pop()} on ${v.mcu} (${chip}), ${ms(v.simulated_to)} of ${ms(v.duration)} simulated${work}: ${verdict}.`];
   if (v.aborted)
     lines.push(`Stopped at ${ms(v.aborted.t)}: ${v.aborted.reason}. What the firmware does after that is not simulated, so assertions about later times cannot be verified.`);
   for (const a of v.assertions) {
@@ -124,6 +126,12 @@ function formatFirmware(v) {
     lines.push(`EEPROM at the end: ${Object.entries(v.eeprom.changed).map(([a, x]) => `[${a}] = ${x}`).join(", ")} (${v.eeprom.writes.length} write(s)).`);
   if (v.usi_transfers?.length)
     lines.push(`USI transfers: ${v.usi_transfers.slice(0, 8).map((x) => `${ms(x.t)} sent 0x${x.tx.toString(16).toUpperCase().padStart(2, "0")} received 0x${x.rx.toString(16).toUpperCase().padStart(2, "0")}`).join("; ")}${v.usi_transfers.length > 8 ? ` \u2026 ${v.usi_transfers.length - 8} more` : ""}.`);
+  if (v.strap?.download_mode)
+    lines.push(`The strapping pins (GPIO_STRAP ${v.strap.value}) started the serial bootloader: the firmware did not run.`);
+  if (v.uart?.trim()) {
+    const tail = v.uart.replace(/\x1b\[[0-9;]*m/g, "").trimEnd().split("\n").slice(-8);
+    lines.push(`UART0 output (${v.uart_bytes ?? v.uart.length} bytes; the last lines):`, ...tail.map((l) => `  ${l.trimEnd()}`));
+  }
   if (v.scenario?.loaded.length)
     lines.push(`Scenario from ${v.scenario.path} (${v.scenario.loaded.join(", ")}).`);
   if (v.scenario?.saved)
@@ -283,7 +291,7 @@ function createCommands(ctx) {
     },
     {
       name: "mcu-sim",
-      description: "Run the project's saved firmware scenario (<name>.fw.json: firmware, stimuli, assertions) on the simulated ATtiny against the schematic",
+      description: "Run the project's saved firmware scenario (<name>.fw.json: firmware, stimuli, assertions) on the simulated ATtiny or ESP32 against the schematic",
       input: { hint: "[path/to/file.kicad_sch]" },
       handler: wrap(async (inv, cwd) => {
         const path = targetFile(cwd, inv.rawInput, ".kicad_sch");

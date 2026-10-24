@@ -230,5 +230,6 @@
     ],
     "min_uf": 10,
     "advice": "10 µF capacitor (plus 100 nF)"
-  }
+  },
+  "simulator": "qemu-esp32"
 }

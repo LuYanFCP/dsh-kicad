@@ -35,6 +35,8 @@ export interface Config {
   freerouting: Volatile<string | undefined>
   /** ngspice executable (kicad_simulate); empty uses $NGSPICE, then PATH. */
   ngspice: Volatile<string | undefined>
+  /** Espressif's qemu-system-xtensa (ESP32 firmware simulation); empty uses $QEMU_XTENSA, PATH, ESP-IDF's tools, then the one /kicad-install qemu-esp32 downloaded. */
+  qemu: Volatile<string | undefined>
   /** Upper bound for one sidecar request. */
   requestTimeoutMs: number
   /** Override the sidecar directory (development). */
@@ -50,6 +52,7 @@ export const Config: z<Config> = z.object({
   java: z.string().volatile().description('Java for the Freerouting autorouter; empty searches $JAVA_HOME and PATH.'),
   freerouting: z.string().volatile().description('freerouting.jar for the autorouter; empty uses $FREEROUTING_JAR or the jar /kicad-install freerouting downloaded.'),
   ngspice: z.string().volatile().description('ngspice executable for kicad_simulate; empty uses $NGSPICE, then PATH.'),
+  qemu: z.string().volatile().description('Espressif\'s qemu-system-xtensa for ESP32 firmware simulation; empty uses $QEMU_XTENSA, PATH, ESP-IDF\'s tools or the one /kicad-install qemu-esp32 downloaded.'),
   requestTimeoutMs: z.natural().default(300_000).description('Timeout for one sidecar request, in milliseconds.'),
   sidecarDir: z.string().description('Sidecar directory override (development only).'),
 }) as unknown as z<Config>
@@ -179,7 +182,8 @@ export class KiCadBridge extends Service {
   }
 
   private launchKey(): string {
-    return JSON.stringify([this.config.launcher, this.config.python.get(), this.config.kicadCli.get(), this.config.java.get(), this.config.freerouting.get(), this.config.ngspice.get()])
+    return JSON.stringify([this.config.launcher, this.config.python.get(), this.config.kicadCli.get(), this.config.java.get(), this.config.freerouting.get(),
+      this.config.ngspice.get(), this.config.qemu.get()])
   }
 
   private async ensure(signal?: AbortSignal): Promise<Running> {
@@ -212,6 +216,7 @@ export class KiCadBridge extends Service {
       java: this.config.java.get() || undefined,
       freerouting: this.config.freerouting.get() || undefined,
       ngspice: this.config.ngspice.get() || undefined,
+      qemu: this.config.qemu.get() || undefined,
       extras: this.config.uvExtras,
     })
     const handle = subprocess.spawn({

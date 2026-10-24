@@ -261,10 +261,10 @@ def test_initial_switch_state_and_a_toggle(tmp_path):
 @needs_symbols
 def test_only_simulable_mcus_are_accepted(tmp_path):
     tb = Toolbox(roots=[str(tmp_path)])
-    path = str(tmp_path / "esp.kicad_sch")
+    path = str(tmp_path / "stm.kicad_sch")
     tb.call("create_schematic", {"path": path})
-    tb.call("edit_schematic", {"path": path, "operations": [{"op": "add_symbol", "lib_id": "RF_Module:ESP32-WROOM-32", "x": 127, "y": 88.9, "reference": "U1", "value": "ESP32-WROOM-32"}]})
-    with pytest.raises(ToolError, match="no MCU with a firmware simulator.*only the ATtiny25/45/85"):
+    tb.call("edit_schematic", {"path": path, "operations": [{"op": "add_symbol", "lib_id": "MCU_ST_STM32F1:STM32F103C8Tx", "x": 127, "y": 88.9, "reference": "U1", "value": "STM32F103C8Tx"}]})
+    with pytest.raises(ToolError, match="no MCU with a firmware simulator.*the ATtiny25/45/85 and the classic ESP32"):
         tb.call("simulate_firmware", {"path": path, "firmware": path})
 
 

@@ -24,6 +24,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--java", help="Java for Freerouting (default: $JAVA_HOME, PATH)")
     parser.add_argument("--freerouting", help="freerouting.jar or a freerouting executable (default: $FREEROUTING_JAR, the downloaded jar)")
     parser.add_argument("--ngspice", help="ngspice executable for kicad_simulate (default: $NGSPICE, PATH)")
+    parser.add_argument("--qemu", help="Espressif's qemu-system-xtensa for ESP32 firmware simulation (default: $QEMU_XTENSA, PATH, ESP-IDF's tools, the downloaded one)")
     parser.add_argument("--call", metavar="TOOL", help="run one tool and print its JSON result instead of serving")
     parser.add_argument("--args", default="{}", help="JSON arguments for --call")
     parser.add_argument("--version", action="version", version=__version__)
@@ -31,7 +32,7 @@ def main(argv: list[str] | None = None) -> int:
     # Line-buffered UTF-8 regardless of the platform's default encoding.
     sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)  # type: ignore[attr-defined]
     sys.stdin.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
-    toolbox = Toolbox(kicad_cli=opts.kicad_cli, roots=opts.root, java=opts.java, freerouting=opts.freerouting, ngspice=opts.ngspice)
+    toolbox = Toolbox(kicad_cli=opts.kicad_cli, roots=opts.root, java=opts.java, freerouting=opts.freerouting, ngspice=opts.ngspice, qemu=opts.qemu)
     if opts.call:
         print(json.dumps(toolbox.call(opts.call, json.loads(opts.args)), indent=1, ensure_ascii=False))
         return 0
