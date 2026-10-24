@@ -10,6 +10,7 @@
 #define GPIO_ENABLE_W1TS     0x3FF44024
 #define GPIO_ENABLE_W1TC     0x3FF44028
 #define GPIO_IN              0x3FF4403C
+#define GPIO_IN1             0x3FF44040
 #define GPIO_PIN(n)          (0x3FF44088 + 4 * (n))
 #define GPIO_FUNC_OUT_SEL(n) (0x3FF44530 + 4 * (n))
 #define OEN_SEL              (1u << 10)  /* the output enable comes from GPIO_ENABLE */
@@ -19,6 +20,7 @@
 /* IO_MUX: function, input enable, drive strength (the pulls of these RTC pads are in RTC_IO) */
 #define IO_MUX_GPIO2         0x3FF49040
 #define IO_MUX_GPIO0         0x3FF49044
+#define IO_MUX_GPIO35        0x3FF49018
 #define MCU_SEL_MASK         (7u << 12)
 #define MCU_SEL_GPIO         (2u << 12)
 #define FUN_DRV_20MA         (2u << 10)
@@ -37,6 +39,9 @@
 #define TIMG0_WDTCONFIG2     0x3FF5F050
 #define TIMG0_WDTWPROTECT    0x3FF5F064
 #define WDT_KEY              0x50D83AA1
+
+/* The interrupt matrix: the CPU interrupt the GPIO source raises on the PRO CPU */
+#define DPORT_PRO_GPIO_INTERRUPT_MAP 0x3FF0015C
 
 /* UART0 */
 #define UART0_FIFO           0x3FF40000
@@ -64,6 +69,16 @@ static inline void wdt_off(void)
 {
     REG(TIMG0_WDTWPROTECT) = WDT_KEY;
     REG(TIMG0_WDTCONFIG0) = 0;
+    REG(TIMG0_WDTWPROTECT) = 0;
+}
+
+/* The timer group 0 watchdog resets the system unless fed within ms milliseconds */
+static inline void wdt_arm(uint32_t ms)
+{
+    REG(TIMG0_WDTWPROTECT) = WDT_KEY;
+    REG(TIMG0_WDTCONFIG1) = 40000u << 16;               /* 40 MHz APB / 40000: 1 kHz watchdog ticks */
+    REG(TIMG0_WDTCONFIG2) = ms;                         /* stage 0 */
+    REG(TIMG0_WDTCONFIG0) = (1u << 31) | (3u << 29);    /* enabled; stage 0 resets the system */
     REG(TIMG0_WDTWPROTECT) = 0;
 }
 
