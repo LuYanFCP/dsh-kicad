@@ -44,6 +44,8 @@ def test_loads_and_stores_decode():
 
 
 def test_rom_patterns():
+    assert eq.is_break(bytes([0x10, 0x41, 0x00])) and eq.is_break(bytes([0x2D, 0xF1, 0x00]))  # break 1, 1; break.n 1
+    assert not eq.is_break(bytes([0x7C, 0xFB, 0x30])) and not eq.is_break(bytes([0x00, 0x70, 0x00]))  # movi.n a11, -1; waiti 0
     assert eq.rsr_ccount_at(b"\x36\x41\x00\x20\xea\x03\x1d\xf0") == (3, 2)  # entry; rsr.ccount a2; retw.n
     assert eq.rsr_ccount_at(b"\x21\xea\x03") is None  # op0 1 is not RSR
     assert eq.is_waiti(bytes([0x00, 0x70, 0x00])) and eq.is_waiti(bytes([0x00, 0x73, 0x00])) and not eq.is_waiti(bytes([0x00, 0x60, 0x00]))
@@ -183,6 +185,34 @@ def test_reads_give_what_the_chip_holds():
     assert g.read(G + 0x130 + 4 * 14) == 0x85
     g.reset("power-on")
     assert g.read(G + 0x130 + 4 * 14) == 0 and g.read(G + 0x04) == 0
+
+
+def test_the_gpio_interrupt_status_and_what_each_cpu_sees():
+    g = eq.GpioState()
+    g.write(G + 0x88 + 4 * 0, (2 << 7) | (1 << eq.INT_ENA_PRO))     # GPIO0: falling edge, the PRO CPU's interrupt
+    g.write(G + 0x88 + 4 * 4, (3 << 7) | (1 << eq.INT_ENA_APP))     # GPIO4: any edge, the APP CPU's
+    g.write(G + 0x88 + 4 * 34, (1 << 7) | (1 << eq.INT_ENA_PRO_NMI))  # GPIO34: rising edge, the PRO CPU's NMI
+    assert g.interrupt_lines() == {"pro": False, "pro_nmi": False, "app": False, "app_nmi": False}
+    g.latch_interrupt(0)
+    g.latch_interrupt(4)
+    g.latch_interrupt(34)
+    assert g.read(G + 0x44) == 0b10001 and g.read(G + 0x50) == 1 << 2  # STATUS, STATUS1
+    assert g.read(G + 0x68) == 1 and g.read(G + 0x60) == 1 << 4 and g.read(G + 0x80) == 1 << 2  # PCPU_INT, ACPU_INT, PCPU_NMI_INT1
+    assert g.interrupt_lines() == {"pro": True, "pro_nmi": True, "app": True, "app_nmi": False}
+    g.write(G + 0x4C, 1)        # STATUS_W1TC: the PRO CPU's handler clears GPIO0
+    g.write(G + 0x58, 1 << 2)   # STATUS1_W1TC: GPIO34
+    assert g.read(G + 0x68) == 0 and g.interrupt_lines()["pro"] is False and g.interrupt_lines()["app"] is True
+    g.write(G + 0x48, 1 << 5)   # STATUS_W1TS: firmware can raise one too (GPIO5 has no enable: no CPU sees it)
+    assert g.read(G + 0x44) == (1 << 4) | (1 << 5) and g.read(W1TC) == 0
+    g.write(G + 0x88 + 4 * 2, (4 << 7) | (1 << eq.INT_ENA_PRO))     # GPIO2: low level
+    g.level_condition(2, True)
+    g.write(G + 0x4C, 1 << 2)
+    assert g.read(G + 0x68) == 1 << 2  # the level still holds: it latches again at once
+    g.level_condition(2, False)
+    g.write(G + 0x4C, 1 << 2)
+    assert g.read(G + 0x68) == 0
+    g.reset("system")
+    assert g.status == 0 and g.read(G + 0x60) == 0
 
 
 def test_reset_scopes():
@@ -338,6 +368,7 @@ class FakeMachine:
         self.strap, self.image = strap, image
         self.gpio = eq.GpioState()
         self.t = 0.0
+        self.skipped = 0.0
         self.uart_seen = 0
         self.reads: list = []
         FakeMachine.instances.append(self)
@@ -361,12 +392,17 @@ class FakeMachine:
                 self.t = max(self.t, t)
                 return
             self.t = max(self.t, t)
+            if kind in ("write", "load"):
+                handler.on_tick(self.t)  # as Machine does: the stimuli due by now come first
             if kind == "write":
                 changed = self.gpio.write(rest[0], rest[1])
                 if changed:
                     handler.on_gpio(self.t, changed)
             elif kind == "read":
                 reply = handler.gpio_in(self.t, rest[0])
+                self.reads.append((self.t, reply))
+            elif kind == "load":  # any other register of the pins' blocks, as Machine answers it
+                reply = self.gpio.read(rest[0])
                 self.reads.append((self.t, reply))
             elif kind == "uart":
                 self.uart_seen += len(rest[0])
@@ -481,14 +517,20 @@ def test_a_peripheral_driving_a_board_pin_stops_the_run(fake):
     assert "LEDC" in result["aborted"]["reason"] and verdicts(result) == [True, None] and result["passed"] is None
 
 
-def test_a_gpio_interrupt_that_would_fire_stops_the_run(fake):
+def test_a_gpio_interrupt_latches_for_the_firmware_to_find(fake):
     def program(end):
         yield ("write", 0.3, IO_MUX[0], GPIO_FUNC | eq.FUN_IE)
-        yield ("write", 0.3, G + 0x88, (2 << 7) | (1 << 15))  # falling edge, PRO CPU
+        yield ("write", 0.3, G + 0x88, (2 << 7) | (1 << eq.INT_ENA_PRO))  # falling edge, the PRO CPU's interrupt
+        yield ("load", 0.9, G + 0x68)    # PCPU_INT before the press
+        yield ("load", 1.2, G + 0x68)    # after it: the handler finds GPIO0...
+        yield ("write", 1.2, G + 0x4C, 1)  # ...and clears it
+        yield ("load", 1.2, G + 0x68)
+        yield ("load", 1.6, G + 0x68)    # the release is a rising edge: nothing
         yield ("read", 1.9, 0)
-    result = fake(program, stimuli=PRESS, assertions=[{"net": "BOOT", "level": "high", "at": "0.5s"}, {"net": "BOOT", "level": "low", "at": "1.2s"}])
-    assert result["aborted"]["what"] == "gpio_interrupt" and result["aborted"]["t"] == pytest.approx(1.0)
-    assert "falling edge" in result["aborted"]["reason"] and verdicts(result) == [True, None]
+    result = fake(program, stimuli=PRESS, assertions=[{"net": "BOOT", "level": "low", "at": "1.2s"}, {"net": "BOOT", "level": "high", "at": "1.9s"}])
+    assert result["aborted"] is None and verdicts(result) == [True, True]
+    assert [value for _, value in FakeMachine.instances[0].reads[:4]] == [0, 1, 0, 0]
+    assert result["interrupts"] == [{"t": pytest.approx(1.0), "gpio": "GPIO0", "type": "falling edge"}] and result["interrupt_count"] == 1
 
 
 def test_a_crash_stops_the_run_and_the_uart_tells(fake):
@@ -636,11 +678,32 @@ def test_download_mode_on_qemu():
 
 
 @needs_qemu
-def test_uart_and_interrupt_on_qemu():
+def test_uart_on_qemu():
     hello = qemu_run("hello", duration="0.5s", assertions=[{"uart": "hello from the test firmware", "by": "0.5s"}, {"led": "D1", "is": "on", "at": "0.5s"}])
     assert verdicts(hello) == [True, True], hello["assertions"]
-    armed = qemu_run("interrupt", stimuli=PRESS)
-    assert armed["aborted"]["what"] == "gpio_interrupt" and armed["aborted"]["t"] == pytest.approx(1.0)
+
+
+@needs_qemu
+def test_gpio_interrupt_on_qemu():
+    # each falling edge on GPIO0 raises the GPIO interrupt through QEMU's interrupt matrix; the program's own handler counts it
+    # while main() sleeps in WAITI, and the LED shows the count: on after the first press, off after the second; releases do nothing
+    presses = [{"at": "1s", "press": "SW1", "name": "first"}, {"at": "1.5s", "release": "SW1"},
+               {"at": "2s", "press": "SW1", "name": "second"}, {"at": "2.5s", "release": "SW1"}]
+    assertions = [{"led": "D1", "is": "off", "from": "0.5s", "to": "0.99s"}, {"led": "D1", "is": "on", "after": "first", "within": "5ms"},
+                  {"led": "D1", "is": "on", "from": "1.1s", "to": "1.99s"}, {"led": "D1", "is": "off", "after": "second", "within": "5ms"},
+                  {"led": "D1", "is": "off", "from": "2.1s", "to": "2.4s"}]
+    # GPIO35 pulled high: a watchdog stays armed far away, so idle time runs (the clock is read after QEMU counted the sleep)
+    timed = qemu_run("interrupt", net=netlist(extra=[("/TIMED", [("U1", "7", "IO35"), ("R9", "2")]), ("+3V3", [("R9", "1")])]),
+                     stimuli=presses, duration="3s", assertions=assertions + [{"led": "D1", "is": "off", "from": "2.5s", "to": "3s"}])
+    assert verdicts(timed) == [True] * 6, (timed["assertions"], timed["aborted"])
+    assert [(round(i["t"], 3), i["gpio"]) for i in timed["interrupts"]] == [(1.0, "GPIO0"), (2.0, "GPIO0")]
+    assert not any("stood still" in n for n in timed["notes"])
+    # nothing timed: QEMU's clock stands still while the CPU sleeps, so the time until each stimulus passes for the board; after
+    # the last one nothing can wake the chip, which ends the run as a stall
+    untimed = qemu_run("interrupt", stimuli=presses, duration="3s", assertions=assertions)
+    assert verdicts(untimed) == [True] * 5, (untimed["assertions"], untimed["aborted"])
+    assert untimed["aborted"]["what"] == "stall" and untimed["aborted"]["t"] == pytest.approx(2.5, abs=0.01)
+    assert any("stood still" in n for n in untimed["notes"])
 
 
 @needs_qemu
