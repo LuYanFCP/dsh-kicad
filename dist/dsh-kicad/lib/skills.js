@@ -97,6 +97,40 @@ function formatMcu(v) {
   }
   return lines.join("\n");
 }
+var ms = (t) => `${Number((t * 1e3).toPrecision(4))} ms`;
+function formatFirmware(v) {
+  const verdict = v.passed === null ? "CANNOT VERIFY" : v.passed ? "PASSED" : "FAILED";
+  const lines = [`Firmware ${v.firmware.split("/").pop()} on ${v.mcu} (${eng(v.clock_hz)}Hz, ${v.vcc} V), ${ms(v.simulated_to)} of ${ms(v.duration)} simulated, ${v.instructions} instructions: ${verdict}.`];
+  if (v.aborted)
+    lines.push(`Stopped at ${ms(v.aborted.t)}: ${v.aborted.reason}. What the firmware does after that is not simulated, so assertions about later times cannot be verified.`);
+  for (const a of v.assertions) {
+    const mark = a.passed === null ? "?" : a.passed ? "\u2713" : "\u2717";
+    lines.push(`${mark} ${a.name} (${a.when})${a.reason ? `: ${a.reason}` : ""}`);
+  }
+  for (const h of v.hazards) {
+    const mark = h.severity === "error" ? "\u2717" : h.severity === "warning" ? "!" : "i";
+    lines.push(`${mark} ${h.severity}${h.pin ? ` ${h.pin}` : ""}${h.t ? ` at ${ms(h.t)}` : ""}: ${h.message}${h.fix ? ` \u2192 ${h.fix}` : ""}`);
+  }
+  if (v.timeline.length) {
+    lines.push(`Board over time (${v.timeline.length} change(s); pins ${Object.entries(v.pins).map(([p, n]) => `${p}=${n}`).join(", ")}):`);
+    for (const e of v.timeline.slice(0, 14)) {
+      const leds = Object.entries(e.leds).map(([k, f]) => `${k} ${f >= 0.99 ? "on" : f <= 0.01 ? "off" : `${Math.round(f * 100)}%`}`);
+      lines.push(`  ${ms(e.t)}: ${Object.entries(e.pins).map(([p, s]) => `${p} ${s}`).join(", ")}${leds.length ? `; ${leds.join(", ")}` : ""}${e.switches.length ? `; closed: ${e.switches.join(", ")}` : ""}`);
+    }
+    if (v.timeline.length > 14)
+      lines.push(`  \u2026 ${v.timeline.length - 14} more`);
+  }
+  if (v.eeprom && Object.keys(v.eeprom.changed).length)
+    lines.push(`EEPROM at the end: ${Object.entries(v.eeprom.changed).map(([a, x]) => `[${a}] = ${x}`).join(", ")} (${v.eeprom.writes.length} write(s)).`);
+  if (v.usi_transfers?.length)
+    lines.push(`USI transfers: ${v.usi_transfers.slice(0, 8).map((x) => `${ms(x.t)} sent 0x${x.tx.toString(16).toUpperCase().padStart(2, "0")} received 0x${x.rx.toString(16).toUpperCase().padStart(2, "0")}`).join("; ")}${v.usi_transfers.length > 8 ? ` \u2026 ${v.usi_transfers.length - 8} more` : ""}.`);
+  if (v.scenario?.loaded.length)
+    lines.push(`Scenario from ${v.scenario.path} (${v.scenario.loaded.join(", ")}).`);
+  if (v.scenario?.saved)
+    lines.push(`Scenario saved to ${v.scenario.path}.`);
+  lines.push(...v.notes);
+  return lines.join("\n");
+}
 function violationLine(v) {
   const where = v.items.map((i) => `${i.description ?? ""}${i.pos ? ` @ (${round(i.pos.x)}, ${round(i.pos.y)})` : ""}`).filter(Boolean).join("; ");
   return `- [${v.severity}] ${v.type}: ${v.description}${where ? ` \u2014 ${where}` : ""}${v.sheet && v.sheet !== "/" ? ` [sheet ${v.sheet}]` : ""}`;
@@ -245,6 +279,16 @@ function createCommands(ctx) {
       handler: wrap(async (inv, cwd) => {
         const result = await ctx.kicad.run("check_mcu", { path: targetFile(cwd, inv.rawInput, ".kicad_sch") }, inv.signal);
         return formatMcu(result);
+      })
+    },
+    {
+      name: "mcu-sim",
+      description: "Run the project's saved firmware scenario (<name>.fw.json: firmware, stimuli, assertions) on the simulated ATtiny against the schematic",
+      input: { hint: "[path/to/file.kicad_sch]" },
+      handler: wrap(async (inv, cwd) => {
+        const path = targetFile(cwd, inv.rawInput, ".kicad_sch");
+        const result = await ctx.kicad.run("simulate_firmware", { path }, inv.signal, { timeoutMs: 12e4 });
+        return formatFirmware(result);
       })
     },
     {

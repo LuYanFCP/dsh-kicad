@@ -72,7 +72,7 @@ var PATH_ARGUMENTS = {
   kicad_simulate: ["path", "output_dir", "spec"],
   kicad_sim_model: ["path"],
   kicad_check_mcu: ["path"],
-  kicad_simulate_firmware: ["path", "firmware"],
+  kicad_simulate_firmware: ["path", "firmware", "scenario"],
   kicad_export: ["path", "output"],
   kicad_export_fab: ["pcb", "output_dir"],
   kicad_fab_preset: ["path"],

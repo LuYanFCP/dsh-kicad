@@ -228,27 +228,39 @@ TOOL_SPECS: list[ToolSpec] = [
                        "needs: output (not input-only), input, adc (adc1 or adc2), adc1 (usable with WiFi), adc2, dac, touch, boot_free (not a strapping pin).")}},
                   ["path"])),
     ToolSpec("simulate_firmware", "Run a firmware image on the simulated MCU against the schematic and judge assertions on what the board does: "
-             "press buttons, watch pins, nets and LEDs over time. Covered: ATtiny25/45/85 (a Python AVR core: GPIO, pin-change and INT0 interrupts, "
-             "Timer0 normal/CTC/phase-correct/fast PWM with its OC0A/OC0B outputs, the ADC on PB2-PB5 and the bandgap with Vcc/1.1 V/2.56 V/AREF references, sleep). Anything else the firmware uses (differential ADC, Timer1, USI, Timer0 mode 5, EEPROM, watchdog) stops the run with the reason and the "
-             "assertions after that point are cannot-verify, never passed. The board is a DC resistor network with switches, the chip's pin drivers and "
-             "pull-ups; LEDs report whether they would light; other parts are open circuits and are listed. Also reports hazards: a floating input read, "
-             "an output fighting a switch (overcurrent). Firmware: .hex or .elf built by the user; this tool never builds or invents one.",
+             "press buttons, watch pins, nets, LEDs, resets, EEPROM and USI transfers over time. Covered: ATtiny25/45/85 (a Python AVR core following the "
+             "datasheet: GPIO, external/pin-change interrupts, Timer0 and Timer1 with their PWM outputs and the PLL clock, the ADC incl. differential "
+             "channels, the bandgap and the temperature sensor, the analog comparator, EEPROM, the watchdog, resets incl. the RESET pin, the USI in "
+             "three-wire mode, sleep). Anything else the firmware uses (USI two-wire, dead-time generators, forced output compares, Timer0 mode 5) stops the "
+             "run with the reason and the assertions after that point are cannot-verify, never passed. The board is a DC resistor network with switches, the "
+             "chip's pin drivers and pull-ups; LEDs report whether they would light; other parts are open circuits and are listed. Also reports hazards: a "
+             "floating input read, an output fighting a switch (overcurrent). Firmware: .hex or .elf built by the user (its .eeprom section is loaded); this "
+             "tool never builds or invents one. The scenario can be kept next to the schematic as <name>.fw.json (save_scenario) and is used again when it exists.",
              _obj({"path": SCH,
-                   "firmware": {"type": "string", "description": "Intel HEX or ELF file for the ATtiny."},
+                   "firmware": {"type": "string", "description": "Intel HEX or ELF file for the ATtiny (relative to the schematic's folder, or absolute). Optional when the scenario file names it."},
                    "reference": {"type": "string", "description": "The MCU (default: the one covered by a simulator)."},
                    "duration": {"type": ["number", "string"], "description": "Simulated time, e.g. 200ms (default 100ms, at most 5 s)."},
                    "clock_hz": {"type": ["number", "string"], "description": "CPU clock after any CKDIV8 (default 1000000: the factory 8 MHz RC with the divide-by-8 fuse)."},
                    "stimuli": {"type": "array", "items": {"type": "object"}, "description": (
-                       "What happens to the board: {at: '50ms', press|release|toggle: 'SW1', name?} or {at, drive: 'NET', level: high|low|release|<volts>}. "
-                       "name lets an assertion refer to that moment.")},
+                       "What happens to the board: {at: '50ms', press|release|toggle: 'SW1', name?} or {at, drive: 'NET', level: high|low|release|<volts>} or "
+                       "{at, temperature: 85} (the chip's temperature sensor, °C). name lets an assertion refer to that moment. A switch on the RESET pin resets the chip.")},
                    "assertions": {"type": "array", "items": {"type": "object"}, "description": (
-                       "What must hold: subject {led: 'D2', is: on|off} | {led, min?, max?} (brightness 0-1) | {pin: 'PB4', level: high|low} | {pin: 'PB0', duty: 0.25, tol?} | {pin, freq: 490, tol_pct?} (a PWM pin) | {net: 'NAME', level: high|low} | {net, min?, max?} (volts; the average on a PWM net); "
-                       "when {at: '40ms'} | {after: 'press', within: '20ms'} (holds at some moment) | {from: '50ms', to: '150ms'} (holds throughout). "
+                       "What must hold: subject {led: 'D2', is: on|off} | {led, min?, max?} (brightness 0-1) | {pin: 'PB4', level: high|low} | {pin: 'PB0', duty: 0.25, tol?} | "
+                       "{pin, freq: 490, tol_pct?} (a PWM pin) | {net: 'NAME', level: high|low} | {net, min?, max?} (volts; the average on a PWM net); when {at: '40ms'} | "
+                       "{after: 'press', within: '20ms'} (holds at some moment) | {from: '50ms', to: '150ms'} (holds throughout). Logged events: "
+                       "{reset: any|external|watchdog, after, within} | {resets: N | {min, max}, at} | {eeprom: 0, is: 42, at} | {usi: tx|rx, nth: 1, is: 165, by}. "
                        "after/from/to take a time or a stimulus name. name? labels it.")},
                    "initial": {"type": "object", "description": "Switch states at the start, e.g. {SW1: 'closed'} (default all open)."},
+                   "eeprom": {"type": ["object", "array"], "description": "Initial EEPROM bytes, {address: value} or a list from address 0 (over the ELF's .eeprom section; the rest is 0xFF)."},
+                   "usi_input": {"type": "array", "items": {"type": "integer"}, "description": "Bytes a slave device shifts into the USI on DI, one per transfer (otherwise DI reads the PB0 net)."},
+                   "temperature": {"type": ["number", "string"], "description": "Chip temperature for the ADC temperature sensor, °C (default 25)."},
+                   "rstdisbl": {"type": "boolean", "default": False, "description": "The RSTDISBL fuse is programmed: PB5 is a GPIO (ADC0) instead of the RESET pin."},
+                   "startup_ms": {"type": ["number", "string"], "description": "Delay before the program restarts after a reset (default 64 ms: the default start-up fuses)."},
                    "vcc": {"type": ["number", "string"], "description": "Supply voltage (default: from the supply net name, else 5)."},
                    "led_vf": {"type": ["number", "string"], "description": "Forward voltage at which an LED counts as lit (default 1.8)."},
-                   "timeout": {"type": "number", "default": 60, "description": "Wall-clock seconds."}}, ["path", "firmware"])),
+                   "scenario": {"type": "string", "description": "Scenario file (JSON with firmware, duration, clock_hz, stimuli, assertions, initial, eeprom, usi_input, temperature, rstdisbl, startup_ms, vcc, led_vf, reference, timeout). Default: <schematic name>.fw.json next to the schematic, used when it exists; what the call names replaces the same key."},
+                   "save_scenario": {"type": "boolean", "default": False, "description": "Write the arguments this call used to the scenario file, so the firmware requirements stay with the project."},
+                   "timeout": {"type": "number", "default": 60, "description": "Wall-clock seconds."}}, ["path"])),
     ToolSpec("export_netlist", "Write a netlist file with kicad-cli.",
              _obj({"path": SCH, "output": {"type": "string"},
                    "format": {"type": "string", "enum": ["kicadsexpr", "kicadxml", "cadstar", "orcadpcb2", "spice", "spicemodel", "pads", "allegro"], "default": "kicadsexpr"}},
@@ -655,30 +667,69 @@ class Toolbox:
             raise ToolError(str(exc)) from exc
         return {"path": path, **result}
 
+    SCENARIO_KEYS = ("firmware", "reference", "duration", "clock_hz", "stimuli", "assertions", "initial", "eeprom", "usi_input", "temperature", "rstdisbl",
+                     "startup_ms", "vcc", "led_vf", "timeout")
+
     def tool_simulate_firmware(self, args):
         path = self.resolve(args["path"], ".kicad_sch")
-        firmware = self.resolve(args["firmware"])
+        stem = os.path.splitext(os.path.basename(path))[0]
+        default_scenario = os.path.join(os.path.dirname(path), f"{stem}.fw.json")
+        scenario_path = self.resolve(args["scenario"], ".json", must_exist=not args.get("save_scenario")) if args.get("scenario") else default_scenario
+        scenario: dict[str, Any] = {}
+        if os.path.isfile(scenario_path):
+            try:
+                with open(scenario_path, encoding="utf-8") as fh:
+                    scenario = json.load(fh)
+            except json.JSONDecodeError as exc:
+                raise ToolError(f"{scenario_path} is not valid JSON: {exc}") from exc
+            if not isinstance(scenario, dict):
+                raise ToolError(f"{scenario_path} must hold a JSON object with {', '.join(self.SCENARIO_KEYS)}")
+            unknown = sorted(set(scenario) - set(self.SCENARIO_KEYS))
+            if unknown:
+                raise ToolError(f"{scenario_path}: unknown key(s) {', '.join(unknown)}; the scenario holds {', '.join(self.SCENARIO_KEYS)}")
+        given = {k: args[k] for k in self.SCENARIO_KEYS if args.get(k) is not None}
+        use = {**scenario, **given}  # what the call names replaces the same key of the file
+        if not use.get("firmware"):
+            raise ToolError("give firmware (a .hex or .elf file), or a scenario file that names it")
+        fw_value = str(use["firmware"])
+        # a firmware named in the call is resolved like any path; one named by the scenario file is relative to the schematic's folder
+        firmware = self.resolve(fw_value) if "firmware" in given else self.resolve(os.path.join(os.path.dirname(path), fw_value))
+        if args.get("save_scenario"):
+            if not use.get("assertions"):
+                raise ToolError("save_scenario writes the firmware requirements: give assertions")
+            to_save = {k: use[k] for k in self.SCENARIO_KEYS if k in use and use[k] not in (None, [], {})}
+            folder = os.path.dirname(path)
+            to_save["firmware"] = os.path.relpath(firmware, folder).replace(os.sep, "/") if firmware.startswith(folder + os.sep) else firmware
+            with self.lock(scenario_path):
+                with open(scenario_path, "w", encoding="utf-8") as fh:
+                    json.dump(to_save, fh, indent=2, ensure_ascii=False)
+                    fh.write("\n")
         netlist = self.cli.netlist(path)
         providers = [p for p in mcu.load_providers(os.path.dirname(path)) if p.get("simulator") == "avr-attiny85"]
         candidates = []
         for ref, comp in sorted(Circuit_components(netlist).items()):
-            if args.get("reference") and ref != args["reference"]:
+            if use.get("reference") and ref != use["reference"]:
                 continue
             provider = next((p for p in providers if mcu._patterns(p["match"], comp.get("lib_id", ""), comp.get("value", ""))), None)
             if provider:
-                candidates.append((ref, provider))
+                match = re.search(r"attiny(25|45|85)", f"{comp.get('lib_id', '')} {comp.get('value', '')}", re.I)
+                candidates.append((ref, provider, f"attiny{match.group(1)}" if match else "attiny85"))
         if not candidates:
             raise ToolError("no MCU with a firmware simulator in this schematic: only the ATtiny25/45/85 can be simulated" +
-                            (f" (there is no {args['reference']} among them)" if args.get("reference") else "") +
+                            (f" (there is no {use['reference']} among them)" if use.get("reference") else "") +
                             "; kicad_check_mcu still checks the wiring of the MCUs it covers")
-        ref, provider = candidates[0]
+        ref, provider, device = candidates[0]
         try:
-            result = mcusim.simulate_firmware(netlist, ref, provider, firmware, args.get("stimuli"), args.get("assertions"), args.get("duration"), args.get("clock_hz"),
-                                              args.get("vcc"), args.get("led_vf"), args.get("initial"), timeout=float(args.get("timeout", 60)))
+            result = mcusim.simulate_firmware(netlist, ref, provider, firmware, use.get("stimuli"), use.get("assertions"), use.get("duration"), use.get("clock_hz"),
+                                              use.get("vcc"), use.get("led_vf"), use.get("initial"), timeout=float(use.get("timeout", 60)), device=device,
+                                              eeprom=use.get("eeprom"), usi_input=use.get("usi_input"), temperature=use.get("temperature"),
+                                              rstdisbl=bool(use.get("rstdisbl")), startup_ms=use.get("startup_ms"))
         except (SimulationError, mcu.McuError) as exc:
             raise ToolError(str(exc)) from exc
         if len(candidates) > 1:
             result["notes"].append(f"{len(candidates)} simulable MCUs found; simulated {ref} (pass reference to choose)")
+        if scenario or args.get("save_scenario"):
+            result["scenario"] = {"path": scenario_path, "loaded": sorted(set(scenario) - set(given)) if scenario else [], "saved": bool(args.get("save_scenario"))}
         return {"path": path, **result}
 
     def tool_sim_model(self, args):

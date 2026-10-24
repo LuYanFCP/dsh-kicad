@@ -67,7 +67,7 @@ export const PATH_ARGUMENTS: Record<KiCadToolName, readonly string[]> = {
   kicad_simulate: ['path', 'output_dir', 'spec'],
   kicad_sim_model: ['path'],
   kicad_check_mcu: ['path'],
-  kicad_simulate_firmware: ['path', 'firmware'],
+  kicad_simulate_firmware: ['path', 'firmware', 'scenario'],
   kicad_export: ['path', 'output'],
   kicad_export_fab: ['pcb', 'output_dir'],
   kicad_fab_preset: ['path'],
@@ -367,24 +367,33 @@ export function apply(ctx: Context, config: Config = {}): void {
       name: 'kicad_simulate_firmware',
       description: [
         'Run a firmware image on the simulated MCU against the schematic and judge what the board does, so "press the button, the LED lights" is checked rather than assumed. The tool decides; report its verdict.',
-        'Covered: the 8-pin ATtiny25/45/85 (a Python AVR core: GPIO, pin-change and INT0 interrupts, Timer0 in normal, CTC, phase-correct PWM and fast PWM mode with its OC0A/OC0B outputs (a PWM pin is a duty cycle and a frequency; an LED on it is lit that fraction of the time), the ADC on PB2-PB5 and the bandgap with a Vcc, 1.1 V, 2.56 V or AREF reference, idle and power-down sleep). Anything else the firmware uses (differential ADC channels, Timer1, USI/I²C, Timer0 mode 5, EEPROM, the watchdog) stops the run with the reason, and assertions about later times come back CANNOT VERIFY, never passed. Other MCUs: this tool refuses; kicad_check_mcu still checks their wiring.',
-        'The firmware is a .hex or .elf the user built (avr-gcc, PlatformIO, Arduino); this tool never builds, writes or invents one. Without one, say that firmware behaviour could not be verified.',
-        'The board is a DC network: resistors, closed switches, the chip\'s pin drivers and internal pull-ups, rails and ground. LEDs report whether they would light (forward voltage 1.8 V); transistors, ICs and anything else on those nets are open circuits and are listed in the result.',
-        'stimuli: [{at: "30ms", press: "SW1", name: "press"}, {at: "70ms", release: "SW1"}, {at, toggle: "SW1"}, {at, drive: "NET", level: "high"|"low"|"release"|a voltage such as 7.4 (an ideal source that also overrides a rail: a battery that sags)}]. assertions: subject {led: "D2", is: "on"|"off"} | {led, min?, max?} (brightness 0-1: the fraction of time lit, for a PWM-dimmed LED) | {pin: "PB4", level: "high"|"low"} | {pin: "PB0", duty: 0.25, tol?: 0.02} | {pin, freq: 490, tol_pct?: 2} | {net: "NAME", level: ...} | {net, min?, max?} in volts (the average on a PWM net); when {at: "40ms"} | {after: "press", within: "20ms"} (it becomes true in the window) | {from: "35ms", to: "69ms"} (true throughout). Use the user\'s timing requirements as the windows.',
-        'Also reports hazards without being asked: a floating input the firmware reads (a button without a pull-up), an output fighting a switch (overcurrent), a level stuck between the thresholds.',
-        'duration defaults to 100 ms (at most 5 s); clock_hz to 1000000 (the factory 8 MHz RC with CKDIV8). A sleeping chip costs nothing to simulate; a busy loop costs wall-clock time.',
+        'Covered: the 8-pin ATtiny25/45/85, a Python AVR core that follows the datasheet: GPIO, external and pin-change interrupts, Timer0 and Timer1 (normal, CTC, phase-correct and fast PWM; their OC pins are a duty cycle and a frequency, an LED on one is lit that fraction of the time; Timer1 also with the PLL clock and the complementary outputs), the ADC (single-ended and differential channels, the bandgap, the temperature sensor, Vcc / 1.1 V / 2.56 V / AREF references), the analog comparator, EEPROM (3.4 ms writes, persisting across resets), the watchdog (reset and interrupt mode), resets (the RESET pin, the watchdog, the 64 ms start-up delay), the USI in three-wire mode (SPI) and sleep. Anything else the firmware uses (USI two-wire/I²C, dead-time generators, forced output compares, Timer0 mode 5) stops the run with the reason, and assertions about later times come back CANNOT VERIFY, never passed. Other MCUs: this tool refuses; kicad_check_mcu still checks their wiring.',
+        'The firmware is a .hex or .elf the user built (avr-gcc, PlatformIO, Arduino; an ELF also carries the initial EEPROM); this tool never builds, writes or invents one. Without one, say that firmware behaviour could not be verified.',
+        'The board is a DC network: resistors, closed switches, the chip\'s pin drivers and internal pull-ups, rails and ground. LEDs report whether they would light (forward voltage 1.8 V); transistors, ICs and anything else on those nets are open circuits and are listed in the result. PB5 is the RESET pin (pulled up inside, a switch to ground resets the chip) unless rstdisbl says the fuse is programmed.',
+        'stimuli: [{at: "30ms", press: "SW1", name: "press"}, {at: "70ms", release: "SW1"}, {at, toggle: "SW1"}, {at, drive: "NET", level: "high"|"low"|"release"|a voltage such as 7.4 (an ideal source that also overrides a rail: a battery that sags)}, {at, temperature: 85}]. assertions: subject {led: "D2", is: "on"|"off"} | {led, min?, max?} (brightness 0-1: the fraction of time lit, for a PWM-dimmed LED) | {pin: "PB4", level: "high"|"low"} | {pin: "PB0", duty: 0.25, tol?: 0.02} | {pin, freq: 490, tol_pct?: 2} | {net: "NAME", level: ...} | {net, min?, max?} in volts (the average on a PWM net); when {at: "40ms"} | {after: "press", within: "20ms"} (it becomes true in the window) | {from: "35ms", to: "69ms"} (true throughout). Logged events: {reset: "any"|"external"|"watchdog", after, within} | {resets: N | {min, max}, at} | {eeprom: 0, is: 42, at} | {usi: "tx"|"rx", nth: 1, is: 165, by}. Use the user\'s timing requirements as the windows.',
+        'Other inputs: eeprom {address: value} (initial bytes), usi_input [bytes] (what a slave shifts into the USI on DI, one per transfer), temperature (°C for the ADC sensor), startup_ms (the restart delay after a reset, default 64), initial, vcc, led_vf, clock_hz (default 1000000: the factory 8 MHz RC with CKDIV8; set it to the clock the firmware was built for), duration (default 100 ms, at most 5 s).',
+        'Keep the scenario with the project: save_scenario: true writes this call\'s arguments to <schematic name>.fw.json; later calls (and the /mcu-sim command) use that file when it exists, so a change is re-verified against every saved requirement without retyping them. Arguments you pass replace the same key of the file.',
+        'Also reports hazards without being asked: a floating input the firmware reads (a button without a pull-up), an output fighting a switch (overcurrent), a level stuck between the thresholds, and every reset.',
+        'A sleeping chip costs nothing to simulate; a busy loop costs wall-clock time.',
       ].join(' '),
       parameters: {
         path: SCH,
-        firmware: { type: 'string', required: true, description: 'Path to the Intel HEX or ELF firmware.' },
+        firmware: { type: 'string', description: 'Path to the Intel HEX or ELF firmware (optional when the scenario file names it).' },
         reference: { type: 'string', description: 'The MCU, e.g. U1 (default: the simulable one).' },
         duration: { type: 'string', description: 'Simulated time, e.g. "200ms".' },
         clock_hz: { type: 'number', description: 'CPU clock in Hz after any fuse divider (default 1000000).' },
         stimuli: { type: 'array', items: { type: 'object', additionalProperties: true, properties: { at: { type: 'string', required: true } } }, description: 'What happens to the board and when.' },
         assertions: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'What must hold.' },
         initial: { type: 'object', additionalProperties: true, description: 'Switch states at the start, e.g. {"SW1": "closed"} (default all open).' },
+        eeprom: { type: 'object', additionalProperties: true, description: 'Initial EEPROM bytes as {"0": 42, "1": 7}.' },
+        usi_input: { type: 'array', items: { type: 'integer' }, description: 'Bytes a slave shifts into the USI on DI, one per transfer.' },
+        temperature: { type: 'number', description: 'Chip temperature for the ADC temperature sensor, °C (default 25).' },
+        rstdisbl: { type: 'boolean', description: 'The RSTDISBL fuse is programmed: PB5 is a GPIO (ADC0), not the RESET pin.' },
+        startup_ms: { type: 'number', description: 'Milliseconds before the program restarts after a reset (default 64).' },
         vcc: { type: 'number', description: 'Supply voltage (default: from the supply net name, else 5).' },
         led_vf: { type: 'number', description: 'Forward voltage at which an LED counts as lit (default 1.8).' },
+        scenario: { type: 'string', description: 'Scenario file (JSON). Default: <schematic name>.fw.json next to the schematic, used when it exists; what this call names replaces the same key of the file.' },
+        save_scenario: { type: 'boolean', description: 'Write the arguments this call used to the scenario file (needs assertions).' },
         timeout: { type: 'number', description: 'Wall-clock seconds (default 60).' },
       },
       output: {
@@ -393,7 +402,10 @@ export function apply(ctx: Context, config: Config = {}): void {
       },
       async execute(args, exec) {
         const seconds = Math.min(Math.max(Number(args.timeout ?? 60), 1), 600)
-        return await ctx.kicad.run('simulate_firmware', { ...args, path: at(exec, args.path), firmware: at(exec, args.firmware) }, exec.signal, { timeoutMs: seconds * 1000 + 30_000 }) as never
+        return await ctx.kicad.run('simulate_firmware', {
+          ...args, path: at(exec, args.path),
+          ...(args.firmware ? { firmware: at(exec, args.firmware) } : {}), ...(args.scenario ? { scenario: at(exec, args.scenario) } : {}),
+        }, exec.signal, { timeoutMs: seconds * 1000 + 30_000 }) as never
       },
     }),
     defineTool({

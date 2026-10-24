@@ -16,7 +16,7 @@ import time
 from typing import Any
 
 from . import avr as avrmod
-from .avr import Avr, AvrError, Unsupported, load_firmware
+from .avr import DEVICES, Avr, AvrError, Unsupported, load_image
 from .mcu import Circuit, _gpio_of, short_name
 from .spice import SimulationError, parse_value
 
@@ -24,6 +24,8 @@ __all__ = ["simulate_firmware", "Board", "solve"]
 
 OUT_OHMS = 40.0          # an AVR pin driver
 PULLUP_OHMS = 35_000.0   # the internal pull-up, 20-50 kΩ
+RESET_PULLUP_OHMS = 45_000.0  # the RESET pin's own pull-up, 30-60 kΩ (always there while the pin is RESET)
+RESET_LOW = 0.2          # a RESET voltage below 0.2 VCC resets the chip (datasheet VRST)
 SWITCH_OHMS = 0.05
 VIH, VIL = 0.6, 0.3      # logic thresholds as a fraction of VCC
 PIN_WARN_A, PIN_ERROR_A = 0.020, 0.040
@@ -102,9 +104,10 @@ def rail_volts(name: str) -> float | None:
 
 
 class Board:
-    def __init__(self, netlist: dict[str, Any], ref: str, provider: dict[str, Any], vcc: float | None = None, led_vf: float = 1.8):
+    def __init__(self, netlist: dict[str, Any], ref: str, provider: dict[str, Any], vcc: float | None = None, led_vf: float = 1.8, rstdisbl: bool = False):
         self.circuit = Circuit(netlist)
         self.ref = ref
+        self.rstdisbl = rstdisbl  # the fuse: PB5 is a GPIO, not the RESET pin
         self.led_vf = led_vf
         self.notes: list[str] = []
         c = self.circuit
@@ -195,6 +198,9 @@ class Board:
         drivers: dict[int, float] = {}
         pwm: dict[int, dict[str, float]] = {}
         for bit, net in self.pins.items():
+            if bit == 5 and not self.rstdisbl:  # the RESET pin: only its own pull-up is on the net
+                static.append((net, self.vcc, RESET_PULLUP_OHMS))
+                continue
             if avr.pin_driven(bit):
                 wave = avr.pwm_pin(bit)
                 if wave is not None:
@@ -287,6 +293,8 @@ class Run:
         self.hazards: dict[tuple[str, int | str], dict[str, Any]] = {}
         self.undefined: dict[int, float] = {}
         self.last_volts: dict[str, float | None] = {}
+        self.initial_eeprom = b""
+        self._in_reset = False
         avr.vcc_volts = board.vcc
         avr.adc_input = self.pin_volts
         avr.on_pin_change = self.update
@@ -305,7 +313,7 @@ class Run:
         self.last_volts = volts
         levels: list[int | None] = [None] * 6
         for bit, net in board.pins.items():
-            if avr.pin_driven(bit):
+            if avr.pin_driven(bit) or (bit == 5 and not board.rstdisbl):
                 continue
             level = board.logic(volts.get(net))
             levels[bit] = level
@@ -341,16 +349,26 @@ class Run:
             "_volts": volts,
         }
         key = (tuple(sorted(snap["pins"].items())), tuple(sorted((k, v) for k, v in snap["nets"].items())), tuple(sorted(snap["leds"].items())), tuple(snap["switches"]),
-               tuple(sorted((k, w["duty"], w["hz"]) for k, w in snap["pwm"].items())))
-        if self.timeline and self.timeline[-1].get("_key") == key:
-            return
-        snap["_key"] = key
-        if self.timeline and self.timeline[-1]["t"] == t:
-            self.timeline[-1] = snap  # several changes in the same instant: the last one stands
-        else:
-            self.timeline.append(snap)
-            self.times.append(t)
-        self.times[-1] = snap["t"]
+               tuple(sorted((k, w["duty"], w["hz"]) for k, w in snap["pwm"].items())), avr.held)
+        snap["held"] = avr.held
+        if not (self.timeline and self.timeline[-1].get("_key") == key):
+            snap["_key"] = key
+            if self.timeline and self.timeline[-1]["t"] == t:
+                self.timeline[-1] = snap  # several changes in the same instant: the last one stands
+            else:
+                self.timeline.append(snap)
+                self.times.append(t)
+            self.times[-1] = snap["t"]
+        if not board.rstdisbl and 5 in board.pins and not self._in_reset:
+            v = volts.get(board.pins[5])
+            asserted = v is not None and v <= RESET_LOW * board.vcc
+            if asserted != avr.held:
+                self._in_reset = True
+                try:
+                    avr.set_reset_line(asserted)  # a reset changes the pins: resolve the board again
+                    self.update(stamp=stamp)
+                finally:
+                    self._in_reset = False
 
     def state_at(self, t: float) -> dict[str, Any]:
         i = bisect.bisect_right(self.times, t + 1e-12) - 1
@@ -425,10 +443,91 @@ def _holds(value: Any, a: dict[str, Any]) -> bool | None:
     return value == a.get("level", a.get("is"))
 
 
+def _time_of(value: Any, what: str, names: dict[str, float]) -> float:
+    if isinstance(value, str) and value in names:
+        return names[value]
+    return _seconds(value, what)
+
+
+def _within(value: float, lo: Any, hi: Any) -> bool:
+    return (lo is None or value >= lo) and (hi is None or value <= hi)
+
+
+def _judge_logged(run: Run, a: dict[str, Any], names: dict[str, float], abort_at: float | None, end: float) -> dict[str, Any]:
+    """Assertions about what the chip logged rather than what a pin did: resets, EEPROM contents, USI transfers."""
+    chip = run.avr
+    when = a.get("at", a.get("by"))
+    t0 = t1 = None
+    if "after" in a or "from" in a:
+        t0 = _time_of(a.get("after", a.get("from")), "after", names)
+        t1 = t0 + _seconds(a["within"], "within") if "within" in a else _time_of(a["to"], "to", names) if "to" in a else None
+        if t1 is None:
+            raise SimulationError(f"assertion {a}: a window needs within (after a time or a stimulus) or to (from a time)")
+    elif when is not None:
+        t1 = _time_of(when, "at", names)
+    else:
+        raise SimulationError(f"assertion {a}: say when: at / by a time, or after + within, or from + to")
+    result: dict[str, Any] = {"t0": t0 if t0 is not None else t1, "t1": t1}
+    if abort_at is not None and t1 > abort_at:
+        name = a.get("name") or str(next(k for k in ("reset", "resets", "eeprom", "usi") if k in a))
+        return {**result, "name": name, "when": f"by {t1 * 1000:g} ms", "passed": None, "reason": f"cannot verify: the simulation stopped at {abort_at * 1000:.3f} ms"}
+    if t1 > end + 1e-12:
+        raise SimulationError(f"assertion {a}: it looks at {t1 * 1000:g} ms but the simulation ends at {end * 1000:g} ms: raise duration")
+    if "reset" in a:
+        cause = a["reset"]
+        if cause not in ("any", "external", "watchdog"):
+            raise SimulationError("reset must be any, external or watchdog")
+        hits = [(t, c) for t, c in chip.resets if (cause == "any" or c == cause) and (t0 is None or t > t0) and t <= t1 + 1e-12]
+        name = a.get("name") or f"{cause} reset"
+        text = f"within {a['within']} after {a.get('after', a.get('from'))}" if "within" in a else f"from {a.get('from')} to {a.get('to')}" if "to" in a else f"by {a.get('at', a.get('by'))}"
+        passed = bool(hits)
+        return {**result, "name": name, "when": text, "passed": passed, "value": len(hits),
+                **({"first_at": hits[0][0]} if hits else {"reason": f"no {cause} reset happened in that window"})}
+    if "resets" in a:
+        count = sum(1 for t, _ in chip.resets if t <= t1 + 1e-12)
+        spec = a["resets"]
+        lo, hi = (spec.get("min"), spec.get("max")) if isinstance(spec, dict) else (spec, spec)
+        passed = _within(count, lo, hi)
+        want = spec if not isinstance(spec, dict) else f"{lo if lo is not None else ''}..{hi if hi is not None else ''}"
+        return {**result, "name": a.get("name") or f"resets by {t1 * 1000:g} ms", "when": f"by {t1 * 1000:g} ms", "passed": passed, "value": count,
+                **({} if passed else {"reason": f"{count} reset(s) by then, expected {want}"})}
+    if "eeprom" in a:
+        addr = int(parse_value(a["eeprom"], "eeprom"))
+        if not 0 <= addr < len(run.initial_eeprom):
+            raise SimulationError(f"EEPROM address {addr} is outside the device's {len(run.initial_eeprom)} bytes")
+        value = run.initial_eeprom[addr]
+        for t, at, v in chip.eeprom_log:
+            if at == addr and t <= t1 + 1e-12:
+                value = v
+        want = int(parse_value(a["is"], "is")) if "is" in a else None
+        if want is None:
+            raise SimulationError("an eeprom assertion needs is (the byte it must hold)")
+        passed = value == want
+        return {**result, "name": a.get("name") or f"EEPROM[{addr}] = {want}", "when": f"at {t1 * 1000:g} ms", "passed": passed, "value": value,
+                **({} if passed else {"reason": f"it held {value} (0x{value:02X}) at {t1 * 1000:g} ms, expected {want}"})}
+    kind = a["usi"]
+    if kind not in ("tx", "rx"):
+        raise SimulationError("usi must be tx or rx (the byte sent or received in a transfer)")
+    nth = int(a.get("nth", 1))
+    transfers = [(t, tx, rx) for t, tx, rx in chip.usi_log if t <= t1 + 1e-12]
+    want = int(parse_value(a["is"], "is")) if "is" in a else None
+    if want is None:
+        raise SimulationError("a usi assertion needs is (the byte)")
+    name = a.get("name") or f"USI transfer {nth} {kind} 0x{want:02X}"
+    if len(transfers) < nth:
+        return {**result, "name": name, "when": f"by {t1 * 1000:g} ms", "passed": False, "value": None,
+                "reason": f"only {len(transfers)} USI transfer(s) completed by {t1 * 1000:g} ms, expected at least {nth}"}
+    value = transfers[nth - 1][1 if kind == "tx" else 2]
+    return {**result, "name": name, "when": f"by {t1 * 1000:g} ms", "passed": value == want, "value": value,
+            **({} if value == want else {"reason": f"transfer {nth} {kind} was 0x{value:02X}, expected 0x{want:02X}"})}
+
+
 def _judge(run: Run, a: dict[str, Any], names: dict[str, float], abort_at: float | None, end: float) -> dict[str, Any]:
     board = run.board
     if not isinstance(a, dict):
         raise SimulationError("each assertion is an object")
+    if any(k in a for k in ("reset", "resets", "eeprom", "usi")):
+        return _judge_logged(run, a, names, abort_at, end)
     want = (f"duty {a['duty']}" if "duty" in a else f"{a['freq']} Hz" if "freq" in a else a.get("is") or a.get("level")
             or (f"{a.get('min', '')}..{a.get('max', '')}" if ("min" in a or "max" in a) else ("on" if "led" in a else None)))
     if want is None:
@@ -492,11 +591,21 @@ def _judge(run: Run, a: dict[str, Any], names: dict[str, float], abort_at: float
 
 def simulate_firmware(netlist: dict[str, Any], mcu_ref: str, provider: dict[str, Any], firmware: str, stimuli: list[dict[str, Any]] | None,
                       assertions: list[dict[str, Any]] | None, duration: Any = None, clock_hz: Any = None, vcc: Any = None, led_vf: Any = None,
-                      initial: dict[str, str] | None = None, timeout: float = 60.0) -> dict[str, Any]:
+                      initial: dict[str, str] | None = None, timeout: float = 60.0, device: str = "attiny85", eeprom: Any = None,
+                      usi_input: list[Any] | None = None, temperature: Any = None, rstdisbl: bool = False, startup_ms: Any = None) -> dict[str, Any]:
     try:
-        flash = load_firmware(firmware)
+        flash, eeprom_image = load_image(firmware, device)
     except (OSError, AvrError) as exc:
         raise SimulationError(f"cannot load firmware {firmware}: {exc}") from exc
+    eeprom_size = DEVICES[device]["eeprom"]
+    eeprom_bytes = bytearray(eeprom_image if eeprom_image is not None else b"\xff" * eeprom_size)
+    for addr, value in (eeprom.items() if isinstance(eeprom, dict) else enumerate(eeprom or [])):
+        a_ = int(parse_value(addr, "eeprom address"))
+        if not 0 <= a_ < eeprom_size:
+            raise SimulationError(f"eeprom: address {a_} is outside the {device}'s {eeprom_size} bytes")
+        eeprom_bytes[a_] = int(parse_value(value, "eeprom value")) & 0xFF
+    queue = [int(parse_value(b, "usi_input")) & 0xFF for b in usi_input or []]
+    celsius = parse_value(temperature, "temperature") if temperature is not None else 25.0
     clock = int(parse_value(clock_hz, "clock_hz")) if clock_hz is not None else 1_000_000
     if clock <= 0 or clock > 20_000_000:
         raise SimulationError("clock_hz must be between 1 and 20000000")
@@ -504,7 +613,7 @@ def simulate_firmware(netlist: dict[str, Any], mcu_ref: str, provider: dict[str,
     if not 0 < end <= MAX_SECONDS:
         raise SimulationError(f"duration must be between 0 and {MAX_SECONDS:g} s")
     board = Board(netlist, mcu_ref, provider, vcc=parse_value(vcc, "vcc") if vcc is not None else None,
-                  led_vf=parse_value(led_vf, "led_vf") if led_vf is not None else 1.8)
+                  led_vf=parse_value(led_vf, "led_vf") if led_vf is not None else 1.8, rstdisbl=bool(rstdisbl))
     if not board.pins:
         raise SimulationError(f"{mcu_ref} has no pin connected to a PB0-PB5 net")
     closed = set()
@@ -515,19 +624,27 @@ def simulate_firmware(netlist: dict[str, Any], mcu_ref: str, provider: dict[str,
             raise SimulationError("initial switch state must be open or closed")
         if state == "closed":
             closed.add(ref)
-    chip = Avr(flash, clock)
+    chip = Avr(flash, clock, device=device, eeprom=bytes(eeprom_bytes), usi_input=queue, temperature_c=celsius, rstdisbl=bool(rstdisbl))
+    if startup_ms is not None:  # a number is milliseconds, a string like "4ms" is a time
+        delay = parse_value(startup_ms, "startup_ms")
+        chip.reset_delay_s = delay / 1000 if isinstance(startup_ms, (int, float)) else delay
+        if not 0 <= chip.reset_delay_s <= 1:
+            raise SimulationError("startup_ms must be between 0 and 1000")
     run = Run(chip, board, closed)
+    run.initial_eeprom = bytes(eeprom_bytes)
     events: list[tuple[float, int, dict[str, Any]]] = []
     names: dict[str, float] = {}
     for i, s in enumerate(stimuli or []):
         if not isinstance(s, dict) or "at" not in s:
             raise SimulationError("each stimulus needs at, e.g. {at: \"50ms\", press: \"SW1\"}")
         t = _seconds(s["at"], "at")
-        kinds = [k for k in ("press", "release", "toggle", "drive") if k in s]
+        kinds = [k for k in ("press", "release", "toggle", "drive", "temperature") if k in s]
         if len(kinds) != 1:
-            raise SimulationError(f"stimulus {s}: give exactly one of press, release, toggle, drive")
+            raise SimulationError(f"stimulus {s}: give exactly one of press, release, toggle, drive, temperature")
         kind = kinds[0]
-        if kind == "drive":
+        if kind == "temperature":
+            parse_value(s["temperature"], "temperature")
+        elif kind == "drive":
             net = _net_name(board, s["drive"])
             if s.get("level") not in ("high", "low", "release"):
                 try:
@@ -560,6 +677,8 @@ def simulate_firmware(netlist: dict[str, Any], mcu_ref: str, provider: dict[str,
                 net = _net_name(board, s["drive"])
                 level = s["level"]
                 run.forced[net] = {"high": board.vcc, "low": 0.0, "release": None}[level] if level in ("high", "low", "release") else parse_value(level, "level")
+            elif "temperature" in s:
+                chip.temperature_c = parse_value(s["temperature"], "temperature")
             elif "press" in s:
                 run.closed.add(s["press"])
             elif "release" in s:
@@ -587,6 +706,10 @@ def simulate_firmware(netlist: dict[str, Any], mcu_ref: str, provider: dict[str,
         hazards.append({"severity": "warning", "rule": "undefined_level", "pin": f"PB{bit}", "net": net, "t": t,
                         "message": f"PB{bit} (net {net}) sits between the logic levels while it is an input (a divider or a weak pull against a switch): it reads unpredictably",
                         "fix": "Use a stronger pull-up/pull-down or remove the competing path."})
+    if chip.resets:
+        causes = ", ".join(f"{cause} at {t * 1000:.1f} ms" for t, cause in chip.resets[:6]) + (" …" if len(chip.resets) > 6 else "")
+        hazards.append({"severity": "info", "rule": "resets", "pin": "", "net": "", "t": chip.resets[0][0],
+                        "message": f"the chip was reset {len(chip.resets)} time(s): {causes}; it restarts {chip.reset_delay_s * 1000:g} ms after each reset (the default start-up fuses)"})
     if board.unmodelled:
         hazards.append({"severity": "info", "rule": "unmodelled_parts", "pin": "", "net": "", "t": 0.0,
                         "message": "not simulated, treated as open circuits: " + ", ".join(board.unmodelled) + " (they touch nets the chip drives or reads)"})
@@ -613,4 +736,9 @@ def simulate_firmware(netlist: dict[str, Any], mcu_ref: str, provider: dict[str,
         "assertions": judged, "hazards": hazards, "timeline": events_out, "passed": passed,
         "switches": sorted(board.switches), "leds": sorted(board.leds), "notes": board.notes,
         "pins": {f"PB{b}": short_name(n) for b, n in sorted(board.pins.items())},
+        "device": device,
+        "resets": [{"t": t, "cause": cause} for t, cause in chip.resets],
+        "eeprom": {"changed": {a_: chip.eeprom[a_] for a_ in range(len(chip.eeprom)) if chip.eeprom[a_] != run.initial_eeprom[a_]},
+                   "writes": [{"t": t, "address": a_, "value": v} for t, a_, v in chip.eeprom_log]},
+        "usi_transfers": [{"t": t, "tx": tx, "rx": rx} for t, tx, rx in chip.usi_log],
     }

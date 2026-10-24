@@ -1,8 +1,8 @@
-/** /erc, /drc, /bom, /simulate, /mcu-check, /kicad-fab and /kicad-render: direct UI commands that never involve the model. */
+/** /erc, /drc, /bom, /simulate, /mcu-check, /mcu-sim, /kicad-fab and /kicad-render: direct UI commands that never involve the model. */
 import { readdirSync, realpathSync } from 'node:fs'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { DoctorReport, InstallJob, InstallOption } from 'dsh-kicad-bridge'
-import { FAB_EXTRAS, formatCheck, formatFab, formatMcu, formatSimulate, type CheckReport, type FabResult, type McuCheckValue, type SimulateValue } from 'dsh-tool-kicad'
+import { FAB_EXTRAS, formatCheck, formatFab, formatFirmware, formatMcu, formatSimulate, type CheckReport, type FabResult, type FirmwareRun, type McuCheckValue, type SimulateValue } from 'dsh-tool-kicad'
 import { agentCwd, followup, type CommandDefinition, type CommandInvocation, type CommandResult, type Context } from './dsh.ts'
 
 /** The design file a command targets: the argument, else the project's root schematic / board. */
@@ -87,6 +87,16 @@ export function createCommands(ctx: Context): CommandDefinition[] {
       handler: wrap(async (inv, cwd) => {
         const result = await ctx.kicad.run<McuCheckValue>('check_mcu', { path: targetFile(cwd, inv.rawInput, '.kicad_sch') }, inv.signal)
         return formatMcu(result)
+      }),
+    },
+    {
+      name: 'mcu-sim',
+      description: 'Run the project\'s saved firmware scenario (<name>.fw.json: firmware, stimuli, assertions) on the simulated ATtiny against the schematic',
+      input: { hint: '[path/to/file.kicad_sch]' },
+      handler: wrap(async (inv, cwd) => {
+        const path = targetFile(cwd, inv.rawInput, '.kicad_sch')
+        const result = await ctx.kicad.run<FirmwareRun>('simulate_firmware', { path }, inv.signal, { timeoutMs: 120_000 })
+        return formatFirmware(result)
       }),
     },
     {
