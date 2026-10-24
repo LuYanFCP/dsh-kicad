@@ -12,11 +12,14 @@
 #define GPIO_IN              0x3FF4403C
 #define GPIO_PIN(n)          (0x3FF44088 + 4 * (n))
 #define GPIO_FUNC_OUT_SEL(n) (0x3FF44530 + 4 * (n))
+#define OEN_SEL              (1u << 10)  /* the output enable comes from GPIO_ENABLE */
+#define OEN_INV_SEL          (1u << 11)
 #define SIG_GPIO_OUT         0x100
 
 /* IO_MUX: function, input enable, drive strength (the pulls of these RTC pads are in RTC_IO) */
 #define IO_MUX_GPIO2         0x3FF49040
 #define IO_MUX_GPIO0         0x3FF49044
+#define MCU_SEL_MASK         (7u << 12)
 #define MCU_SEL_GPIO         (2u << 12)
 #define FUN_DRV_20MA         (2u << 10)
 #define FUN_IE               (1u << 9)
@@ -26,6 +29,7 @@
 #define RTCIO_TOUCH_PAD2     0x3FF4849C
 #define RTCIO_RUE            (1u << 27)
 #define RTCIO_RDE            (1u << 28)
+#define RTCIO_MUX_SEL        (1u << 19)  /* the pad is an RTC pad */
 
 /* Timer group 0 watchdog, which the ROM leaves running */
 #define TIMG0_WDTCONFIG0     0x3FF5F048
@@ -78,10 +82,14 @@ static inline void led(int on)
     REG(on ? GPIO_OUT_W1TS : GPIO_OUT_W1TC) = 1u << 2;
 }
 
-/* GPIO0 as an input with the internal pull-up */
+/* GPIO0 as an input, set up the way ESP-IDF's GPIO driver does it (MicroPython's Pin(0, Pin.IN) runs these accesses): by
+ * read-modify-writes, which keep the pull-up GPIO0 has from reset */
 static inline void button_setup(void)
 {
-    REG(IO_MUX_GPIO0) = MCU_SEL_GPIO | FUN_DRV_20MA | FUN_IE;
-    REG(RTCIO_TOUCH_PAD1) = RTCIO_RUE;
-    REG(GPIO_ENABLE_W1TC) = 1u << 0;
+    REG(RTCIO_TOUCH_PAD1) &= ~RTCIO_MUX_SEL;                                 /* rtc_gpio_deinit */
+    REG(IO_MUX_GPIO0) = (REG(IO_MUX_GPIO0) & ~MCU_SEL_MASK) | MCU_SEL_GPIO;   /* gpio_pad_select_gpio */
+    REG(IO_MUX_GPIO0) |= FUN_IE;                                              /* gpio_input_enable */
+    REG(GPIO_ENABLE_W1TC) = 1u << 0;                                          /* gpio_output_disable */
+    REG(GPIO_FUNC_OUT_SEL(0)) &= ~OEN_INV_SEL;
+    REG(GPIO_FUNC_OUT_SEL(0)) |= OEN_SEL;
 }

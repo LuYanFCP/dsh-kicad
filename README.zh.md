@@ -159,9 +159,9 @@ Freerouting（GPL-3.0）是独立的 Java 程序，不随插件分发。`/kicad-
 **经典 ESP32**（WROOM/WROVER 模块和 PICO）运行在 [Espressif 的 QEMU](https://github.com/espressif/qemu)（`qemu-system-xtensa -machine esp32`）上：ROM、二级 bootloader、你的应用和双核 FreeRTOS 都在跑，所以 ESP-IDF 或 Arduino-ESP32 的构建产物可以原样运行。QEMU 需要单独安装：`kicad_doctor` 会报告它，`/kicad-install qemu-esp32` 下载 Espressif 的发布包（校验 SHA-256，不需要 root），ESP-IDF 自带安装的版本（`idf_tools.py install qemu-xtensa`）也能被找到；用 `qemu` 设置或 `$QEMU_XTENSA` 指向其他位置。
 
 - **固件**：合并后的 flash 镜像（bootloader 在 0x1000、分区表、应用：在 ESP-IDF 构建目录里执行 `esptool.py --chip esp32 merge_bin -o flash.bin @flash_args`，或 Arduino 的 `.merged.bin`），也可以直接给构建目录里的 `flasher_args.json`，由插件合并。镜像会被补齐到 QEMU 接受的 flash 大小；原文件不会被改写。
-- **引脚。**QEMU 的 ESP32 GPIO 外设只是个空壳，所以 sidecar 通过 QEMU 的 gdb stub 从外部观察芯片：每次写 GPIO、IO_MUX 和 RTC_IO 寄存器都会被解码，因此输出、开漏、内部上拉下拉、输入使能和 GPIO 矩阵都跟着固件走；每次读 `GPIO_IN` 都得到电路板给引脚的电平。断言里引脚写作 `GPIO2`、`IO2` 或 `U1:IO2`。电路板一侧是同一个直流网络（引脚驱动按驱动强度计，默认约 33 Ω；45 kΩ 上下拉；ESP32 的逻辑阈值）。
+- **引脚。**QEMU 的 ESP32 GPIO 外设只是个空壳，IO_MUX 和 RTC_IO 也没有模拟，所以 sidecar 通过 QEMU 的 gdb stub 观察芯片，并亲自完成对这些寄存器的每一次读写：输出、开漏、内部上拉下拉、输入使能和 GPIO 矩阵都跟着固件走；读-改-写（ESP-IDF 配置引脚的方式）从芯片实际保存的值开始；读 `GPIO_IN` 得到电路板给引脚的电平。断言里引脚写作 `GPIO2`、`IO2` 或 `U1:IO2`。电路板一侧是同一个直流网络（引脚驱动按驱动强度计，默认约 33 Ω；45 kΩ 上下拉；ESP32 的逻辑阈值）。
 - **启动与复位。**上电时求解 strapping 引脚（GPIO0、2、4、5、12、15）的电平并交给 QEMU：GPIO0 被拉低时芯片真的会进入串口下载模式，GPIO12 为高是错误（选择 1.8 V flash）。EN 为低时芯片保持复位，直到 EN 升高；每次复位都会记录原因（`{reset: "watchdog"}`，还有 `power-on`、`software`、`external`、`deep-sleep`、`brownout`）。UART0 的输出会被捕获：`{uart: "ready", by: "2s"}` 或 `{uart: "Guru Meditation", is: "absent"}`。
-- **时间**是 QEMU 的虚拟时钟（`-icount`）：每条指令让它前进 8 ns，所以忙碌的代码在任何主机上耗费的仿真时间都相同；空闲时间（CPU 在 WAITI 中等待，FreeRTOS 的空闲任务就是这样）则按真实时间流逝。因此一次运行至少要花与仿真时长相当的墙钟时间，各次运行之间的时序差异小于 1 毫秒。仿真时间包含启动过程（几百毫秒）。`duration` 默认 2 s（最多 30 s）。
+- **时间**是 QEMU 的虚拟时钟（`-icount`）：每条指令让它前进 8 ns，所以忙碌的代码在任何主机上耗费的仿真时间都相同；空闲时间（CPU 在 WAITI 中等待，FreeRTOS 的空闲任务就是这样）则按真实时间流逝。因此一次运行至少要花与仿真时长相当的墙钟时间。应用内部的时序在各次运行之间的差异远小于 1 毫秒；双核固件的启动过程会相差几十毫秒（QEMU 让两个核轮流运行）。仿真时间包含启动过程：小程序约 0.2 s，MicroPython 约 2 s，所以激励应放在固件配置好引脚之后（时间线会显示何时）。`duration` 默认 2 s（最多 30 s）。
 - **它不会假装的。**电路板上由外设驱动的引脚（LEDC PWM、I2C、SPI、RMT）电平未知，运行到此停止；会触发的 GPIO 中断（QEMU 无法投递）、崩溃（`Guru Meditation`、`abort()`）以及等待永远不会响应的硬件的固件也一样。此后的断言为 `cannot verify`。固件用到的、QEMU 没有模拟的硬件（WiFi、蓝牙、ADC 等）会列在 `not_emulated` 中。
 
 ### 3D 视图

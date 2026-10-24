@@ -1,4 +1,5 @@
-/* The LED on GPIO2 is on while the button on GPIO0 (to ground, internal pull-up) is pressed; GPIO0 is read every 5 ms. */
+/* The LED on GPIO2 is on while the button on GPIO0 (to ground; GPIO0's pull-up from reset, so the board needs none) is pressed;
+ * GPIO0 is read every 5 ms. */
 #include "common.h"
 
 void main(void)

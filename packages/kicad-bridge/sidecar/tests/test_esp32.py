@@ -64,6 +64,7 @@ def test_stop_replies():
     assert eq._stop("T05thread:01;watch:3ff44008;") == {"signal": 5, "thread": 1, "watch": ("2", 0x3FF44008)}
     assert eq._stop("T05thread:p01.02;rwatch:3ff4403c;")["watch"] == ("3", 0x3FF4403C)
     assert eq._stop("T05thread:p01.02;rwatch:3ff4403c;")["thread"] == 2
+    assert eq._stop("T05thread:02;awatch:3ff44530;")["watch"] == ("4", 0x3FF44530)
     assert eq._stop("T02thread:01;") == {"signal": 2, "thread": 1, "watch": None}
     assert eq._stop("S05")["signal"] == 5
     assert eq._stop("W00")["exited"] == "W00"
@@ -160,6 +161,28 @@ def test_pulls_and_functions_of_digital_and_rtc_pads():
     assert g.pin(12).function == "MTDI" and not g.pin(12).driven
     g.write(IO_MUX[18], 3 << 12)  # GPIO18 function 3: a peripheral straight through the IO_MUX
     assert g.pin(18).unknown
+
+
+def test_reads_give_what_the_chip_holds():
+    # QEMU answers these registers with 0; ESP-IDF configures pads by read-modify-write, so loads must see the chip's values
+    g = eq.GpioState()
+    assert g.read(TOUCH_PAD1) == RUE and g.read(TOUCH_PAD2) == RDE  # the reset pulls of GPIO0 and GPIO2
+    assert g.read(G + 0x530) == 0x100  # GPIO0's output: the GPIO data register
+    g.write(TOUCH_PAD1, g.read(TOUCH_PAD1) & ~(1 << 19))  # rtc_gpio_deinit keeps the pull-up
+    assert g.pin(0).pull_up
+    g.write(G + 0x530, g.read(G + 0x530) & ~(1 << 11))  # ESP-IDF's output-enable control: two read-modify-writes
+    g.write(G + 0x530, g.read(G + 0x530) | (1 << 10))
+    assert g.read(G + 0x530) == 0x500 and g.pin(0).function == "gpio" and not g.pin(0).unknown
+    g.write(IO_MUX[0], (g.read(IO_MUX[0]) & ~(7 << 12)) | (2 << 12))
+    g.write(IO_MUX[0], g.read(IO_MUX[0]) | eq.FUN_IE)
+    assert g.read(IO_MUX[0]) == GPIO_FUNC | eq.FUN_IE  # the reset drive strength is kept
+    g.write(ENABLE_W1TS, 1 << 2)
+    g.write(W1TS, 1 << 2)
+    assert g.read(G + 0x20) == g.read(G + 0x04) == 1 << 2 and g.read(W1TS) == g.read(ENABLE_W1TS) == 0
+    g.write(G + 0x130 + 4 * 14, 0x85)  # the input matrix is not interpreted, but reads back
+    assert g.read(G + 0x130 + 4 * 14) == 0x85
+    g.reset("power-on")
+    assert g.read(G + 0x130 + 4 * 14) == 0 and g.read(G + 0x04) == 0
 
 
 def test_reset_scopes():
@@ -596,10 +619,14 @@ def test_blink_on_qemu():
 
 @needs_qemu
 def test_button_on_qemu():
-    result = qemu_run("button", stimuli=PRESS, assertions=[
-        {"led": "D1", "is": "off", "at": "0.9s"}, {"led": "D1", "is": "on", "after": "press", "within": "20ms"},
-        {"led": "D1", "is": "off", "after": "release", "within": "20ms"}])
-    assert verdicts(result) == [True, True, True], (result["assertions"], result["aborted"])
+    # the program sets GPIO0 up by read-modify-writes, as ESP-IDF does, and relies on GPIO0's pull-up from reset: the button
+    # works without the board's pull-up too, because every load of the pin registers gets what the chip holds, not QEMU's 0
+    for pullup in (True, False):
+        result = qemu_run("button", net=netlist(boot_pullup=pullup), stimuli=PRESS, assertions=[
+            {"led": "D1", "is": "off", "at": "0.9s"}, {"led": "D1", "is": "on", "after": "press", "within": "20ms"},
+            {"led": "D1", "is": "off", "after": "release", "within": "20ms"}])
+        assert verdicts(result) == [True, True, True], (pullup, result["assertions"], result["aborted"])
+        assert not [h for h in result["hazards"] if h["rule"] == "floating_input"], result["hazards"]
 
 
 @needs_qemu
@@ -618,10 +645,11 @@ def test_uart_and_interrupt_on_qemu():
 
 @needs_qemu
 def test_watchdog_resets_on_qemu():
-    # the program arms a 100 ms watchdog once it runs (about 290 ms after power-on in QEMU), never feeds it and sleeps: idle time,
-    # which QEMU passes in real time, ends at the reset as precisely as busy time does
+    # the program lights the LED, arms a 100 ms watchdog, never feeds it and sleeps (it runs about 170 ms after power-on in QEMU,
+    # 300 ms after a watchdog reset): idle time, which QEMU passes in real time, ends at the reset as precisely as busy time does
     result = qemu_run("wdt", duration="1s", assertions=[{"reset": "watchdog", "after": "0s", "within": "500ms"}, {"resets": 2, "at": "1s"}])
     assert verdicts(result) == [True, True], (result["assertions"], result["resets"])
-    first, second = (r["t"] for r in result["resets"])
-    assert first == pytest.approx(0.39, abs=0.01) and second - first == pytest.approx(0.40, abs=0.01)
-    assert "rst:0x7 (TG0WDT_SYS_RESET)" in result["uart"]  # the ROM's banner of the restart (the next one prints after 1 s)
+    armed = [e["t"] for e in result["timeline"] if e["pins"]["GPIO2"] == "out-high"]
+    resets = [r["t"] for r in result["resets"]]
+    assert len(resets) == 2 and all(r - a == pytest.approx(0.100, abs=0.002) for a, r in zip(armed, resets)), (armed, resets)
+    assert "rst:0x7 (TG0WDT_SYS_RESET)" in result["uart"]  # the ROM's banner of the restart

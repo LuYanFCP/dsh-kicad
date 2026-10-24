@@ -65,6 +65,6 @@ RESET wants 10 kΩ to the supply (the ISP header wiring); VCC wants 100 nF close
 The classic ESP32 runs its real flash image on Espressif's QEMU, so ESP-IDF and Arduino-ESP32 builds work as they are.
 
 - Firmware: the merged flash image (`esptool.py --chip esp32 merge_bin -o flash.bin @flash_args` in the ESP-IDF build folder; Arduino's `.merged.bin`) or the build folder's `flasher_args.json`.
-- Pins are `GPIO2`. The application starts a few hundred milliseconds after power-on: put the stimuli and windows after that.
+- Pins are `GPIO2`. The firmware starts after the boot (about 0.2 s, MicroPython about 2 s, varying by tens of ms): put the stimuli after the timeline shows its pin set-up.
 - GPIO0 low at power-on (a pressed BOOT button in `initial`) starts the serial bootloader: the firmware does not run.
 - **Stopped at …** and `not_emulated`: report them; whatever depends on them is unverified. LEDC duty/frequency assertions are not available yet.

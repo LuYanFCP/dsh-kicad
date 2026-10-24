@@ -4,11 +4,11 @@ Espressif's QEMU fork (``qemu-system-xtensa -machine esp32``) runs the ESP32 ROM
 application and FreeRTOS from a flash image. Its GPIO peripheral is a stub, though: writes vanish and reads return 0, and
 IO_MUX and RTC_IO are not modelled at all. So the sidecar watches the chip from outside, through QEMU's gdb stub:
 
-- write watchpoints on the GPIO, IO_MUX and RTC_IO register blocks stop the CPU before every store there; the store
-  instruction is decoded (base register + offset, value register) and :class:`GpioState` mirrors the registers: output
-  levels and enables, open drain, pulls, input enables, the GPIO matrix, interrupt setup;
-- a read watchpoint on GPIO_IN/GPIO_IN1 stops before every load of the input registers: the load runs, then the register
-  it loaded gets the levels the board gives the pins;
+- access watchpoints on the GPIO, IO_MUX and RTC_IO register blocks stop the CPU before every load and store there, and
+  the access is done here instead (the CPU goes on after it). A store is decoded (base register + offset, value register)
+  and :class:`GpioState` mirrors the registers: output levels and enables, open drain, pulls, input enables, the GPIO
+  matrix, interrupt setup. A load gets the mirrored value, so the read-modify-writes ESP-IDF configures pads with start
+  from what the chip would hold, not from QEMU's 0; a load of GPIO_IN/GPIO_IN1 gets the levels the board gives the pins;
 - a breakpoint on the reset vector catches every reset (and the second core starting), one on the image's entry point
   turns the watchpoints on once the ROM hands over (the ROM's own pin set-up is not the firmware's);
 - time is QEMU's virtual clock: QEMU runs with ``-icount`` (every instruction advances it by the same amount), so busy code
@@ -469,6 +469,10 @@ class Regs:
 # ---- the chip's pins ---------------------------------------------------------------------------
 GPIO_BASE, IO_MUX_BASE, RTCIO_BASE = 0x3FF44000, 0x3FF49000, 0x3FF48400
 GPIO_IN, GPIO_IN1, RTC_GPIO_IN = GPIO_BASE + 0x3C, GPIO_BASE + 0x40, RTCIO_BASE + 0x24
+GPIO_STRAP = GPIO_BASE + 0x38
+# GPIO registers that read as 0: the write-1-to-set / write-1-to-clear ones and the interrupt status (QEMU raises no GPIO interrupt)
+GPIO_READ_ZERO = frozenset({0x08, 0x0C, 0x14, 0x18, 0x24, 0x28, 0x30, 0x34, 0x44, 0x48, 0x4C, 0x50, 0x54, 0x58, *range(0x60, 0x88, 4)})
+RTCIO_READ_ZERO = frozenset({0x04, 0x08, 0x10, 0x14, 0x18, 0x1C, 0x20})
 RTC_CNTL_TIME_UPDATE, RTC_CNTL_TIME0, RTC_CNTL_RESET_STATE = 0x3FF4800C, 0x3FF48010, 0x3FF48034
 RTC_CNTL_CLK_CONF, DPORT_CPU_PER_CONF, APB_CTRL_SYSCLK_CONF = 0x3FF48070, 0x3FF0003C, 0x3FF66000
 RESET_VECTOR = 0x40000400
@@ -569,6 +573,7 @@ class GpioState:
             for gpio, (off, up, down, _) in RTC_PADS.items():
                 pull = RESET_PULLS.get(gpio)
                 self.rtcio[off] = self.rtcio.get(off, 0) | (1 << up if pull == "up" else 1 << down if pull == "down" else 0)
+        self.other: dict[int, int] = {}  # GPIO and IO_MUX registers this model does not interpret (the input matrix, ...), as written
         self.configured: set[int] = set()
 
     # ---- writes ----
@@ -583,10 +588,14 @@ class GpioState:
             return (old & ~mask) | bits
 
         if GPIO_BASE <= reg < GPIO_BASE + 0x1000:
-            return self._gpio_write(reg - GPIO_BASE, bits, merged)
+            changed = self._gpio_write(reg - GPIO_BASE, bits, merged)
+            if changed is None and reg - GPIO_BASE not in GPIO_READ_ZERO:
+                self.other[reg] = merged(self.other.get(reg, 0))
+            return changed
         if IO_MUX_BASE <= reg < IO_MUX_BASE + 0x100:
             gpio = PAD_OF_IO_MUX.get(reg - IO_MUX_BASE)
             if gpio is None:
+                self.other[reg] = merged(self.other.get(reg, 0))
                 return None
             self.iomux[gpio] = merged(self.iomux[gpio])
             self.configured.add(gpio)
@@ -643,6 +652,28 @@ class GpioState:
             self.configured.add(gpio)
             return {gpio}
         return None
+
+    # ---- reads ----
+    def read(self, reg: int) -> int:
+        """The word the chip returns for a register of the three blocks (GPIO_IN, GPIO_STRAP and RTC_GPIO_IN are the machine's)."""
+        if GPIO_BASE <= reg < GPIO_BASE + 0x1000:
+            off = reg - GPIO_BASE
+            if off in (0x04, 0x10):
+                return self.out if off == 0x04 else self.out1
+            if off in (0x20, 0x2C):
+                return self.enable if off == 0x20 else self.enable1
+            if 0x88 <= off < 0x88 + 4 * GPIOS:
+                return self.pin_reg[(off - 0x88) // 4]
+            if 0x530 <= off < 0x530 + 4 * GPIOS:
+                return self.out_sel[(off - 0x530) // 4]
+            return 0 if off in GPIO_READ_ZERO else self.other.get(reg, 0)
+        if IO_MUX_BASE <= reg < IO_MUX_BASE + 0x100:
+            gpio = PAD_OF_IO_MUX.get(reg - IO_MUX_BASE)
+            return self.iomux[gpio] if gpio is not None else self.other.get(reg, 0)
+        if RTCIO_BASE <= reg < RTCIO_BASE + 0x100:
+            off = reg - RTCIO_BASE
+            return 0 if off in RTCIO_READ_ZERO else self.rtcio.get(off, 0)
+        return 0
 
     # ---- what the registers make of a pad ----
     def rtc_mode(self, gpio: int) -> bool:
@@ -850,18 +881,22 @@ def _stop(text: str) -> dict[str, Any]:
 
 # ---- the machine ---------------------------------------------------------------------------------
 ICOUNT_SHIFT = 3        # every instruction advances QEMU's virtual clock by 2**3 = 8 ns (about the pace of a 160 MHz ESP32)
-TICK_S = 0.05           # with no event for this long (wall clock) the run is interrupted to look at the time
-STALL_TICKS = 40        # interruptions in a row with the virtual clock standing still: the firmware waits for nothing that will come
+# With no stop for this long (wall clock) the run is interrupted to look at the time, sooner when the end or a stimulus is due.
+# Rarely: under -icount QEMU runs the two CPUs in turns, and an interruption costs the CPU it lands on the rest of its turn, so
+# a boot where one CPU spins waiting for the other gets slower with every one (every 50 ms added about a second to MicroPython's)
+TICK_S = 0.5
+TICK_MIN_S = 0.01
+STALL_S = 2.0           # the virtual clock standing still this long (wall clock): the firmware waits for nothing that will come
 STEP_TIMEOUT_S = 2.0
 CONNECT_TIMEOUT_S = 20.0
 LOG_LIMIT = 64 << 20    # QEMU's log of unimplemented-device accesses: a firmware polling one forever stops the run
 UART_LIMIT = 1 << 20    # UART output kept for the result and the assertions
+# Access watchpoints (loads and stores): QEMU does not keep these registers (its GPIO is a stub, IO_MUX and RTC_IO are not
+# modelled), so every access is answered from GpioState
 WATCHES = (
-    ("2", GPIO_BASE, 0x5D0),      # GPIO: outputs, output enables, pin config, the GPIO matrix
-    ("2", IO_MUX_BASE, 0x94),     # IO_MUX: function, pulls, input enable, drive
-    ("2", RTCIO_BASE, 0xC0),      # RTC_IO: the RTC pads' pulls and RTC functions
-    ("3", GPIO_IN, 8),            # GPIO_IN, GPIO_IN1
-    ("3", RTC_GPIO_IN, 4),        # RTC_GPIO_IN (not simulated)
+    ("4", GPIO_BASE, 0x5D0),      # GPIO: outputs, output enables, GPIO_IN, pin config, the GPIO matrix
+    ("4", IO_MUX_BASE, 0x94),     # IO_MUX: function, pulls, input enable, drive
+    ("4", RTCIO_BASE, 0xC0),      # RTC_IO: the RTC pads' pulls and RTC functions, RTC_GPIO_IN (not simulated)
 )
 RESET_CAUSES = {1: "power-on", 3: "software", 4: "watchdog", 5: "deep-sleep", 7: "watchdog", 8: "watchdog", 9: "watchdog",
                 11: "watchdog", 12: "software", 13: "watchdog", 14: "external", 15: "brownout", 16: "watchdog"}
@@ -887,6 +922,10 @@ class Handler:
 
     def reset_request(self) -> float | None:
         """After a callback: None, or the time at which the board releases the chip from a reset it asserted (EN pulled low)."""
+        return None
+
+    def next_due(self) -> float | None:
+        """The time of the next stimulus, by which the machine looks at the clock again (EN must hold the chip from that moment)."""
         return None
 
 
@@ -1157,14 +1196,16 @@ class Machine:
             progress: Callable[[float, float | None, str], None] | None = None) -> None:
         """Run until the simulated time reaches ``end`` (or the handler is finished)."""
         assert self.gdb is not None
-        quiet = 0
+        stalled_since: float | None = None
         last_progress = time.monotonic()
         while not handler.finished and self.t < end:
             if cancel is not None and cancel.is_set():
                 raise Cancelled("the firmware simulation was cancelled")
             if time.monotonic() > deadline:
                 raise TimedOut(f"reached {self.t * 1000:.1f} ms of {end * 1000:g} ms")
-            stop = self._resume()
+            due = handler.next_due()
+            due = end if due is None else min(due, end)
+            stop = self._resume(min(TICK_S, max(TICK_MIN_S, due - self.t)))  # idle time passes at the wall clock's pace, busy time near it
             if stop.get("exited"):
                 raise QemuError(f"QEMU stopped ({stop['exited']}): {self.stderr_tail()}")
             thread = stop["thread"] or 1
@@ -1182,21 +1223,24 @@ class Machine:
             if release is not None:
                 self._reset_chip(release)
             if stop["watch"] is None and stop["signal"] != 5:
-                quiet = quiet + 1 if self.t <= before else 0
-                if quiet >= STALL_TICKS:
+                if self.t > before:
+                    stalled_since = None
+                elif stalled_since is None:
+                    stalled_since = time.monotonic()
+                elif time.monotonic() - stalled_since >= STALL_S:
                     raise Unsupported("stall", "the firmware stopped making progress: the CPUs sleep with no timer pending (it waits for an "
                                                "interrupt the simulator cannot produce, e.g. a GPIO interrupt, or it entered deep sleep)", self.t)
             if progress and time.monotonic() - last_progress > 0.5:
                 last_progress = time.monotonic()
                 progress(min(self.t, end), end, f"simulated {min(self.t, end) * 1000:.0f} ms of {end * 1000:.0f} ms")
 
-    def _resume(self) -> dict[str, Any]:
-        """Continue until the firmware touches a watched register or reaches the reset vector; after TICK_S of wall clock without
-        either, interrupt it to look at the time."""
+    def _resume(self, wait: float = TICK_S) -> dict[str, Any]:
+        """Continue until the firmware touches a watched register or reaches the reset vector; after ``wait`` seconds of wall clock
+        without either, interrupt it to look at the time."""
         assert self.gdb is not None
         self.gdb.send("vCont;c" if self.vcont else "c")
         try:
-            return _stop(self.gdb.recv(TICK_S))
+            return _stop(self.gdb.recv(wait))
         except TimeoutError:
             pass
         self.gdb.interrupt()
@@ -1230,9 +1274,15 @@ class Machine:
         # QEMU's GPIO ignores stores and reads as 0, IO_MUX and RTC_IO are not modelled: the access is done here and the CPU goes on
         # after it without executing it (no single step, no removing and inserting the watchpoint: half the round trips)
         if insn.load:
-            if addr & ~3 == RTC_GPIO_IN:
+            reg = addr & ~3
+            if reg == RTC_GPIO_IN:
                 raise Unsupported("rtc_gpio_input", "the firmware reads RTC_GPIO_IN (an input in RTC mode): not simulated", t)
-            word = handler.gpio_in(t, 0 if addr & ~3 == GPIO_IN else 1)
+            if reg in (GPIO_IN, GPIO_IN1):
+                word = handler.gpio_in(t, 0 if reg == GPIO_IN else 1)
+            elif reg == GPIO_STRAP:
+                word = self.strap
+            else:
+                word = self.gpio.read(reg)
             loaded = (word >> ((addr & 3) * 8)) & ((1 << (8 * insn.width)) - 1)
             if insn.signed and loaded >> (8 * insn.width - 1) & 1:
                 loaded -= 1 << (8 * insn.width)

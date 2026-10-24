@@ -199,6 +199,9 @@ class Esp32Run(Timeline, eq.Handler):
                 return
         self.finished = True
 
+    def next_due(self) -> float | None:
+        return self.events[self.next][0] if self.next < len(self.events) and self._release is None else None
+
     def reset_request(self) -> float | None:
         if self._release is None:
             return None
@@ -380,7 +383,7 @@ def _judge_uart(run: Esp32Run, a: dict[str, Any], names: dict[str, float], abort
     elif seen:
         return {**result, "passed": None, "first_at": seen[0],
                 "reason": f"cannot verify: the text arrived between {seen[1] * 1000:.1f} and {seen[0] * 1000:.1f} ms (the output is read at the "
-                          "firmware's pin accesses and every few milliseconds), which straddles the deadline"}
+                          "firmware's pin accesses and at least every half second), which straddles the deadline"}
     elif looked_until >= by and (abort_at is None or abort_at >= by):
         present = False
     else:
