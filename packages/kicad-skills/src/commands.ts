@@ -91,7 +91,7 @@ export function createCommands(ctx: Context): CommandDefinition[] {
     },
     {
       name: 'mcu-sim',
-      description: 'Run the project\'s saved firmware scenario (<name>.fw.json: firmware, stimuli, assertions) on the simulated ATtiny against the schematic',
+      description: 'Run the project\'s saved firmware scenario (<name>.fw.json: firmware, stimuli, assertions) on the simulated ATtiny or ESP32 against the schematic',
       input: { hint: '[path/to/file.kicad_sch]' },
       handler: wrap(async (inv, cwd) => {
         const path = targetFile(cwd, inv.rawInput, '.kicad_sch')

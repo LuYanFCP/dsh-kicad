@@ -1,6 +1,6 @@
 ---
 name: kicad-mcu-check
-description: Check how a microcontroller is wired with kicad_check_mcu (strapping pins, reserved flash pins, input-only GPIOs, EN, decoupling), verify that each signal sits on a GPIO the firmware can use, and for an ATtiny run the user's firmware against the board with kicad_simulate_firmware; say plainly when an MCU or a firmware feature is not covered.
+description: Check how a microcontroller is wired with kicad_check_mcu (strapping pins, reserved flash pins, input-only GPIOs, EN, decoupling), verify that each signal sits on a GPIO the firmware can use, and for an ATtiny or a classic ESP32 run the user's firmware against the board with kicad_simulate_firmware; say plainly when an MCU or a firmware feature is not covered.
 ---
 
 # Check the MCU wiring
@@ -47,9 +47,9 @@ Peripherals sit on fixed pins, so state them as requirements (`i2c_sda`, `i2c_sc
 RESET wants 10 kΩ to the supply (the ISP header wiring); VCC wants 100 nF close to the chip. Other AVR parts (ATmega, ATtiny with other pinouts) come back as CANNOT VERIFY.
 
 
-## Firmware against the board (ATtiny25/45/85 only)
+## Firmware against the board (ATtiny25/45/85, classic ESP32)
 
-`kicad_check_mcu` is static. When the user has a firmware image (`.hex` or `.elf` from avr-gcc, PlatformIO or Arduino), `kicad_simulate_firmware` runs it on a simulated ATtiny85 wired as the schematic says, and judges what the board does. You never build, write or invent firmware: no image, no verdict; say so.
+`kicad_check_mcu` is static. When the user has a firmware image (`.hex` or `.elf` from avr-gcc, PlatformIO or Arduino for the ATtiny; for the ESP32 see below), `kicad_simulate_firmware` runs it on a simulated chip wired as the schematic says, and judges what the board does. You never build, write or invent firmware: no image, no verdict; say so.
 
 1. Turn the user's requirement into a scenario: what happens (`stimuli`: `press` / `release` / `toggle` a switch, or `drive` a net) and what must hold (`assertions`). "Pressing the button lights the LED within 20 ms" → stimulus `{at: "30ms", press: "SW1", name: "press"}`, assertion `{led: "D2", is: "on", after: "press", within: "20ms"}`; "the LED is off until then" → `{led: "D2", is: "off", from: "0ms", to: "29ms"}`; "PB0 blinks at 100 Hz" → `{pin: "PB0", level: "high", at: "5ms"}` and `low` at `15ms`. Name the switches and LEDs by reference (the error message lists them).
 2. Read the verdict and the hazards. A hazard is a bug even when every assertion passes: a floating input (button without a pull-up: enable the internal pull-up or add a resistor), an output fighting a switch (overcurrent: fix the firmware or the wiring).
@@ -59,3 +59,12 @@ RESET wants 10 kΩ to the supply (the ISP header wiring); VCC wants 100 nF close
 6. Resets, EEPROM and the USI: a switch from the RESET net (PB5) to ground resets the chip (it restarts 64 ms later, the default start-up fuses; `startup_ms` changes it; `rstdisbl: true` makes PB5 a GPIO). The watchdog resets or interrupts. Assert them as events: `{reset: "watchdog", after: "0ms", within: "20ms"}`, `{resets: 0, at: "5s"}` (no unexpected restart), `{eeprom: 0, is: 3, at: "250ms"}` (EEPROM writes take 3.4 ms and persist across resets; `eeprom: {"0": 7}` seeds it, an ELF's `.eeprom` section is loaded), `{usi: "tx", nth: 1, is: 165, by: "5ms"}` (SPI bytes; `usi_input: [18, 52]` is what a slave shifts in).
 7. The board is a DC network: transistors, ICs and other parts on the pins' nets are treated as open and are listed in the result: if the requirement depends on them, say it is not covered. `clock_hz` defaults to 1 MHz (the factory 8 MHz RC with the divide-by-8 fuse): set it to the clock the firmware was built for (`F_CPU`), or timing assertions are wrong.
 8. Keep the scenario with the project: once the assertions are right, run once more with `save_scenario: true`. It writes `<schematic name>.fw.json` (firmware path, stimuli, assertions, ...); later `kicad_simulate_firmware {path}` and the user's `/mcu-sim` use it without retyping, so rerun it after every change and report which requirement broke.
+
+### ESP32
+
+The classic ESP32 runs its real flash image on Espressif's QEMU, so ESP-IDF and Arduino-ESP32 builds work as they are.
+
+- Firmware: the merged flash image (`esptool.py --chip esp32 merge_bin -o flash.bin @flash_args` in the ESP-IDF build folder; Arduino's `.merged.bin`) or the build folder's `flasher_args.json`.
+- Pins are `GPIO2`. The application starts a few hundred milliseconds after power-on: put the stimuli and windows after that.
+- GPIO0 low at power-on (a pressed BOOT button in `initial`) starts the serial bootloader: the firmware does not run.
+- **Stopped at …** and `not_emulated`: report them; whatever depends on them is unverified. LEDC duty/frequency assertions are not available yet.

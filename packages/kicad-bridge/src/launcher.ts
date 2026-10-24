@@ -14,6 +14,8 @@ export interface LaunchOptions {
   freerouting?: string
   /** ngspice for kicad_simulate (empty: the sidecar searches $NGSPICE, then PATH). */
   ngspice?: string
+  /** Espressif's qemu-system-xtensa for ESP32 firmware simulation (empty: the sidecar searches). */
+  qemu?: string
   /** Optional extras installed by uv (`png`, `ipc`). */
   extras?: readonly string[]
   platform?: NodeJS.Platform
@@ -35,6 +37,7 @@ export function launchSpec(options: LaunchOptions): LaunchSpec {
     ...(options.java ? ['--java', options.java] : []),
     ...(options.freerouting ? ['--freerouting', options.freerouting] : []),
     ...(options.ngspice ? ['--ngspice', options.ngspice] : []),
+    ...(options.qemu ? ['--qemu', options.qemu] : []),
   ]
   const env: Record<string, string> = { PYTHONUTF8: '1', PYTHONUNBUFFERED: '1', PYTHONDONTWRITEBYTECODE: '1' }
   if (options.launcher === 'uv') {
