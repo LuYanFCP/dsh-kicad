@@ -13,6 +13,7 @@ import sys
 from typing import Any, Callable
 
 from . import __version__
+from . import esp32qemu
 from . import freerouting
 from . import spice
 from .footprints import default_footprint_dirs
@@ -279,6 +280,62 @@ def _simulation_check(info: dict[str, Any], which: Which, ngspice: str | None) -
                   "if it is not on PATH, set the KiCad bridge 'ngspice' setting or $NGSPICE to the executable.")
 
 
+QEMU_LIB_PACKAGES = {  # the shared libraries Espressif's QEMU builds link against (Espressif's QEMU documentation)
+    "fedora": ["sudo", "dnf", "install", "-y", "libgcrypt", "glib2", "pixman", "SDL2", "libslirp"],
+    "ubuntu": ["sudo", "apt-get", "install", "-y", "libgcrypt20", "libglib2.0-0", "libpixman-1-0", "libsdl2-2.0-0", "libslirp0"],
+    "debian": ["sudo", "apt-get", "install", "-y", "libgcrypt20", "libglib2.0-0", "libpixman-1-0", "libsdl2-2.0-0", "libslirp0"],
+    "arch": ["sudo", "pacman", "-S", "--needed", "--noconfirm", "libgcrypt", "glib2", "pixman", "sdl2", "libslirp"],
+    "suse": ["sudo", "zypper", "--non-interactive", "install", "libgcrypt20", "glib2", "libpixman-1-0", "libSDL2-2_0-0", "libslirp0"],
+}
+
+
+def qemu_options(info: dict[str, Any], which: Which = shutil.which, missing_libraries: list[str] | None = None) -> list[dict[str, Any]]:
+    """Ways to get Espressif's QEMU (ESP32 firmware simulation): the pinned release download (per user), the libraries it needs
+    (the user runs those that need root), or ESP-IDF's own install."""
+    options: list[dict[str, Any]] = []
+    asset = esp32qemu.release_asset()
+    family = _family(info)
+    if asset is not None:
+        name, size, _ = asset
+        options.append(_option("qemu-esp32", f"Espressif QEMU {esp32qemu.RELEASE['version']} (download the release, per user)",
+                               [esp32qemu.download_command()], needs_root=False, available=True,
+                               note=(f"Downloads {size / 1e6:.1f} MB ({name}) from {esp32qemu.HOMEPAGE} (GPL-2.0) into {esp32qemu.data_dir()} "
+                                     "and checks its SHA-256."), url=esp32qemu.HOMEPAGE))
+    if info["os"] == "linux" and family in QEMU_LIB_PACKAGES:
+        step = QEMU_LIB_PACKAGES[family]
+        options.append(_option("qemu-esp32-libs", f"Libraries QEMU needs ({step[1]})", [step], needs_root=True, available=which(step[1]) is not None,
+                               note=("Missing now: " + ", ".join(missing_libraries) + "." if missing_libraries else
+                                     "Espressif's QEMU build needs libgcrypt, GLib, pixman, SDL2 and libslirp.")))
+    elif info["os"] == "macos":
+        brew = which("brew")
+        options.append(_option("qemu-esp32-libs", "Libraries QEMU needs (Homebrew)", [["brew", "install", "libgcrypt", "glib", "pixman", "sdl2", "libslirp"]],
+                               needs_root=False, available=brew is not None, note="" if brew else "Homebrew is not installed (https://brew.sh)."))
+    options.append(_option("qemu-esp32-idf", "ESP-IDF's QEMU", [], needs_root=False, available=True,
+                           note="With ESP-IDF installed: `python $IDF_PATH/tools/idf_tools.py install qemu-xtensa` (found in ~/.espressif/tools).",
+                           url=esp32qemu.DOCS_URL))
+    return options
+
+
+def _qemu_check(info: dict[str, Any], which: Which, qemu: str | None) -> dict[str, Any]:
+    """Optional: Espressif's QEMU, which kicad_simulate_firmware runs ESP32 flash images on."""
+    label = "QEMU for ESP32 (optional, firmware simulation)"
+    found = esp32qemu.locate(qemu)
+    if found.ok:
+        return _check("qemu_esp32", label, "ok", f"{found.path} ({found.version or 'version unknown'}, via {found.source}).", required=False,
+                      path=found.path, version=found.version, source=found.source)
+    options = qemu_options(info, which, found.missing_libraries)
+    if found.missing_libraries:
+        summary = f"QEMU is there but does not start: the libraries {', '.join(found.missing_libraries)} are missing."
+        libs = next((o for o in options if o["id"] == "qemu-esp32-libs" and o["command"]), None)
+        fix = f"Install them ({'`' + libs['command'] + '`' if libs else 'with your package manager'})."
+    else:
+        summary = ("QEMU with the ESP32 machine was not found; kicad_simulate_firmware needs it for ESP32 boards" +
+                   (f" ({'; '.join(found.problems)})" if found.problems else "") + ".")
+        fix = ("Run /kicad-install qemu-esp32 to download Espressif's QEMU (after you confirm; no root), use ESP-IDF's "
+               "`idf_tools.py install qemu-xtensa`, or set the KiCad bridge 'qemu' setting / $QEMU_XTENSA to qemu-system-xtensa.")
+    return _check("qemu_esp32", label, "warn", summary, required=False, fix=fix, install=options, problems=found.problems)
+
+
 def freerouting_option() -> dict[str, Any]:
     release = freerouting.RELEASE
     return _option("freerouting", f"Freerouting {release['version']} (download the release jar, per user)",
@@ -337,7 +394,7 @@ def _routing_checks(router: freerouting.Router, info: dict[str, Any], which: Whi
 
 def run_doctor(cli: KiCadCli, info: dict[str, Any] | None = None, which: Which = shutil.which,
                python_version: tuple[int, ...] | None = None, router: freerouting.Router | None = None,
-               ngspice: str | None = None) -> dict[str, Any]:
+               ngspice: str | None = None, qemu: str | None = None) -> dict[str, Any]:
     """Check everything the KiCad tools need and say how to fix what is missing."""
     info = info or platform_info()
     cli.locate()  # pick up an installation that appeared since the last call
@@ -421,6 +478,7 @@ def run_doctor(cli: KiCadCli, info: dict[str, Any] | None = None, which: Which =
 
     checks += _routing_checks(router if router is not None else freerouting.locate(), info, which)
     checks.append(_simulation_check(info, which, ngspice))
+    checks.append(_qemu_check(info, which, qemu))
 
     errors = [c for c in checks if c["status"] == "error" and c["required"]]
     kicad_missing = cli.argv is None or version is None
