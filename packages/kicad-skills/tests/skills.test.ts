@@ -13,7 +13,7 @@ describe('kicad skills', () => {
   it('registers packaged skills with the dsh skill registry', async () => {
     const ctx = await bootKiCad([SkillRegistry], [skills, { commands: false }])
     const names = (await ctx.skills.list()).map(s => s.name).filter(n => n.startsWith('kicad-'))
-    expect(names).toEqual(['kicad-agent-workflow', 'kicad-design-brief', 'kicad-drc-triage', 'kicad-erc-triage', 'kicad-mcu-check', 'kicad-schematic-design', 'kicad-simulate'])
+    expect(names).toEqual(['kicad-agent-workflow', 'kicad-design-brief', 'kicad-drc-triage', 'kicad-erc-triage', 'kicad-mcu-check', 'kicad-pcb-layout', 'kicad-schematic-design', 'kicad-simulate'])
     const body = await ctx.skills.get('kicad-erc-triage')
     expect(body?.content).toContain('power_pin_not_driven')
     expect(body?.content.startsWith('---')).toBe(false)
@@ -40,6 +40,33 @@ describe('kicad skills', () => {
     expect(body).toMatch(/schematic_parity[\s\S]*\*\*warnings\*\*/)
     const workflow = (await ctx.skills.get('kicad-agent-workflow'))!.content
     expect(workflow).toMatch(/## Handing over to the board[\s\S]*0 ERC errors[\s\S]*footprint[\s\S]*kicad-drc-triage/)
+  })
+
+  it('walks a board from the sync to the fab files with real tools and operations', async () => {
+    const ctx = await bootKiCad([SkillRegistry], [skills, { commands: false }])
+    const layout = (await ctx.skills.list()).find(s => s.name === 'kicad-pcb-layout')
+    expect(layout?.description).toMatch(/orderable|ready to order/)
+    const body = (await ctx.skills.get('kicad-pcb-layout'))!.content
+    // The steps in order, each with the tool that does it
+    const steps = ['kicad_update_pcb', 'kicad_fab_preset', 'auto_place{', 'locked: true', 'add_zone{', 'kicad_autoroute', 'kicad_drc', 'kicad_export_fab']
+    const at = steps.map(s => body.indexOf(s))
+    expect(at.every(i => i >= 0), JSON.stringify(Object.fromEntries(steps.map((s, i) => [s, at[i]])))).toBe(true)
+    expect([...at].sort((a, b) => a - b)).toEqual(at)
+    // Every `op{...}` it names is a kicad_edit_pcb operation (pcb.py, placement.py) or a kicad_edit_schematic one (schematic.py)
+    const ops = new Set<string>()
+    for (const file of ['pcb.py', 'placement.py', 'schematic.py']) {
+      const src = readFileSync(new URL(`../../kicad-bridge/sidecar/src/dsh_kicad_sidecar/${file}`, import.meta.url), 'utf8')
+      for (const m of src.slice(src.indexOf('OPERATIONS')).matchAll(/^ {4}"([a-z_]+)": /gm)) ops.add(m[1]!)
+    }
+    const named = new Set([...body.matchAll(/`([a-z_]+)\{/g)].map(m => m[1]!))
+    expect([...named].filter(op => !ops.has(op))).toEqual([])
+    // ...and every kicad_* tool it names exists
+    const tools = readFileSync(new URL('../../tool-kicad/src/index.ts', import.meta.url), 'utf8')
+    const known = new Set([...tools.matchAll(/name: '(kicad_[a-z_]+)'/g)].map(m => m[1]!))
+    const used = new Set([...body.matchAll(/`(kicad_[a-z_]+)/g)].map(m => m[1]!))
+    expect([...used].filter(t => !known.has(t))).toEqual([])
+    expect(body).toMatch(/parity 0, 0 unrouted connections, 0 DRC errors/)
+    expect(body).toContain('/kicad-install freerouting')
   })
 
   it('keeps every SKILL.md under the 8192-character pruning threshold', async () => {
