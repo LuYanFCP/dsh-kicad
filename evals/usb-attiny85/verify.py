@@ -1,10 +1,13 @@
-"""Check an agent-built usb_attiny schematic against the spec in prompt.md using KiCad's own ERC and netlist.
+"""Check an agent-built usb_attiny schematic against the spec in prompt.md using KiCad's own ERC and netlist; with --pcb, also the
+board of the second turn (prompt-board.md) with KiCad's DRC and the fab zip (evals/board_check.py).
 
-    python evals/usb-attiny85/verify.py packages/kicad-bridge/sidecar/src /path/to/usb_attiny.kicad_sch
+    python evals/usb-attiny85/verify.py packages/kicad-bridge/sidecar/src /path/to/usb_attiny.kicad_sch [--pcb[=board.kicad_pcb]]
 
-Exit code 0 only when ERC has no errors and every requirement holds.
+Exit code 0 only when ERC has no errors and every requirement holds (and, with --pcb, every board requirement).
 """
 import json, os, sys
+pcb_arg = next((a for a in sys.argv[1:] if a == '--pcb' or a.startswith('--pcb=')), None)
+sys.argv = [a for a in sys.argv if a != pcb_arg]
 sys.path.insert(0, sys.argv[1])
 from dsh_kicad_sidecar.kicad_cli import KiCadCli
 from dsh_kicad_sidecar.schematic import Schematic
@@ -61,4 +64,10 @@ c('MCU wiring (kicad_check_mcu, attiny85 provider): checked, no errors', mcu_rep
 
 print('\nREQUIREMENTS:'); [print(('  OK  ' if ok else '  FAIL'), name) for name, ok in checks]
 print(f'\n{sum(ok for _, ok in checks)}/{len(checks)} requirements satisfied')
-sys.exit(0 if erc['counts']['error'] == 0 and all(ok for _, ok in checks) else 1)
+passed = erc['counts']['error'] == 0 and all(ok for _, ok in checks)
+if pcb_arg:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    import board_check
+    board = pcb_arg.partition('=')[2] or os.path.splitext(path)[0] + '.kicad_pcb'
+    passed = board_check.report(board_check.check_board(sys.argv[1], board)) and passed
+sys.exit(0 if passed else 1)

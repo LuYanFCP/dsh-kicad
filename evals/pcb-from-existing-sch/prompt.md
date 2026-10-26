@@ -1,0 +1,1 @@
+工作区里的 usb_attiny_blocks.kicad_sch 是定稿的原理图（USB-C 供电、AMS1117-3.3、ATtiny85、ISP 接口、一个按键和两个 LED，已按功能块画好，ERC 0 错误，封装齐全），不要修改它。只做电路板：生成 usb_attiny_blocks.kicad_pcb，两层板，设计规则按 JLCPCB 的工艺能力；按功能块布局，USB-C 接口放在板边；正反两面 GND 铺铜，然后布线。最终 KiCad DRC 必须 0 错误、0 未布通、原理图一致性 0。最后用 JLCPCB 预设导出生产文件（Gerber、钻孔、坐标、BOM 打包成 zip），告诉我板子尺寸和 zip 的位置。
