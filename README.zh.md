@@ -161,8 +161,9 @@ Freerouting（GPL-3.0）是独立的 Java 程序，不随插件分发。`/kicad-
 - **固件**：合并后的 flash 镜像（bootloader 在 0x1000、分区表、应用：在 ESP-IDF 构建目录里执行 `esptool.py --chip esp32 merge_bin -o flash.bin @flash_args`，或 Arduino 的 `.merged.bin`），也可以直接给构建目录里的 `flasher_args.json`，由插件合并。镜像会被补齐到 QEMU 接受的 flash 大小；原文件不会被改写。
 - **引脚。**QEMU 的 ESP32 GPIO 外设只是个空壳，IO_MUX 和 RTC_IO 也没有模拟，所以 sidecar 通过 QEMU 的 gdb stub 观察芯片，并亲自完成对这些寄存器的每一次读写：输出、开漏、内部上拉下拉、输入使能和 GPIO 矩阵都跟着固件走；读-改-写（ESP-IDF 配置引脚的方式）从芯片实际保存的值开始；读 `GPIO_IN` 得到电路板给引脚的电平。断言里引脚写作 `GPIO2`、`IO2` 或 `U1:IO2`。电路板一侧是同一个直流网络（引脚驱动按驱动强度计，默认约 33 Ω；45 kΩ 上下拉；ESP32 的逻辑阈值）。
 - **启动与复位。**上电时求解 strapping 引脚（GPIO0、2、4、5、12、15）的电平并交给 QEMU：GPIO0 被拉低时芯片真的会进入串口下载模式，GPIO12 为高是错误（选择 1.8 V flash）。EN 为低时芯片保持复位，直到 EN 升高；每次复位都会记录原因（`{reset: "watchdog"}`，还有 `power-on`、`software`、`external`、`deep-sleep`、`brownout`）。UART0 的输出会被捕获：`{uart: "ready", by: "2s"}` 或 `{uart: "Guru Meditation", is: "absent"}`。
-- **时间**是 QEMU 的虚拟时钟（`-icount`）：每条指令让它前进 8 ns，所以忙碌的代码在任何主机上耗费的仿真时间都相同；空闲时间（CPU 在 WAITI 中等待，FreeRTOS 的空闲任务就是这样）则按真实时间流逝。因此一次运行至少要花与仿真时长相当的墙钟时间。应用内部的时序在各次运行之间的差异远小于 1 毫秒；双核固件的启动过程会相差几十毫秒（QEMU 让两个核轮流运行）。仿真时间包含启动过程：小程序约 0.2 s，MicroPython 约 2 s，所以激励应放在固件配置好引脚之后（时间线会显示何时）。`duration` 默认 2 s（最多 30 s）。
-- **它不会假装的。**电路板上由外设驱动的引脚（LEDC PWM、I2C、SPI、RMT）电平未知，运行到此停止；会触发的 GPIO 中断（QEMU 无法投递）、崩溃（`Guru Meditation`、`abort()`）以及等待永远不会响应的硬件的固件也一样。此后的断言为 `cannot verify`。固件用到的、QEMU 没有模拟的硬件（WiFi、蓝牙、ADC 等）会列在 `not_emulated` 中。
+- **GPIO 中断。**QEMU 的 GPIO 空壳不会产生中断，所以由 sidecar 自己维护中断状态：电路板给引脚的边沿或电平按该引脚的 `GPIO_PINn` 设置（上升沿、下降沿、任意边沿、低电平或高电平）锁存，`PCPU_INT`/`ACPU_INT` 按 CPU 显示，并通过 QEMU 的 qtest 套接字拉起 QEMU 中断矩阵里的 GPIO 中断源。CPU 会按固件的映射响应中断，因此 `attachInterrupt`、`gpio_isr_handler_add` 和 MicroPython 的 `Pin.irq` 的处理函数都会运行，比激励晚约 2 ms（仿真器在它旁边停下来所需的时间）。结果会列出每一次中断。
+- **时间**是 QEMU 的虚拟时钟（`-icount`）：每条指令让它前进 8 ns，所以忙碌的代码在任何主机上耗费的仿真时间都相同；空闲时间（CPU 在 WAITI 中等待，FreeRTOS 的空闲任务就是这样）则按真实时间流逝。因此一次运行至少要花与仿真时长相当的墙钟时间。应用内部的时序在各次运行之间的差异远小于 1 毫秒；双核固件的启动过程会相差几十毫秒（QEMU 让两个核轮流运行）。仿真时间包含启动过程：小程序约 0.2 s，MicroPython 约 2 s，所以激励应放在固件配置好引脚之后（时间线会显示何时）。如果固件休眠时没有任何定时器（FreeRTOS 的 tick 总是有的），QEMU 的时钟会停住：到下一个激励之前的时间只对电路板流逝（结果会注明），没有激励时运行就以停滞（stall）结束。`duration` 默认 2 s（最多 30 s）。
+- **它不会假装的。**电路板上由外设驱动的引脚（LEDC PWM、I2C、SPI、RMT）电平未知，运行到此停止；崩溃（`Guru Meditation`、`abort()`）以及等待永远不会响应的硬件的固件也一样。此后的断言为 `cannot verify`。固件运行时用到的、QEMU 没有模拟的硬件（WiFi、蓝牙、SAR ADC 等）会列在 `not_emulated` 中。
 
 ### 3D 视图
 
@@ -252,7 +253,7 @@ python packages/kicad-bridge/sidecar/tests/make_fixtures.py   # 用编辑器本�
 
 - 电路板可以从原理图创建并保持同步（`kicad_update_pcb`），可以自动布局（`auto_place`）、编辑、自动布线（`kicad_autoroute`）、检查和制板输出（`kicad_export_fab`）。自动布线需要另行安装 Java 25+ 与 Freerouting（见[布线](#布线)）；高密度电路板可能留下少数未布通的连接，由 agent 手工补齐。
 - 仿真只覆盖 ngspice 能做的模拟行为；没有 SPICE 模型的元件会被排除，固件、信号完整性、EMC 与热行为不在仿真范围内。普通的 Device:LED / Device:D 符号需要设置 `Sim.Device`（见[仿真验证](#仿真验证)）。
-- 固件仿真覆盖 ATtiny25/45/85 和经典 ESP32（运行在需单独安装的 Espressif QEMU 上）；没有实现的一律拒绝（见[固件与电路板联合仿真](#固件与电路板联合仿真)），ESP32 的 LEDC PWM、ADC 和 GPIO 中断暂未仿真（#41）。除此之外 MCU 检查是静态的，且只覆盖有 provider 的系列（目前是经典 ESP32 和 8 脚 ATtiny25/45/85）；其他 MCU 见 #31。ESP32 引脚表的准确性取决于转录，请对照具体模块的数据手册核对。
+- 固件仿真覆盖 ATtiny25/45/85 和经典 ESP32（运行在需单独安装的 Espressif QEMU 上）；没有实现的一律拒绝（见[固件与电路板联合仿真](#固件与电路板联合仿真)），ESP32 的 LEDC PWM 和 ADC 暂未仿真（#41）。除此之外 MCU 检查是静态的，且只覆盖有 provider 的系列（目前是经典 ESP32 和 8 脚 ATtiny25/45/85）；其他 MCU 见 #31。ESP32 引脚表的准确性取决于转录，请对照具体模块的数据手册核对。
 - 板厂预设数值读取自 JLCPCB 与 PCBWay 的工艺能力页面（2026-10-21），之后可能变化。JLC 的 CPL 保留 KiCad 的旋转角度，JLCPCB 预览中可能需要逐个修正。
 - 编辑覆盖元件、属性、导线、标签、电源符号、结点与不连接标记；不支持创建层次图纸、总线与图形元素。
 - 新放置在子图纸中的元件只向上查找一层根图纸来确定 instance 路径；更深的层次可能需要 KiCad 重新标注。

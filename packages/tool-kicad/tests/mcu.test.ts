@@ -125,6 +125,17 @@ describe('formatFirmware', () => {
     expect(out).toContain('\n  I (31) boot: ok\n  waiting for download')
     expect(out).not.toContain('instructions')
   })
+
+  it('lists the GPIO interrupts an ESP32 run latched', () => {
+    const interrupts = Array.from({ length: 10 }, (_, i) => ({ t: 1 + i * 0.5, gpio: 'GPIO0', type: 'falling edge' }))
+    const out = formatFirmware(firmwareRun({
+      device: 'esp32', firmware: '/p/flash.bin', clock_hz: undefined, cycles: undefined, instructions: undefined, vcc: 3.3, duration: 6, simulated_to: 6,
+      eeprom: undefined, usi_transfers: undefined, passed: true, assertions: [], hazards: [], timeline: [], notes: [], scenario: undefined,
+      interrupts, interrupt_count: 12,
+    }))
+    expect(out).toContain('GPIO interrupts: 1000 ms GPIO0 falling edge; 1500 ms GPIO0 falling edge;')
+    expect(out).toContain('4500 ms GPIO0 falling edge … 4 more.')
+  })
 })
 
 describe('kicad_simulate_firmware', () => {

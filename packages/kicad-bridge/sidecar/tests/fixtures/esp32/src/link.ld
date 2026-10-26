@@ -7,6 +7,7 @@ MEMORY
 }
 SECTIONS
 {
+    .vectors : { KEEP(*(.vectors)) } > iram  /* VECBASE needs 1 KB alignment: first in IRAM (empty but in the interrupt program) */
     .iram : { KEEP(*(.entry.literal)) KEEP(*(.entry)) *(.literal .literal.*) *(.text .text.*) } > iram
     .dram : { *(.rodata .rodata.* .data .data.* .bss .bss.* COMMON) } > dram
 }

@@ -9,6 +9,9 @@ IO_MUX and RTC_IO are not modelled at all. So the sidecar watches the chip from 
   and :class:`GpioState` mirrors the registers: output levels and enables, open drain, pulls, input enables, the GPIO
   matrix, interrupt setup. A load gets the mirrored value, so the read-modify-writes ESP-IDF configures pads with start
   from what the chip would hold, not from QEMU's 0; a load of GPIO_IN/GPIO_IN1 gets the levels the board gives the pins;
+- the GPIO peripheral's interrupt is kept here too (QEMU's stub has no interrupt output): edges and levels the board
+  gives the pins latch GPIO_STATUS, and the interrupt matrix's GPIO sources are driven through QEMU's qtest socket
+  (``set_irq_in``), so the CPU takes the interrupt the firmware mapped, as the chip would;
 - a breakpoint on the reset vector catches every reset (and the second core starting), one on the image's entry point
   turns the watchpoints on once the ROM hands over (the ROM's own pin set-up is not the firmware's);
 - time is QEMU's virtual clock: QEMU runs with ``-icount`` (every instruction advances it by the same amount), so busy code
@@ -16,7 +19,9 @@ IO_MUX and RTC_IO are not modelled at all. So the sidecar watches the chip from 
   also jumps the clock to its next timer while a reset is pending, which breaks the chip's restart). It is read from the
   RTC timer, or, when this QEMU does not emulate that, from the stopped CPU's cycle counter (the CPU executes one
   ``rsr.ccount`` from the ROM: QEMU only updates CCOUNT when the guest reads it). :func:`probe` finds out which, once per
-  QEMU binary.
+  QEMU binary. QEMU counts the time the CPUs sleep only when they wake or the machine resumes, so an interruption that
+  finds them asleep lets the machine run a moment before reading the clock; with no timer pending the clock stands still
+  in WAITI, and the time until the next stimulus passes for the board only.
 
 Nothing here knows the board: :class:`Machine` reports register changes and asks for input levels through a handler.
 The module imports nothing from the sidecar, so ``python esp32qemu.py download`` fetches QEMU as a plain script (the
@@ -442,6 +447,12 @@ def is_waiti(code: bytes) -> bool:
     return len(code) == 3 and code[0] == 0x00 and code[1] >> 4 == 0x7 and code[2] == 0x00
 
 
+def is_break(code: bytes) -> bool:
+    """The instruction starting the bytes is BREAK (op0 0, r 4, op1 and op2 0) or BREAK.N (op0 0xD, t 2, r 0xF)."""
+    return (len(code) >= 3 and code[0] & 0x0F == 0 and code[1] >> 4 == 4 and code[2] == 0) or \
+        (len(code) >= 2 and code[0] == 0x2D and code[1] >> 4 == 0xF)
+
+
 # QEMU's gdb register numbers for the ESP32 core ('g' sends 157 32-bit registers): pc, the 64 physical address registers,
 # lbeg, lend, lcount, sar, windowbase, windowstart, configid0/1, ps, ..., vecbase 142, ..., prid 146
 G_PC, G_AR0, G_LBEG, G_LEND, G_LCOUNT, G_WINDOWBASE, G_WINDOWSTART, G_PS, G_PRID = 0, 1, 65, 66, 67, 69, 70, 73, 146
@@ -470,8 +481,19 @@ class Regs:
 GPIO_BASE, IO_MUX_BASE, RTCIO_BASE = 0x3FF44000, 0x3FF49000, 0x3FF48400
 GPIO_IN, GPIO_IN1, RTC_GPIO_IN = GPIO_BASE + 0x3C, GPIO_BASE + 0x40, RTCIO_BASE + 0x24
 GPIO_STRAP = GPIO_BASE + 0x38
-# GPIO registers that read as 0: the write-1-to-set / write-1-to-clear ones and the interrupt status (QEMU raises no GPIO interrupt)
-GPIO_READ_ZERO = frozenset({0x08, 0x0C, 0x14, 0x18, 0x24, 0x28, 0x30, 0x34, 0x44, 0x48, 0x4C, 0x50, 0x54, 0x58, *range(0x60, 0x88, 4)})
+# GPIO registers that read as 0: the write-1-to-set / write-1-to-clear ones and a reserved word
+GPIO_READ_ZERO = frozenset({0x08, 0x0C, 0x14, 0x18, 0x24, 0x28, 0x30, 0x34, 0x48, 0x4C, 0x54, 0x58, 0x5C})
+# GPIO_PINn.int_ena bits (ESP-IDF's gpio_ll): the APP CPU's interrupt and NMI, the PRO CPU's, the SDIO extension's
+INT_ENA_APP, INT_ENA_APP_NMI, INT_ENA_PRO, INT_ENA_PRO_NMI, INT_ENA_SDIO = 13, 14, 15, 16, 17
+# The interrupt status as ACPU_INT, ACPU_NMI_INT, PCPU_INT, PCPU_NMI_INT and CPUSDIO_INT show it (GPIO0-31; 0x14 on: GPIO32-39)
+GPIO_INT_VIEWS = {0x60: INT_ENA_APP, 0x64: INT_ENA_APP_NMI, 0x68: INT_ENA_PRO, 0x6C: INT_ENA_PRO_NMI, 0x70: INT_ENA_SDIO}
+GPIO_INT_SOURCE, GPIO_NMI_SOURCE = 22, 23  # the GPIO peripheral's interrupt sources in the interrupt matrix
+INTMATRIX_QOM = "/machine/soc/intmatrix"  # the interrupt matrix in QEMU's object tree; its GPIO inputs are the sources
+# QEMU names the SENS block (SAR ADCs, touch, temperature sensor) "esp32.rtcio" too; RTC_IO itself is watched whole, so its
+# accesses never reach QEMU's stub while the image runs
+UNIMP_NAMES = {"esp32.rtcio": "esp32.sens (the SAR ADCs and sensors)"}
+INTMATRIX_MAP = {"pro": 0x3FF00104, "app": 0x3FF00218}  # DPORT_PRO/APP_MAC_INTR_MAP_REG: one word per source, the CPU interrupt
+EXTERNAL_INTS = frozenset(set(range(32)) - {6, 7, 11, 15, 16, 29})  # CPU interrupts the matrix can drive (the rest are the CPU's own)
 RTCIO_READ_ZERO = frozenset({0x04, 0x08, 0x10, 0x14, 0x18, 0x1C, 0x20})
 RTC_CNTL_TIME_UPDATE, RTC_CNTL_TIME0, RTC_CNTL_RESET_STATE = 0x3FF4800C, 0x3FF48010, 0x3FF48034
 RTC_CNTL_CLK_CONF, DPORT_CPU_PER_CONF, APB_CTRL_SYSCLK_CONF = 0x3FF48070, 0x3FF0003C, 0x3FF66000
@@ -532,7 +554,7 @@ class Pin:
     input: bool              # GPIO_IN reads the pad
     open_drain: bool
     drive_ohms: float
-    interrupt: int           # INT_TYPE when a GPIO interrupt is enabled on the pin, else 0
+    interrupt: int           # GPIO_PINn.int_type (INT_TYPES; 0 none): what latches the pin's interrupt status
 
     def label(self) -> str:
         if self.unknown:
@@ -574,6 +596,8 @@ class GpioState:
                 pull = RESET_PULLS.get(gpio)
                 self.rtcio[off] = self.rtcio.get(off, 0) | (1 << up if pull == "up" else 1 << down if pull == "down" else 0)
         self.other: dict[int, int] = {}  # GPIO and IO_MUX registers this model does not interpret (the input matrix, ...), as written
+        self.status = 0                  # GPIO_STATUS (GPIO0-31) and GPIO_STATUS1 (GPIO32-39): the latched interrupts
+        self.level_active: set[int] = set()  # pins whose level-type interrupt condition holds now
         self.configured: set[int] = set()
 
     # ---- writes ----
@@ -631,6 +655,16 @@ class GpioState:
             new = (self.out1 | bits if off == 0x14 else self.out1 & ~bits) & 0xFF
             changed, self.out1 = self.out1 ^ new, new
             return {32 + g for g in range(8) if changed >> g & 1}
+        if off in (0x44, 0x48, 0x4C):  # GPIO_STATUS, W1TS, W1TC
+            low = self.status & 0xFFFFFFFF
+            low = merged(low) if off == 0x44 else low | bits if off == 0x48 else low & ~bits
+            self._set_status(self.status & ~0xFFFFFFFF | low & 0xFFFFFFFF)
+            return set()
+        if off in (0x50, 0x54, 0x58):  # GPIO_STATUS1 (GPIO32-39), W1TS, W1TC
+            high = self.status >> 32
+            high = merged(high) if off == 0x50 else high | bits if off == 0x54 else high & ~bits
+            self._set_status(self.status & 0xFFFFFFFF | (high & 0xFF) << 32)
+            return set()
         if off in (0x20, 0x24, 0x28):
             new = merged(self.enable) if off == 0x20 else self.enable | bits if off == 0x24 else self.enable & ~bits
             changed, self.enable = self.enable ^ new, new
@@ -666,6 +700,11 @@ class GpioState:
                 return self.pin_reg[(off - 0x88) // 4]
             if 0x530 <= off < 0x530 + 4 * GPIOS:
                 return self.out_sel[(off - 0x530) // 4]
+            if off in (0x44, 0x50):
+                return self.status & 0xFFFFFFFF if off == 0x44 else self.status >> 32 & 0xFF
+            if 0x60 <= off < 0x88:
+                view = self.interrupt_view(GPIO_INT_VIEWS[off if off < 0x74 else off - 0x14])
+                return view & 0xFFFFFFFF if off < 0x74 else view >> 32 & 0xFF
             return 0 if off in GPIO_READ_ZERO else self.other.get(reg, 0)
         if IO_MUX_BASE <= reg < IO_MUX_BASE + 0x100:
             gpio = PAD_OF_IO_MUX.get(reg - IO_MUX_BASE)
@@ -674,6 +713,34 @@ class GpioState:
             off = reg - RTCIO_BASE
             return 0 if off in RTCIO_READ_ZERO else self.rtcio.get(off, 0)
         return 0
+
+    # ---- the GPIO interrupt ----
+    def _set_status(self, value: int) -> None:
+        """GPIO_STATUS as the firmware wrote it; a level-type interrupt whose level still holds latches again at once."""
+        self.status = value | sum(1 << g for g in self.level_active)
+
+    def latch_interrupt(self, gpio: int) -> None:
+        """The board gave the pin an edge its interrupt type reacts to."""
+        self.status |= 1 << gpio
+
+    def level_condition(self, gpio: int, active: bool) -> None:
+        """Whether the level a level-type interrupt waits for holds now; while it does, the status bit cannot be cleared."""
+        if active:
+            self.level_active.add(gpio)
+            self.status |= 1 << gpio
+        else:
+            self.level_active.discard(gpio)
+
+    def interrupt_view(self, enable_bit: int) -> int:
+        """The interrupt status of the pins whose GPIO_PINn.int_ena has ``enable_bit`` (one CPU's interrupt or NMI)."""
+        return sum(1 << g for g in range(GPIOS) if self.status >> g & 1 and self.pin_reg[g] >> enable_bit & 1)
+
+    def interrupt_lines(self) -> dict[str, bool]:
+        """What the GPIO peripheral signals to the interrupt matrix, per CPU: its interrupt and its NMI."""
+        if not self.status:
+            return {"pro": False, "pro_nmi": False, "app": False, "app_nmi": False}
+        return {"pro": bool(self.interrupt_view(INT_ENA_PRO)), "pro_nmi": bool(self.interrupt_view(INT_ENA_PRO_NMI)),
+                "app": bool(self.interrupt_view(INT_ENA_APP)), "app_nmi": bool(self.interrupt_view(INT_ENA_APP_NMI))}
 
     # ---- what the registers make of a pad ----
     def rtc_mode(self, gpio: int) -> bool:
@@ -711,7 +778,7 @@ class GpioState:
         pull_up, pull_down = self.pulls(gpio)
         pin_reg = self.pin_reg[gpio]
         common = dict(gpio=gpio, pull_up=pull_up, pull_down=pull_down, open_drain=bool(pin_reg >> 2 & 1),
-                      drive_ohms=DRIVE_OHMS[io >> 10 & 3], interrupt=(pin_reg >> 7 & 7) if pin_reg >> 13 & 0x1F else 0)
+                      drive_ohms=DRIVE_OHMS[io >> 10 & 3], interrupt=pin_reg >> 7 & 7)
         if self.rtc_mode(gpio):
             what = self.rtc_drives(gpio)
             return Pin(function=what or "rtc", driven=False, level=0, unknown=what is not None, input=False, **common)
@@ -850,6 +917,55 @@ def _unescape(raw: bytes) -> bytes:
     return bytes(out)
 
 
+class Qtest:
+    """QEMU's qtest socket, used for one thing: the level of an interrupt source of the ESP32's interrupt matrix."""
+
+    def __init__(self, sock: socket.socket):
+        self.sock = sock
+        self.buf = b""
+
+    @classmethod
+    def connect(cls, port: int, proc: subprocess.Popen, deadline: float, why: Callable[[], str]) -> "Qtest":
+        while True:
+            try:
+                sock = socket.create_connection(("127.0.0.1", port), timeout=1.0)
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                sock.settimeout(STEP_TIMEOUT_S)
+                return cls(sock)
+            except OSError:
+                if proc.poll() is not None:
+                    raise QemuError(f"QEMU exited with {proc.returncode} before the qtest connection: {why()}") from None
+                if time.monotonic() > deadline:
+                    raise QemuError(f"QEMU did not open its qtest port within the time limit: {why()}") from None
+                time.sleep(0.05)
+
+    def close(self) -> None:
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+
+    def command(self, line: str) -> str:
+        self.sock.sendall(line.encode() + b"\n")
+        while True:
+            while b"\n" not in self.buf:
+                try:
+                    data = self.sock.recv(4096)
+                except (OSError, TimeoutError) as exc:
+                    raise QemuError(f"QEMU's qtest socket did not answer {line!r}: {exc}") from None
+                if not data:
+                    raise QemuError(f"QEMU closed its qtest socket after {line!r}")
+                self.buf += data
+            reply, _, self.buf = self.buf.partition(b"\n")
+            if not reply.startswith(b"IRQ"):  # asynchronous notices (intercepted IRQs) are not answers
+                return reply.decode("latin-1").strip()
+
+    def set_source(self, source: int, level: int) -> None:
+        reply = self.command(f"set_irq_in {INTMATRIX_QOM} unnamed-gpio-in {source} {level}")
+        if reply != "OK":
+            raise QemuError(f"QEMU refused to set interrupt source {source}: {reply[:80]}")
+
+
 def _free_ports(n: int) -> list[int]:
     socks = [socket.socket(socket.AF_INET, socket.SOCK_STREAM) for _ in range(n)]
     try:
@@ -885,8 +1001,11 @@ ICOUNT_SHIFT = 3        # every instruction advances QEMU's virtual clock by 2**
 # Rarely: under -icount QEMU runs the two CPUs in turns, and an interruption costs the CPU it lands on the rest of its turn, so
 # a boot where one CPU spins waiting for the other gets slower with every one (every 50 ms added about a second to MicroPython's)
 TICK_S = 0.5
-TICK_MIN_S = 0.01
+TICK_MIN_S = 0.0002      # the closest look before a due stimulus: it also bounds how late a GPIO interrupt it causes is raised
 STALL_S = 2.0           # the virtual clock standing still this long (wall clock): the firmware waits for nothing that will come
+FROZEN_S = 0.02         # ...this long with the CPUs asleep: QEMU has no timer pending (any timer would move the clock by then)
+CREEP_S = 1e-4          # what QEMU's clock may still move between two looks while it stands still (each resume adds a little)
+SETTLE_S = 0.0005       # how long the machine runs again after an interruption that found the CPU asleep (see _settle)
 STEP_TIMEOUT_S = 2.0
 CONNECT_TIMEOUT_S = 20.0
 LOG_LIMIT = 64 << 20    # QEMU's log of unimplemented-device accesses: a firmware polling one forever stops the run
@@ -896,7 +1015,7 @@ UART_LIMIT = 1 << 20    # UART output kept for the result and the assertions
 WATCHES = (
     ("4", GPIO_BASE, 0x5D0),      # GPIO: outputs, output enables, GPIO_IN, pin config, the GPIO matrix
     ("4", IO_MUX_BASE, 0x94),     # IO_MUX: function, pulls, input enable, drive
-    ("4", RTCIO_BASE, 0xC0),      # RTC_IO: the RTC pads' pulls and RTC functions, RTC_GPIO_IN (not simulated)
+    ("4", RTCIO_BASE, 0x100),     # RTC_IO: the RTC pads' pulls and RTC functions, RTC_GPIO_IN (not simulated)
 )
 RESET_CAUSES = {1: "power-on", 3: "software", 4: "watchdog", 5: "deep-sleep", 7: "watchdog", 8: "watchdog", 9: "watchdog",
                 11: "watchdog", 12: "software", 13: "watchdog", 14: "external", 15: "brownout", 16: "watchdog"}
@@ -944,11 +1063,15 @@ class Machine:
         self.clock_kind, self.rtc_hz = clock, rtc_hz
         self.proc: subprocess.Popen | None = None
         self.gdb: Gdb | None = None
+        self.qtest: Qtest | None = None
+        # interrupt sources this machine raised, with the CPU interrupts the matrix mapped them to then (pro, app)
+        self._raised: dict[int, tuple[int, int]] = {}
         self.gpio = GpioState()
         self.uart_path = os.path.join(workdir, "uart0.log")
         self.log_path = os.path.join(workdir, "qemu.log")
         self.err_path = os.path.join(workdir, "qemu.err")
         self.efuse_path = os.path.join(workdir, "efuse.bin")
+        self.qtest_log_path = os.path.join(workdir, "qtest.log")
         self.uart_seen = 0
         self.uart_text = ""
         self.uart_truncated = False
@@ -963,19 +1086,24 @@ class Machine:
         # simulated time at which each CPU's cycle counter was 0 (the PRO CPU's starts with the machine)
         self._ccount_offsets: dict[int, float] = {1: 0.0}
         self._pending_reset: str | None = None
+        self.skipped = 0.0     # idle time that passed for the board while QEMU's clock stood still (see _skip_idle)
+        self._log_spans: list[list[int | None]] = []  # byte ranges of QEMU's log written while the image ran (watched)
+        self._asleep = False   # the last interruption found the CPU in WAITI
         self._g_thread = 1  # the CPU whose registers 'g', 'p' and 'P' address (the one that stopped, or the one selected with Hg)
         self.phys_mode: bool | None = None
         self.vcont = True
 
     # ---- process ----
-    def argv(self, port: int) -> list[str]:
-        argv = [self.qemu, "-machine", "esp32", "-display", "none", "-monitor", "none", "-serial", f"file:{self.uart_path}",
+    def argv(self, port: int, qtest_port: int) -> list[str]:
+        argv = [self.qemu, "-machine", "esp32", "-accel", "tcg", "-display", "none", "-monitor", "none", "-serial", f"file:{self.uart_path}",
                 "-drive", f"file={self.image},if=mtd,format=raw",
                 "-drive", f"file={self.efuse_path},if=none,format=raw,id=efuse", "-global", "driver=nvram.esp32.efuse,property=drive,value=efuse",
                 "-global", f"driver=esp32.gpio,property=strap_mode,value={self.strap:#04x}",
                 "-icount", f"shift={self.shift},sleep=on",
                 "-d", "unimp,guest_errors", "-D", self.log_path,
-                "-gdb", f"tcp:127.0.0.1:{port}", "-S"]
+                "-gdb", f"tcp:127.0.0.1:{port}", "-S",
+                # the interrupt matrix's inputs, for the GPIO interrupt (with TCG named: -qtest alone picks an accelerator that runs no CPU)
+                "-qtest", f"tcp:127.0.0.1:{qtest_port},server=on,wait=off", "-qtest-log", self.qtest_log_path]
         if not self.watchdogs:
             argv += ["-global", "driver=timer.esp32.timg,property=wdt_disable,value=true"]
         return argv
@@ -991,11 +1119,14 @@ class Machine:
         with open(self.efuse_path, "wb") as fh:
             fh.write(EFUSE_ECO3)
         for attempt in range(3):
-            port, = _free_ports(1)
+            port, qtest_port = _free_ports(2)
             with open(self.err_path, "wb") as err:
-                self.proc = subprocess.Popen(self.argv(port), stdin=subprocess.DEVNULL, stdout=err, stderr=subprocess.STDOUT, cwd=self.workdir)
+                self.proc = subprocess.Popen(self.argv(port, qtest_port), stdin=subprocess.DEVNULL, stdout=err, stderr=subprocess.STDOUT,
+                                             cwd=self.workdir)
             try:
-                self.gdb = Gdb.connect(port, self.proc, min(deadline, time.monotonic() + CONNECT_TIMEOUT_S), self.stderr_tail)
+                connect_by = min(deadline, time.monotonic() + CONNECT_TIMEOUT_S)
+                self.gdb = Gdb.connect(port, self.proc, connect_by, self.stderr_tail)
+                self.qtest = Qtest.connect(qtest_port, self.proc, connect_by, self.stderr_tail)
                 break
             except QemuError:
                 if attempt < 2 and self.proc.poll() is not None and "address already in use" in self.stderr_tail().lower():
@@ -1026,6 +1157,14 @@ class Machine:
         for kind, addr, length in WATCHES:
             self.gdb.ok(f"{'Z' if on else 'z'}{kind},{addr:x},{length:x}")
         self.watching = on
+        try:  # QEMU's log of unimplemented devices counts while the image runs (the ROM's own start-up touches some too)
+            size = os.path.getsize(self.log_path)
+        except OSError:
+            size = 0
+        if on:
+            self._log_spans.append([size, None])
+        elif self._log_spans and self._log_spans[-1][1] is None:
+            self._log_spans[-1][1] = size
 
     def begin_at(self, t: float) -> None:
         """The chip starts at simulated time ``t`` (the board held EN low until then)."""
@@ -1034,6 +1173,8 @@ class Machine:
         self._rtc_base = None
 
     def close(self) -> None:
+        if self.qtest is not None:
+            self.qtest.close()
         if self.gdb is not None:
             try:
                 self.gdb.send("k")
@@ -1095,19 +1236,24 @@ class Machine:
             raise QemuError("a single step did not finish (the CPU is waiting for an interrupt)") from None
 
     # ---- time ----
-    def read_rtc(self) -> int:
-        """The RTC timer (48 bits of slow-clock ticks), latched through a physical-memory write so the device sees it."""
+    def write32_device(self, addr: int, value: int, then_read: tuple[int, int] | None = None) -> bytes:
+        """Store a word to a device register, in QEMU's physical-memory mode (a gdb write in virtual mode does not reach the
+        device), and optionally read ``(addr, length)`` before leaving that mode."""
         assert self.gdb is not None
         if self.phys_mode is None:
             self.phys_mode = self.gdb.rpc("Qqemu.PhyMemMode:1") == "OK"
         elif self.phys_mode:
             self.gdb.ok("Qqemu.PhyMemMode:1")
         try:
-            self.gdb.rpc(f"M{RTC_CNTL_TIME_UPDATE:x},4:{(1 << 31).to_bytes(4, 'little').hex()}")
-            data = self.read(RTC_CNTL_TIME0, 8)
+            self.gdb.rpc(f"M{addr:x},4:{(value & 0xFFFFFFFF).to_bytes(4, 'little').hex()}")
+            return self.read(*then_read) if then_read else b""
         finally:
             if self.phys_mode:
                 self.gdb.ok("Qqemu.PhyMemMode:0")
+
+    def read_rtc(self) -> int:
+        """The RTC timer (48 bits of slow-clock ticks), latched through a physical-memory write so the device sees it."""
+        data = self.write32_device(RTC_CNTL_TIME_UPDATE, 1 << 31, then_read=(RTC_CNTL_TIME0, 8))
         return int.from_bytes(data[:4], "little") | (int.from_bytes(data[4:8], "little") & 0xFFFF) << 32
 
     def cpu_hz(self) -> float:
@@ -1196,7 +1342,7 @@ class Machine:
             progress: Callable[[float, float | None, str], None] | None = None) -> None:
         """Run until the simulated time reaches ``end`` (or the handler is finished)."""
         assert self.gdb is not None
-        stalled_since: float | None = None
+        frozen_since: float | None = None  # wall time from which QEMU's clock has stood still
         last_progress = time.monotonic()
         while not handler.finished and self.t < end:
             if cancel is not None and cancel.is_set():
@@ -1205,7 +1351,8 @@ class Machine:
                 raise TimedOut(f"reached {self.t * 1000:.1f} ms of {end * 1000:g} ms")
             due = handler.next_due()
             due = end if due is None else min(due, end)
-            stop = self._resume(min(TICK_S, max(TICK_MIN_S, due - self.t)))  # idle time passes at the wall clock's pace, busy time near it
+            wait = min(TICK_S, max(TICK_MIN_S, due - self.t))  # idle time passes at the wall clock's pace, busy time near it
+            stop = self._resume(min(wait, FROZEN_S) if frozen_since is not None else wait)
             if stop.get("exited"):
                 raise QemuError(f"QEMU stopped ({stop['exited']}): {self.stderr_tail()}")
             thread = stop["thread"] or 1
@@ -1222,17 +1369,56 @@ class Machine:
             release = handler.reset_request()
             if release is not None:
                 self._reset_chip(release)
+            self._sync_interrupts()
             if stop["watch"] is None and stop["signal"] != 5:
-                if self.t > before:
-                    stalled_since = None
-                elif stalled_since is None:
-                    stalled_since = time.monotonic()
-                elif time.monotonic() - stalled_since >= STALL_S:
-                    raise Unsupported("stall", "the firmware stopped making progress: the CPUs sleep with no timer pending (it waits for an "
-                                               "interrupt the simulator cannot produce, e.g. a GPIO interrupt, or it entered deep sleep)", self.t)
+                due = handler.next_due()
+                if self.t - before > CREEP_S:
+                    frozen_since = None
+                elif frozen_since is None:
+                    frozen_since = time.monotonic()
+                elif self._asleep and due is not None and due < end and time.monotonic() - frozen_since >= FROZEN_S:
+                    self._skip_idle(due)  # nothing timed inside QEMU: only the stimulus can wake the chip
+                    handler.on_tick(self.t)
+                    self._sync_interrupts()
+                    frozen_since = None
+                elif time.monotonic() - frozen_since >= STALL_S:
+                    raise Unsupported("stall", "the firmware stopped making progress: the CPUs sleep with no timer pending and no stimulus left "
+                                               "to wake them (it waits for an interrupt nothing here raises, or it entered deep sleep, which "
+                                               "QEMU does not emulate)", self.t)
             if progress and time.monotonic() - last_progress > 0.5:
                 last_progress = time.monotonic()
                 progress(min(self.t, end), end, f"simulated {min(self.t, end) * 1000:.0f} ms of {end * 1000:.0f} ms")
+
+    def _sync_interrupts(self) -> None:
+        """Drive the interrupt matrix's GPIO sources from the GPIO interrupt status. A source goes high only once a CPU maps it
+        to one of its interrupts: the matrix passes level changes on to the interrupt mapped at that moment, not levels."""
+        if self.qtest is None:
+            return
+        lines = self.gpio.interrupt_lines()
+        for source, pro, app in ((GPIO_INT_SOURCE, lines["pro"], lines["app"]), (GPIO_NMI_SOURCE, lines["pro_nmi"], lines["app_nmi"])):
+            raised = self._raised.get(source)
+            if not (pro or app or raised):
+                continue
+            maps = (self.read32(INTMATRIX_MAP["pro"] + 4 * source) & 0x1F, self.read32(INTMATRIX_MAP["app"] + 4 * source) & 0x1F)
+            want = (pro and maps[0] in EXTERNAL_INTS) or (app and maps[1] in EXTERNAL_INTS)
+            if raised is not None and (not want or raised != maps):
+                self._lower(source, raised, maps)
+                raised = None
+            if want and raised is None:
+                self.qtest.set_source(source, 1)
+                self._raised[source] = maps
+
+    def _lower(self, source: int, raised: tuple[int, int], now: tuple[int, int]) -> None:
+        """Lower a source on the CPU interrupts it was raised on: if the firmware mapped it elsewhere since, the old mapping is
+        put back for the moment (the firmware is stopped) so the interrupt that saw it rise sees it fall."""
+        assert self.qtest is not None
+        self._raised.pop(source, None)
+        moved = [(INTMATRIX_MAP[cpu] + 4 * source, old, new) for cpu, old, new in zip(("pro", "app"), raised, now) if old != new]
+        for addr, old, _ in moved:
+            self.write32_device(addr, old)
+        self.qtest.set_source(source, 0)
+        for addr, _, new in moved:
+            self.write32_device(addr, new)
 
     def _resume(self, wait: float = TICK_S) -> dict[str, Any]:
         """Continue until the firmware touches a watched register or reaches the reset vector; after ``wait`` seconds of wall clock
@@ -1243,33 +1429,67 @@ class Machine:
             return _stop(self.gdb.recv(wait))
         except TimeoutError:
             pass
+        stop = self._resolve_crossing(self._interrupt())
+        if stop.get("exited") or stop["watch"] is not None or stop["signal"] == 5:
+            return stop
+        stopped = stop["thread"] or 1
+        self._g_thread = stopped  # QEMU addresses the stopped CPU's registers
+        self._asleep = all(self._in_waiti(n) for n in ((1, 2) if self.app_cpu_started else (1,)))  # an unstarted APP CPU idles too
+        if not self._asleep:
+            if self._g_thread != stopped:
+                self.select(stopped)
+                self._g_thread = stopped
+            return stop
+        # QEMU counts the time the CPUs slept (with -icount sleep=on) only when they wake or the machine resumes, so the clock
+        # read now could be behind by everything since they fell asleep: run a moment longer, then look
+        self.gdb.send("vCont;c" if self.vcont else "c")
+        time.sleep(SETTLE_S)
+        return self._resolve_crossing(self._interrupt())
+
+    def _interrupt(self) -> dict[str, Any]:
+        """Stop the running machine (the answer is a stop of its own if one came first)."""
+        assert self.gdb is not None
         self.gdb.interrupt()
         try:
             return _stop(self.gdb.recv(STEP_TIMEOUT_S))
         except TimeoutError:
             raise QemuError("QEMU did not stop when interrupted") from None
 
+    def _in_waiti(self, thread: int) -> bool:
+        """Whether that CPU sleeps in WAITI (its PC is just past the instruction)."""
+        try:
+            if self._g_thread != thread:
+                self.select(thread)
+                self._g_thread = thread
+            return is_waiti(self.read((self.regs().pc - 3) & 0xFFFFFFFF, 3))
+        except QemuError:
+            return False
+
+    def _skip_idle(self, to: float) -> None:
+        """The CPUs sleep with no timer pending, so QEMU's clock stands still, and a stimulus is due at ``to``: the time until
+        then passes for the board (the firmware's own clocks do not see it; it had nothing timed to see it with)."""
+        gap = to - self.t
+        if gap <= 0:
+            return
+        self._offset += gap
+        self._ccount_offsets = {n: offset + gap for n, offset in self._ccount_offsets.items()}
+        self.t = to
+        self.skipped += gap
+
     def _on_watch(self, handler: Handler, stop: dict[str, Any], thread: int) -> None:
         kind, hit = stop["watch"]
         watch = next(((k, a, n) for k, a, n in WATCHES if k == kind and a <= hit < a + n), None)
         if watch is None:
             raise QemuError(f"QEMU reports a watchpoint the simulator did not set ({kind} at {hit:#x})")
-        _, start, length = watch
         regs = self.regs()
-        key = (thread, regs.pc)
-        insn = self._insns.get(key)
-        if insn is None:
-            code = self.read(regs.pc, 3)
-            insn = decode_mem(code)
-            if insn is None:
-                raise QemuError(f"the instruction at {regs.pc:#x} ({code.hex()}) touched a pin register but is not a load or store the "
-                                "simulator decodes")
-            self._insns[key] = insn
+        done = stop.get("ran")  # (the access, the registers before it): QEMU ran it itself, see _resolve_crossing
+        insn, before = done if done else (self._access_at(thread, regs), regs)
         if insn.atomic:
             raise Unsupported("atomic_store", f"an atomic store (s32c1i) to a pin register at {regs.pc:#x} is not simulated", self.t)
-        addr = (regs.a(insn.base) + insn.offset) & 0xFFFFFFFF
-        value = regs.a(insn.reg) & ((1 << (8 * insn.width)) - 1)
+        addr = (before.a(insn.base) + insn.offset) & 0xFFFFFFFF
+        value = before.a(insn.reg) & ((1 << (8 * insn.width)) - 1)
         t = self.now(thread, regs, running=True)
+        handler.on_tick(t)  # the stimuli due by now happen first: an access sees the board (and the interrupt status) as it is then
         assert self.gdb is not None
         # QEMU's GPIO ignores stores and reads as 0, IO_MUX and RTC_IO are not modelled: the access is done here and the CPU goes on
         # after it without executing it (no single step, no removing and inserting the watchpoint: half the round trips)
@@ -1287,12 +1507,48 @@ class Machine:
             if insn.signed and loaded >> (8 * insn.width - 1) & 1:
                 loaded -= 1 << (8 * insn.width)
             self.set_reg(regs.a_index(insn.reg), loaded)
-            self._skip(regs, insn)
+            if not done:
+                self._skip(regs, insn)
         else:
-            self._skip(regs, insn)
+            if not done:
+                self._skip(regs, insn)
             changed = self.gpio.write(addr, value, insn.width)
             if changed:
                 handler.on_gpio(t, changed)
+
+    def _access_at(self, thread: int, regs: Regs) -> MemInsn:
+        """The load or store at the PC (QEMU stops before the access)."""
+        key = (thread, regs.pc)
+        insn = self._insns.get(key)
+        if insn is None:
+            code = self.read(regs.pc, 3)
+            insn = decode_mem(code)
+            if insn is None:
+                raise QemuError(f"the instruction at {regs.pc:#x} ({code.hex()}) touched a pin register but is not a load or store the "
+                                "simulator decodes")
+            self._insns[key] = insn
+        return insn
+
+    def _resolve_crossing(self, stop: dict[str, Any]) -> dict[str, Any]:
+        """An interruption can land as the CPU reaches a watched access and cross its watchpoint hit: QEMU then reports the
+        interruption, keeps the hit pending, and would run the next watched access itself and stop just past it. So when an
+        interruption finds the PC at a watched access, step that access: QEMU either stops before it (the usual watch stop) or
+        runs it and stops past it, reporting the pending hit (the stop carries the access and the registers before it, and
+        _on_watch puts its result right)."""
+        if stop.get("exited") or stop["watch"] is not None or stop["signal"] == 5 or not self.watching:
+            return stop
+        thread = stop["thread"] or 1
+        if self._g_thread != thread:
+            self.select(thread)
+            self._g_thread = thread
+        regs = self.regs()
+        insn = self._insns.get((thread, regs.pc)) or decode_mem(self.read(regs.pc, 3))
+        if insn is None or not any(start <= (regs.a(insn.base) + insn.offset) & 0xFFFFFFFF < start + n for _, start, n in WATCHES):
+            return stop
+        stepped = self.step(thread)
+        if stepped["watch"] is not None and self.regs().pc != regs.pc:
+            stepped["ran"] = (insn, regs)
+        return stepped
 
     def _skip(self, regs: Regs, insn: MemInsn) -> None:
         """Move the PC past an instruction the CPU did not execute, taking a zero-overhead loop's jump back as the CPU would."""
@@ -1309,6 +1565,8 @@ class Machine:
             self._step_over(thread, regs.pc)
             return
         if regs.pc != RESET_VECTOR:
+            if not is_break(self.read(regs.pc, 3)):
+                return  # a debug stop QEMU still owed from a crossed watchpoint hit (see _resolve_crossing): nothing happened
             raise Unsupported("break", f"the firmware stopped at a breakpoint instruction at {regs.pc:#x} (a debugger break or a "
                                        "crash handler waiting for one)", self.t)
         assert self.gdb is not None
@@ -1333,6 +1591,7 @@ class Machine:
             self._pending_reset = None
             self._ccount_offsets = {1: t}  # the PRO CPU's cycle counter starts again; the APP CPU waits to be started again
             self.app_cpu_started = False
+            self._raised.clear()  # the CPUs' pending interrupts start over: what is still due is raised again
             self.gpio.reset(scope)
             self.resets.append((t, cause))
             handler.on_reset(t, cause, scope)
@@ -1359,6 +1618,7 @@ class Machine:
         self._ccount_offsets = {1: self.t}
         self.app_cpu_started = False
         self._pending_reset = "external"
+        self._raised.clear()
         self.gpio.reset("power-on")
 
     def _uart(self, handler: Handler) -> None:
@@ -1389,18 +1649,26 @@ class Machine:
                               "): it waits for hardware that is not there", self.t)
 
     def unimplemented(self, tail: bool = False) -> dict[str, dict[str, int]]:
-        """Peripherals the firmware touched that QEMU does not emulate (from its -d unimp log): ``{name: {reads, writes}}``."""
+        """Peripherals the firmware touched that QEMU does not emulate (from its -d unimp log, the parts written while the image
+        ran): ``{name: {reads, writes}}``. ``tail``: only the last megabyte (what the firmware does now)."""
         found: dict[str, dict[str, int]] = {}
         try:
             with open(self.log_path, "rb") as fh:
-                if tail:
-                    fh.seek(max(0, os.path.getsize(self.log_path) - (1 << 20)))
-                data = fh.read(8 << 20).decode("utf-8", errors="replace")
+                size = os.path.getsize(self.log_path)
+                chunks = []
+                for begin, finish in self._log_spans:
+                    finish = size if finish is None else finish
+                    if tail:
+                        begin = max(begin, size - (1 << 20))
+                    if finish > begin:
+                        fh.seek(begin)
+                        chunks.append(fh.read(min(finish - begin, 8 << 20)))
         except OSError:
             return found
+        data = b"".join(chunks).decode("utf-8", errors="replace")
         for m in re.finditer(r"^(\S+): unimplemented device (read|write)", data, re.M):
-            name = m.group(1)
-            if name in ("esp32.iomux", "esp32.rtcio", "esp32.gpio"):
+            name = UNIMP_NAMES.get(m.group(1), m.group(1))
+            if name in ("esp32.iomux", "esp32.gpio"):
                 continue  # the pins: this simulator models them
             entry = found.setdefault(name, {"reads": 0, "writes": 0})
             entry["reads" if m.group(2) == "read" else "writes"] += 1

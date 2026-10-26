@@ -235,7 +235,7 @@ TOOL_SPECS: list[ToolSpec] = [
              "run with the reason and the assertions after that point are cannot-verify, never passed. Classic ESP32 (WROOM/WROVER modules, PICO): the flash "
              "image runs on Espressif's QEMU (kicad_doctor says how to install it) with the ROM, bootloader and FreeRTOS; the pins (outputs, open drain, pulls, "
              "inputs, the GPIO matrix), the strapping pins at reset (GPIO0 low really enters download mode), EN, resets and the UART0 output are simulated; "
-             "a pad on the board driven by a peripheral (LEDC, I2C, SPI, ...), a GPIO interrupt that would fire, a crash or a firmware waiting for hardware "
+             "GPIO interrupts reach the firmware's handlers; a pad on the board driven by a peripheral (LEDC, I2C, SPI, ...), a crash or a firmware waiting for hardware "
              "QEMU lacks stops the run (cannot-verify after it), and hardware QEMU does not emulate is listed. The board is a DC resistor network with switches, the "
              "chip's pin drivers and pull-ups; LEDs report whether they would light; other parts are open circuits and are listed. Also reports hazards: a "
              "floating input read, an output fighting a switch (overcurrent). Firmware built by the user: ATtiny .hex or .elf (its .eeprom section is loaded); "

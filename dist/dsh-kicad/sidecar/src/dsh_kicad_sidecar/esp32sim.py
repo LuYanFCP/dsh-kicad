@@ -5,9 +5,9 @@ ones; the verdict on every assertion comes from this simulation, never from the 
 
 The chip side: outputs, output enables, open drain, internal pull-ups and pull-downs and input enables come from the
 registers the firmware writes; a pad routed to a peripheral output (LEDC, I2C, SPI, RMT, ...) has a level this simulator
-does not know, so a run where that pad is on the board stops there and what follows is cannot-verify. So does a GPIO
-interrupt that would fire (QEMU's ESP32 GPIO has no interrupts), a firmware crash, or a firmware waiting for something that
-never comes. The boot strapping pins are sampled from the board at power-on and given to QEMU, so a board that holds GPIO0
+does not know, so a run where that pad is on the board stops there and what follows is cannot-verify. So does a firmware
+crash, or a firmware waiting for something that never comes. A GPIO interrupt the firmware enabled latches when the board
+gives its pin the edge or level, and the machine raises it in QEMU's interrupt matrix, so the firmware's handler runs. The boot strapping pins are sampled from the board at power-on and given to QEMU, so a board that holds GPIO0
 low really starts the serial bootloader.
 """
 
@@ -34,6 +34,7 @@ VDD_MIN, VDD_MAX = 3.0, 3.6
 MAX_SECONDS = 30.0
 DEFAULT_DURATION = 2.0
 UART_TAIL = 8000
+INTERRUPT_LOG = 50  # GPIO interrupts listed in the result (all are counted)
 # What the firmware printing this means for the run
 PANIC = re.compile(r"Guru Meditation Error[^\n]*|abort\(\) was called[^\n]*|CORRUPT HEAP[^\n]*|Stack canary watchpoint triggered[^\n]*|"
                    r"\*\*\*ERROR\*\*\* A stack overflow[^\n]*|assert failed:[^\n]*|Brownout detector was triggered[^\n]*")
@@ -141,6 +142,7 @@ class Esp32Run(Timeline, eq.Handler):
         self.undefined: dict[int, float] = {}
         self.levels: dict[int, int | None] = {}
         self.armed: dict[int, int] = {}
+        self.interrupts: list[tuple[float, int, int]] = []  # (t, gpio, interrupt type): the edges and levels that latched one
         self.last_volts: dict[str, float | None] = {}
         self.download_mode = False
         self.boot_failure: str | None = None
@@ -249,27 +251,34 @@ class Esp32Run(Timeline, eq.Handler):
                 self.timeline.append(snap)
                 self.times.append(t)
         if not self.held:
-            self.check_interrupts(t, pins, volts)
+            self.latch_interrupts(t, pins, volts)
 
-    def check_interrupts(self, t: float, pins: dict[int, eq.Pin], volts: dict[str, float | None]) -> None:
-        """A GPIO interrupt the firmware enabled, on a pad whose level now triggers it: QEMU cannot deliver it."""
+    def latch_interrupts(self, t: float, pins: dict[int, eq.Pin], volts: dict[str, float | None]) -> None:
+        """The GPIO interrupt detector: an edge or level the pin's interrupt type reacts to latches its status bit (the
+        machine raises the interrupt in QEMU's matrix when the firmware enabled it for a CPU). It sees the pad through the
+        input buffer: with the input off it reads 0."""
         for gpio, net in self.board.pins.items():
-            kind = pins[gpio].interrupt
-            level = self.board.logic(volts.get(net))
+            pin = pins[gpio]
+            kind = pin.interrupt
+            level = self.board.logic(volts.get(net)) if pin.input else 0
             previous = self.levels.get(gpio)
             self.levels[gpio] = level
             if not kind:
                 self.armed.pop(gpio, None)
+                self.gpio.level_condition(gpio, False)
                 continue
+            if level is None:
+                self.floating_reads.setdefault(gpio, t)  # the interrupt watches a pin nothing defines
             fresh = self.armed.get(gpio) != kind
             self.armed[gpio] = kind
             edge = previous is not None and level is not None and previous != level and not fresh
-            fires = (kind == 1 and edge and level == 1) or (kind == 2 and edge and level == 0) or (kind == 3 and edge) or \
-                    (kind == 4 and level == 0) or (kind == 5 and level == 1)
-            if fires:
-                raise eq.Unsupported("gpio_interrupt", f"GPIO{gpio} (net {short_name(net)}) would raise the {eq.INT_TYPES.get(kind, 'GPIO')} interrupt "
-                                                       "the firmware enabled; QEMU's ESP32 GPIO has no interrupts, so what the firmware does "
-                                                       "then is not simulated", t)
+            if (kind == 1 and edge and level == 1) or (kind == 2 and edge and level == 0) or (kind == 3 and edge):
+                self.gpio.latch_interrupt(gpio)
+                self.interrupts.append((t, gpio, kind))
+            active = (kind == 4 and level == 0) or (kind == 5 and level == 1)
+            if active and gpio not in self.gpio.level_active:
+                self.interrupts.append((t, gpio, kind))
+            self.gpio.level_condition(gpio, active)
 
     def strap_levels(self, t: float) -> tuple[int, dict[int, int], list[int]]:
         """``(GPIO_STRAP, levels, pins between the logic levels)`` with the chip in reset and the board as it is at ``t``."""
@@ -518,6 +527,9 @@ def simulate_firmware(netlist: dict[str, Any], mcu_ref: str, provider: dict[str,
             events_out.append(item)
             last = view
     notes = list(board.notes)
+    if machine.skipped:
+        notes.append(f"the CPUs slept with no timer pending for {machine.skipped * 1000:.1f} ms in all, so QEMU's clock stood still; that time "
+                     "passed for the board until a stimulus woke the chip, but the firmware's own clocks did not see it")
     if probe.get("clock") == "ccount":
         notes.append("time is read from the CPU cycle counter (this QEMU does not run the RTC timer): before the application sets its "
                      "CPU clock, times can be off by a few milliseconds")
@@ -527,6 +539,8 @@ def simulate_firmware(netlist: dict[str, Any], mcu_ref: str, provider: dict[str,
         "switches": sorted(board.switches), "leds": sorted(board.leds), "notes": notes,
         "pins": {f"GPIO{g}": short_name(n) for g, n in sorted(board.pins.items())},
         "resets": [{"t": t, "cause": cause} for t, cause in run.resets],
+        "interrupts": [{"t": t, "gpio": f"GPIO{g}", "type": eq.INT_TYPES.get(kind, str(kind))} for t, g, kind in run.interrupts[:INTERRUPT_LOG]],
+        "interrupt_count": len(run.interrupts),
         "strap": {"value": f"{strap:#04x}", "levels": {f"GPIO{g}": level for g, level in levels.items()}, "download_mode": run.download_mode},
         "uart": run.uart_text[-UART_TAIL:], "uart_bytes": uart_bytes,
         "not_emulated": unimplemented,
