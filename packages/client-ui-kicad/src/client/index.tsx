@@ -2,8 +2,9 @@
  * dsh-client-ui-kicad, browser half. Registers:
  * - a right-sidebar tab type for *.kicad_sch / *.kicad_pcb (extension band, so it
  *   outranks the plain-text document preview),
- * - conversation rows for kicad_doctor / kicad_erc / kicad_drc / kicad_edit_schematic
- *   (with an "Install KiCad" path when a call failed because KiCad is missing),
+ * - conversation rows for kicad_doctor / kicad_erc / kicad_drc / kicad_edit_schematic /
+ *   kicad_create_schematic and the board tools (kicad_edit_pcb, kicad_update_pcb, kicad_autoroute,
+ *   kicad_export_fab), with an "Install KiCad" path when a call failed because KiCad is missing,
  * - command rows for /kicad-doctor, /kicad-install, /kicad-render (background checks hidden),
  * - Plugin Manager pages for the bundle's bridge and policy rows; the bridge page
  *   also shows the KiCad environment check and installer.
@@ -13,11 +14,13 @@ import { basename, isDesignFile, parseFileAddress } from './address.ts'
 import { CheckCard, CommandRow, CreateCard, createDoctorCard, EditCard, KICAD_COMMANDS, withKiCadHint } from './Cards.tsx'
 import type { ClientContext } from './dsh.ts'
 import { en, NS, zh } from './locales.ts'
+import { AutorouteCard, createFabCard, SyncCard } from './PcbCards.tsx'
 import { createBridgeSettings, PolicySettings } from './Settings.tsx'
 import { createViewer } from './Viewer.tsx'
 
 export { parseFileAddress, renderDir, orderPages, sessionFileAddress } from './address.ts'
 export { readCheckMeta } from './Cards.tsx'
+export { readAutorouteMeta, readFabMeta, readSyncMeta, workspacePath } from './PcbCards.tsx'
 export { KICAD_MISSING, pickSession, readReport } from './Doctor.tsx'
 export { toOps } from './Settings.tsx'
 
@@ -48,6 +51,10 @@ export function apply(ctx: ClientContext): void {
     ['kicad_drc', withKiCadHint(ctx.remote, CheckCard)],
     ['kicad_edit_schematic', withKiCadHint(ctx.remote, EditCard)],
     ['kicad_create_schematic', withKiCadHint(ctx.remote, CreateCard)],
+    ['kicad_edit_pcb', withKiCadHint(ctx.remote, EditCard)],
+    ['kicad_update_pcb', withKiCadHint(ctx.remote, SyncCard)],
+    ['kicad_autoroute', withKiCadHint(ctx.remote, AutorouteCard)],
+    ['kicad_export_fab', withKiCadHint(ctx.remote, createFabCard(ctx.remote))],
   ] as const
   for (const [tool, view] of cards) {
     ctx.effect(() => ctx.slots.inject('tool.call.toolview', () => ctx.slots.register(

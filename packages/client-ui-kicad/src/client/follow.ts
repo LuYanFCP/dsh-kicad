@@ -41,8 +41,9 @@ export function shouldFollow(input: { toolName: string, phase: string, time?: nu
   if (basename(input.path).startsWith('.')) return false
   if (input.time === undefined || input.now - input.time > LIVE_WINDOW_MS) return false
   if (input.isError) return false
-  // A new file exists only once its creation settled; an edited file already exists when the call starts.
-  if (input.toolName === 'kicad_create_schematic') return input.phase === 'result'
+  // A new file exists only once its creation settled (a sync may create the board); an edited file already exists when
+  // the call starts.
+  if (input.toolName === 'kicad_create_schematic' || input.toolName === 'kicad_update_pcb') return input.phase === 'result'
   return input.phase === 'start' || input.phase === 'result'
 }
 

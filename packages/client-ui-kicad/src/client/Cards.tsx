@@ -1,8 +1,9 @@
 /**
- * Conversation rows for kicad_erc / kicad_drc and kicad_edit_schematic, registered
- * in the keyed `tool.call.toolview` slot. They read only the persisted wire data
- * (`result.meta` from the tool's presentationMeta and the result text) and fall
- * back to plain text for anything they do not recognize.
+ * Conversation rows for kicad_erc / kicad_drc, kicad_edit_schematic / kicad_edit_pcb and
+ * kicad_create_schematic, registered in the keyed `tool.call.toolview` slot (the other board
+ * tools' rows are in PcbCards.tsx). They read only the persisted wire data (`result.meta`
+ * from the tool's presentationMeta and the result text) and fall back to plain text for
+ * anything they do not recognize.
  */
 import { useState, type ComponentType, type ReactNode } from 'react'
 import { basename } from './address.ts'
@@ -27,19 +28,24 @@ export function readCheckMeta(meta: unknown): CheckMeta | undefined {
   return m as CheckMeta
 }
 
-function argPath(props: ToolViewProps): string {
+/** A string argument of the call, also while the arguments still stream in ('' when absent). */
+export function argOf(props: ToolViewProps, key: string): string {
   try {
-    const live = props.block.args?.text?.('path')
+    const live = props.block.args?.text?.(key)
     if (typeof live === 'string' && live) return live
     const raw = props.block.call?.argsRaw ?? props.block.argsRaw
-    const args = raw ? JSON.parse(raw) as { path?: unknown } : undefined
-    return typeof args?.path === 'string' ? args.path : ''
+    const args = raw ? JSON.parse(raw) as Record<string, unknown> : undefined
+    return typeof args?.[key] === 'string' ? args[key] as string : ''
   } catch {
     return ''
   }
 }
 
-function resultText(props: ToolViewProps): string {
+function argPath(props: ToolViewProps): string {
+  return argOf(props, 'path')
+}
+
+export function resultText(props: ToolViewProps): string {
   return (props.block.content ?? []).map(b => b.text ?? '').join('\n')
 }
 
@@ -104,17 +110,18 @@ export function EditCard(props: ToolViewProps): ReactNode {
   const text = resultText(props)
   const meta = props.block.meta as { changes?: unknown } | undefined
   const changes = Array.isArray(meta?.changes) ? meta.changes.filter((c): c is string => typeof c === 'string') : []
-  const erc = /^Automatic (ERC by KiCad[^\n]*)$/m.exec(text)?.[1]
-  const passed = erc ? /: PASSED/.test(erc) : undefined
+  // The policy appends KiCad's verdict: ERC after a schematic edit, DRC after a board edit.
+  const check = /^Automatic ((ERC|DRC) by KiCad[^\n]*)$/m.exec(text)
+  const passed = check ? /: PASSED/.test(check[1]!) : undefined
   return (
     <div className="dshk-card" data-kicad-card="edit">
       <style>{CSS}</style>
       <button type="button" className="dshk-card-head" aria-expanded={open} onClick={() => setOpen(o => !o)}>
-        <strong>{tr('card.edit')}</strong>
+        <strong>{tr(props.toolName === 'kicad_edit_pcb' ? 'card.editPcb' : 'card.edit')}</strong>
         <span className="dshk-muted">{props.block.isError ? text.split('\n')[0] : tr('card.changes', { count: changes.length })}</span>
         {passed !== undefined && (
-          <span className={`dshk-badge ${passed ? 'dshk-pass' : 'dshk-fail'}`} title={erc}>
-            {tr('card.autoErc')} · {tr(passed ? 'card.passed' : 'card.failed')}
+          <span className={`dshk-badge ${passed ? 'dshk-pass' : 'dshk-fail'}`} title={check![1]}>
+            {tr(check![2] === 'DRC' ? 'card.autoDrc' : 'card.autoErc')} · {tr(passed ? 'card.passed' : 'card.failed')}
           </span>
         )}
         <span className="dshk-spacer" />
@@ -125,7 +132,7 @@ export function EditCard(props: ToolViewProps): ReactNode {
       {open && (
         <ul className="dshk-list">
           {changes.map((c, i) => <li key={i} className="dshk-code">{c}</li>)}
-          {erc && <li className="dshk-code" style={{ whiteSpace: 'pre-wrap' }}>{text.slice(text.indexOf('Automatic ERC'))}</li>}
+          {check && <li className="dshk-code" style={{ whiteSpace: 'pre-wrap' }}>{text.slice(check.index)}</li>}
         </ul>
       )}
     </div>

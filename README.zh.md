@@ -15,7 +15,7 @@
 | **技能** | `kicad-agent-workflow`、`kicad-erc-triage`、`kicad-drc-triage`、`kicad-schematic-design`、`kicad-simulate`、`kicad-mcu-check`。 |
 | **命令** | `/erc`、`/drc`、`/bom`、`/simulate`、`/mcu-check`、`/mcu-sim`（不经过模型，作用于工程根设计）、`/kicad-fab`（制板压缩包）、`/kicad-render`、`/kicad-doctor`（环境检查）、`/kicad-install`（安装 KiCad、Freerouting 自动布线器或用于 ESP32 固件仿真的 Espressif QEMU，见下文）。 |
 | **Agent 预设** | `eda`：与 standard 类似的工具集 + 电子设计人设。KiCad 工具为全局注册，任何预设都可使用。 |
-| **Web 界面** | 右侧边栏 `*.kicad_sch` / `*.kicad_pcb` 查看器，两种模式：**交互**——内嵌 [KiCanvas](https://github.com/theacodes/kicanvas)（层次图纸、查看元件/封装/网络、图层开关、KiCad 或 Witch Hazel 主题、文件变化时自动刷新）；**SVG**——kicad-cli 渲染（平移缩放、多图纸、渲染按钮，PCB 文件变化时自动重新渲染，也是交互模式失败时的自动回退）；电路板还有仿照 KiCad 3D 查看器的 **3D** 模式（见 [3D 视图](#3d-视图)）；ERC/DRC、原理图修改与环境检查的对话卡片；sidecar（kicad-cli 路径、Python，以及 KiCad 环境检查和 **安装 KiCad**）与策略（审批、自动 ERC、自动渲染）的设置页。KiCad 缺失或版本过低时，查看器和失败的工具卡片会显示带 **安装 KiCad** 按钮的提示。 |
+| **Web 界面** | 右侧边栏 `*.kicad_sch` / `*.kicad_pcb` 查看器，两种模式：**交互**——内嵌 [KiCanvas](https://github.com/theacodes/kicanvas)（层次图纸、查看元件/封装/网络、图层开关、KiCad 或 Witch Hazel 主题、文件变化时自动刷新）；**SVG**——kicad-cli 渲染（平移缩放、多图纸、渲染按钮，PCB 文件变化时自动重新渲染，也是交互模式失败时的自动回退）；电路板还有仿照 KiCad 3D 查看器的 **3D** 模式（见 [3D 视图](#3d-视图)）；对话卡片：ERC/DRC、原理图与电路板修改（附自动 ERC/DRC 结果）、从原理图更新 PCB（改动、待布局的元件、KiCad 的一致性检查数）、自动布线（Freerouting 新增的走线、KiCad 统计的未布通数和 DRC 错误）、生产文件（导出闸门、文件列表、**下载 zip**、3D 预览）以及环境检查；开启 **跟随 agent** 时，agent 同步、修改或布线电路板时会在侧边栏打开它，和原理图一样；设置页：sidecar（kicad-cli、Python、Java、Freerouting、ngspice 和 QEMU 的路径，以及 KiCad 环境检查和 **安装 KiCad**）与策略（审批、自动 ERC、自动 DRC、自动渲染）。KiCad 缺失或版本过低时，查看器和失败的工具卡片会显示带 **安装 KiCad** 按钮的提示。 |
 | **独立 MCP server** | Python sidecar 通过 stdio 说 MCP 协议，Claude Code 或 RL 环境可以不经 dsh 直接复用同一套工具。 |
 | **KiCad 端（可选）** | IPC 插件，工具栏按钮 “Open in DSH”。 |
 

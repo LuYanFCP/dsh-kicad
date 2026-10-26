@@ -31,6 +31,7 @@ export const CSS = `
 .dshk-badge{border-radius:10px;padding:0 8px;font-size:12px;line-height:18px}
 .dshk-pass{color:var(--dsw-alias-state-success-primary);border:1px solid var(--dsw-alias-state-success-primary)}
 .dshk-fail{color:var(--dsw-alias-state-error-primary);border:1px solid var(--dsw-alias-state-error-primary)}
+.dshk-caution{color:var(--dsw-alias-state-warn-primary);border:1px solid var(--dsw-alias-state-warn-primary)}
 .dshk-muted{color:var(--dsw-alias-label-tertiary)}
 .dshk-list{margin:0;padding:4px 10px 8px 10px;list-style:none;border-top:1px solid var(--dsw-alias-border-l1)}
 .dshk-list li{padding:3px 0;line-height:18px}

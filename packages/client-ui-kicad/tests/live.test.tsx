@@ -87,6 +87,9 @@ describe('follow the agent', () => {
     expect(follow.shouldFollow({ ...base, path: 'hw/.scratch_orient.kicad_sch' })).toBe(false)
     expect(follow.shouldFollow({ ...base, toolName: 'kicad_create_schematic' })).toBe(false) // not created yet
     expect(follow.shouldFollow({ ...base, toolName: 'kicad_create_schematic', phase: 'result' })).toBe(true)
+    expect(follow.shouldFollow({ ...base, toolName: 'kicad_update_pcb', path: 'hw/a.kicad_pcb' })).toBe(false) // the sync may create it
+    expect(follow.shouldFollow({ ...base, toolName: 'kicad_update_pcb', path: 'hw/a.kicad_pcb', phase: 'result' })).toBe(true)
+    expect(follow.shouldFollow({ ...base, toolName: 'kicad_autoroute', path: 'hw/a.kicad_pcb' })).toBe(true)
     expect(follow.shouldFollow({ ...base, phase: 'result', isError: true })).toBe(false)
   })
 
