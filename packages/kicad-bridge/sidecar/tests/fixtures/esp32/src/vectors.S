@@ -1,6 +1,6 @@
-/* Exception vectors of the interrupt test program (VECBASE points here). A level-1 interrupt, the GPIO interrupt, runs level1
- * below: it reads which pins' interrupts the PRO CPU takes, clears their status and counts. Nothing else is expected (call0
- * code raises no window exceptions), so anything else parks the CPU. */
+/* Exception vectors of the interrupt test programs (VECBASE points here). A level-1 interrupt (the GPIO's or the LEDC's) runs
+ * level1 below: it clears the GPIO interrupts the PRO CPU takes and the LEDC's raised events, and counts. Nothing else is
+ * expected (call0 code raises no window exceptions), so anything else parks the CPU. */
 #define EXCCAUSE_LEVEL1_INTERRUPT 4
 
     .section .vectors, "ax"
@@ -25,6 +25,10 @@ _vectors:
     .word 0x3FF4404C                /* GPIO_STATUS_W1TC */
 .Lcount:
     .word irq_count
+.Lledc_int_st:
+    .word 0x3FF59184                /* LEDC_INT_ST */
+.Lledc_int_clr:
+    .word 0x3FF5918C                /* LEDC_INT_CLR */
 
     .section .text.level1, "ax"
     .align 4
@@ -39,6 +43,10 @@ level1:
     l32r    a3, .Lpcpu_int
     l32i    a4, a3, 0
     l32r    a3, .Lstatus_w1tc
+    s32i    a4, a3, 0
+    l32r    a3, .Lledc_int_st
+    l32i    a4, a3, 0
+    l32r    a3, .Lledc_int_clr
     s32i    a4, a3, 0
     l32r    a3, .Lcount
     l32i    a4, a3, 0

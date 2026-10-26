@@ -40,8 +40,20 @@
 #define TIMG0_WDTWPROTECT    0x3FF5F064
 #define WDT_KEY              0x50D83AA1
 
-/* The interrupt matrix: the CPU interrupt the GPIO source raises on the PRO CPU */
+/* The interrupt matrix: the CPU interrupt the GPIO and the LEDC sources raise on the PRO CPU */
 #define DPORT_PRO_GPIO_INTERRUPT_MAP 0x3FF0015C
+#define DPORT_PRO_LEDC_INT_MAP       0x3FF001B0
+
+/* LEDC: low-speed channel 0 and timer 0 */
+#define LEDC_LSCH0_CONF0     0x3FF590A0
+#define LEDC_LSCH0_HPOINT    0x3FF590A4
+#define LEDC_LSCH0_DUTY      0x3FF590A8
+#define LEDC_LSCH0_CONF1     0x3FF590AC
+#define LEDC_LSTIMER0_CONF   0x3FF59160
+#define LEDC_INT_ENA         0x3FF59188
+#define LEDC_INT_CLR         0x3FF5918C
+#define LEDC_CONF            0x3FF59190
+#define SIG_LEDC_LS0         79
 
 /* UART0 */
 #define UART0_FIFO           0x3FF40000
