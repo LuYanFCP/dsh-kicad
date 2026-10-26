@@ -130,6 +130,10 @@ function formatFirmware(v) {
     const more = (v.interrupt_count ?? v.interrupts.length) - Math.min(v.interrupts.length, 8);
     lines.push(`GPIO interrupts: ${v.interrupts.slice(0, 8).map((i) => `${ms(i.t)} ${i.gpio} ${i.type}`).join("; ")}${more > 0 ? ` \u2026 ${more} more` : ""}.`);
   }
+  if (v.adc?.length) {
+    const shown = v.adc.slice(0, 8).map((c) => `${ms(c.t)} ${c.gpio} (${c.adc}, ${c.atten_db} dB) ${c.volts === null ? "floating" : `${round(c.volts)} V`} \u2192 ${c.reading} (${c.calibrated_mv} mV)`);
+    lines.push(`ADC conversions (${v.adc_count ?? v.adc.length}; the first per channel and each change): ${shown.join("; ")}${v.adc.length > 8 ? ` \u2026 ${v.adc.length - 8} more changes` : ""}.`);
+  }
   if (v.strap?.download_mode)
     lines.push(`The strapping pins (GPIO_STRAP ${v.strap.value}) started the serial bootloader: the firmware did not run.`);
   if (v.uart?.trim()) {

@@ -10,6 +10,7 @@ IO_MUX and RTC_IO are not modelled at all. So the sidecar watches the chip from 
   matrix, interrupt setup. A load gets the mirrored value, so the read-modify-writes ESP-IDF configures pads with start
   from what the chip would hold, not from QEMU's 0; a load of GPIO_IN/GPIO_IN1 gets the levels the board gives the pins;
 - the LED PWM controller (LEDC) is watched and kept the same way (esp32ledc.py): a pad routed to a channel is a PWM wave;
+- so is the SENS block of the SAR ADCs (esp32adc.py): a one-shot conversion reads the board's voltage on the channel's pad;
 - the GPIO peripheral's interrupt is kept here too (QEMU's stub has no interrupt output): edges and levels the board
   gives the pins latch GPIO_STATUS, and the interrupt matrix's GPIO sources are driven through QEMU's qtest socket
   (``set_irq_in``), so the CPU takes the interrupt the firmware mapped, as the chip would;
@@ -51,9 +52,11 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 try:
+    from .esp32adc import SENS_BASE, SENS_SIZE, AdcState, AdcUnsupported
     from .esp32ledc import LEDC_BASE, LEDC_INT_SOURCE, LEDC_SIZE, SIGNALS as LEDC_SIGNALS, LedcState, LedcUnsupported, channel_name
 except ImportError:  # run as a script (python -I esp32qemu.py download: -I leaves this directory off sys.path)
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from esp32adc import SENS_BASE, SENS_SIZE, AdcState, AdcUnsupported  # type: ignore[no-redef]
     from esp32ledc import LEDC_BASE, LEDC_INT_SOURCE, LEDC_SIZE, SIGNALS as LEDC_SIGNALS, LedcState, LedcUnsupported, channel_name  # type: ignore[no-redef]
 
 __all__ = ["QemuError", "Unsupported", "Cancelled", "TimedOut", "Qemu", "locate", "probe", "data_dir", "RELEASE", "download",
@@ -401,8 +404,9 @@ def flash_image(path: str, out_path: str, allow: Callable[[str], str] | None = N
 
 
 # eFuses of an ESP32 ECO3 (CHIP_VER_REV1 and REV2 burnt), from Espressif's QEMU documentation: the application then sees the
-# revision of the ROM QEMU runs (rev. 3).
-EFUSE_ECO3 = bytes.fromhex("000000000000000000000000008000000000000000001000000000000000" + "00" * 94)
+# revision of the ROM QEMU runs (rev. 3). Byte 17 is ADC_VREF (BLK0 word 4, bits 8-12; sign and magnitude in 7 mV steps): 0x10
+# is -0, a chip measured at the nominal 1100 mV, which ESP-IDF's ADC calibration then uses (esp32adc.py converts with it)
+EFUSE_ECO3 = bytes.fromhex("000000000000000000000000008000000010000000001000000000000000" + "00" * 94)
 
 
 # ---- Xtensa ------------------------------------------------------------------------------------
@@ -496,9 +500,10 @@ INT_ENA_APP, INT_ENA_APP_NMI, INT_ENA_PRO, INT_ENA_PRO_NMI, INT_ENA_SDIO = 13, 1
 GPIO_INT_VIEWS = {0x60: INT_ENA_APP, 0x64: INT_ENA_APP_NMI, 0x68: INT_ENA_PRO, 0x6C: INT_ENA_PRO_NMI, 0x70: INT_ENA_SDIO}
 GPIO_INT_SOURCE, GPIO_NMI_SOURCE = 22, 23  # the GPIO peripheral's interrupt sources in the interrupt matrix
 INTMATRIX_QOM = "/machine/soc/intmatrix"  # the interrupt matrix in QEMU's object tree; its GPIO inputs are the sources
-# QEMU names the SENS block (SAR ADCs, touch, temperature sensor) "esp32.rtcio" too; RTC_IO itself is watched whole, so its
-# accesses never reach QEMU's stub while the image runs
-UNIMP_NAMES = {"esp32.rtcio": "esp32.sens (the SAR ADCs and sensors)"}
+# QEMU's stubs of the blocks the simulator keeps whole (QEMU names the SENS block "esp32.rtcio" too): while the image runs, an
+# access in their log is one QEMU ran itself past a crossed watchpoint hit (see Machine._resolve_crossing), already put right.
+# What SENS does beyond the ADCs is counted by esp32adc.AdcState.
+KEPT_STUBS = frozenset({"esp32.gpio", "esp32.iomux", "esp32.rtcio"})
 INTMATRIX_MAP = {"pro": 0x3FF00104, "app": 0x3FF00218}  # DPORT_PRO/APP_MAC_INTR_MAP_REG: one word per source, the CPU interrupt
 EXTERNAL_INTS = frozenset(set(range(32)) - {6, 7, 11, 15, 16, 29})  # CPU interrupts the matrix can drive (the rest are the CPU's own)
 RTCIO_READ_ZERO = frozenset({0x04, 0x08, 0x10, 0x14, 0x18, 0x1C, 0x20})
@@ -1025,14 +1030,16 @@ STEP_TIMEOUT_S = 2.0
 CONNECT_TIMEOUT_S = 20.0
 LOG_LIMIT = 64 << 20    # QEMU's log of unimplemented-device accesses: a firmware polling one forever stops the run
 UART_LIMIT = 1 << 20    # UART output kept for the result and the assertions
-# Access watchpoints (loads and stores): QEMU does not keep these registers (its GPIO is a stub, IO_MUX and RTC_IO are not
-# modelled), so every access is answered from GpioState
+# Access watchpoints (loads and stores): QEMU does not keep these registers (its GPIO is a stub, IO_MUX, RTC_IO and SENS are not
+# modelled), so every access is answered from GpioState, LedcState or AdcState
 WATCHES = (
     ("4", GPIO_BASE, 0x5D0),      # GPIO: outputs, output enables, GPIO_IN, pin config, the GPIO matrix
     ("4", IO_MUX_BASE, 0x94),     # IO_MUX: function, pulls, input enable, drive
     ("4", RTCIO_BASE, 0x100),     # RTC_IO: the RTC pads' pulls and RTC functions, RTC_GPIO_IN (not simulated)
     ("4", LEDC_BASE, LEDC_SIZE),  # the LED PWM controller (QEMU keeps few of its registers: no duty readback, fades, interrupts)
+    ("4", SENS_BASE, SENS_SIZE),  # SENS: the SAR ADCs (and the touch pads, the temperature sensor, ...: counted, not simulated)
 )
+RTC_IO_HALL_SENS, XPD_HALL = 0x78, 31  # RTC_IO_HALL_SENS_REG: the hall sensor's power, which switches it to ADC1 channels 0 and 3
 RESET_CAUSES = {1: "power-on", 3: "software", 4: "watchdog", 5: "deep-sleep", 7: "watchdog", 8: "watchdog", 9: "watchdog",
                 11: "watchdog", 12: "software", 13: "watchdog", 14: "external", 15: "brownout", 16: "watchdog"}
 RESET_SCOPES = {1: "power-on", 3: "system", 4: "system", 5: "system", 7: "system", 8: "system", 9: "system", 11: "cpu", 12: "cpu",
@@ -1066,6 +1073,10 @@ class Handler:
     def on_ledc(self, t: float, channels: set[int]) -> None:
         """The firmware changed these LEDC channels (or a fade on them ended): the pads they drive change."""
 
+    def adc_volts(self, t: float, gpio: int) -> float | None:
+        """The voltage an ADC conversion samples on the pad at ``t`` (None: it floats, the reading is arbitrary)."""
+        return None
+
 
 class Machine:
     """One QEMU process running a flash image, stopped at every access to the pins' registers."""
@@ -1087,6 +1098,7 @@ class Machine:
         self._raised: dict[int, tuple[int, int]] = {}
         self.gpio = GpioState()
         self.ledc = LedcState()
+        self.adc = AdcState()
         self.uart_path = os.path.join(workdir, "uart0.log")
         self.log_path = os.path.join(workdir, "qemu.log")
         self.err_path = os.path.join(workdir, "qemu.err")
@@ -1538,6 +1550,11 @@ class Machine:
                 word = self.strap
             elif LEDC_BASE <= reg < LEDC_BASE + LEDC_SIZE:
                 word = self.ledc.read(reg, t)
+            elif SENS_BASE <= reg < SENS_BASE + SENS_SIZE:
+                try:
+                    word = self.adc.read(reg, t)
+                except AdcUnsupported as exc:
+                    raise Unsupported(exc.what, exc.detail, t) from None
             else:
                 word = self.gpio.read(reg)
             loaded = (word >> ((addr & 3) * 8)) & ((1 << (8 * insn.width)) - 1)
@@ -1558,6 +1575,13 @@ class Machine:
                     raise Unsupported(exc.what, exc.detail, t) from None
                 if channels:
                     handler.on_ledc(t, channels)
+                return
+            if SENS_BASE <= addr < SENS_BASE + SENS_SIZE:
+                hall = bool(self.gpio.rtcio.get(RTC_IO_HALL_SENS, 0) >> XPD_HALL & 1)
+                try:
+                    self.adc.write(addr, value, insn.width, t, lambda gpio: handler.adc_volts(t, gpio), hall)
+                except AdcUnsupported as exc:
+                    raise Unsupported(exc.what, exc.detail, t) from None
                 return
             changed = self.gpio.write(addr, value, insn.width)
             if changed:
@@ -1642,6 +1666,8 @@ class Machine:
             self.gpio.reset(scope)
             if scope != "cpu":
                 self.ledc.reset()
+            if scope in ("power-on", "rtc"):
+                self.adc.reset()  # SENS is in the RTC domain, like RTC_IO: a system reset leaves it as it was
             self.resets.append((t, cause))
             handler.on_reset(t, cause, scope)
         self._step_over(thread, RESET_VECTOR)
@@ -1670,6 +1696,7 @@ class Machine:
         self._raised.clear()
         self.gpio.reset("power-on")
         self.ledc.reset()
+        self.adc.reset()
 
     def _uart(self, handler: Handler) -> None:
         try:
@@ -1717,14 +1744,16 @@ class Machine:
             return found
         data = b"".join(chunks).decode("utf-8", errors="replace")
         for m in re.finditer(r"^(\S+): unimplemented device (read|write)", data, re.M):
-            name = UNIMP_NAMES.get(m.group(1), m.group(1))
-            if name in ("esp32.iomux", "esp32.gpio"):
-                continue  # the pins: this simulator models them
+            name = m.group(1)
+            if name in KEPT_STUBS:
+                continue
             entry = found.setdefault(name, {"reads": 0, "writes": 0})
             entry["reads" if m.group(2) == "read" else "writes"] += 1
         unmapped = len(re.findall(r"^Invalid access at addr", data, re.M))
         if unmapped:
             found["unmapped addresses"] = {"reads": 0, "writes": 0, "accesses": unmapped}
+        for part, counts in self.adc.other.items():  # the SENS block is watched: what the firmware did there beyond the ADCs
+            found[f"esp32.sens ({part})"] = dict(counts)
         return found
 
 

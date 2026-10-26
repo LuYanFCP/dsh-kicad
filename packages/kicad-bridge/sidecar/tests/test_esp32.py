@@ -9,6 +9,7 @@ import threading
 import pytest
 
 from dsh_kicad_sidecar import esp32qemu as eq
+from dsh_kicad_sidecar.esp32adc import POLL_LIMIT, SENS_BASE, AdcState, AdcUnsupported, calibrated_mv, raw12_for
 from dsh_kicad_sidecar.esp32ledc import LEDC_BASE, LedcState, LedcUnsupported
 from dsh_kicad_sidecar import esp32sim, mcu
 from dsh_kicad_sidecar.spice import SimulationError
@@ -289,6 +290,92 @@ def test_the_ledc_timers_channels_and_fades():
     assert led.wave(0, 0.0) == ("level", 0, 0.0) and led.read(L + 0x1FC, 0.0) == 0x16031700
 
 
+S = SENS_BASE
+READ_CTRL, ATTEN1, SLAVE_ADDR1, MEAS_START1, TOUCH_CTRL2, READ_CTRL2, MEAS_START2 = S, S + 0x34, S + 0x3C, S + 0x54, S + 0x84, S + 0x90, S + 0x94
+DATA_INV1, START_SAR, RTC_CONTROL = 1 << 28, 1 << 17, 1 << 31 | 1 << 18  # SAR1_DATA_INV; MEASx_START_SAR; EN_PAD_FORCE, START_FORCE
+
+
+def convert(adc, start_reg, channel, t, volts, hall=False):
+    """One conversion the way ESP-IDF's adc_oneshot_read runs it (its bitfield writes compile to read-modify-writes): the reading."""
+    assert adc.read(SLAVE_ADDR1, t) >> 22 & 0xFF == 0  # MEAS_STATUS: idle
+    adc.write(start_reg, RTC_CONTROL | 1 << (19 + channel), 4, t, volts, hall)
+    adc.write(start_reg, adc.read(start_reg, t) & ~START_SAR, 4, t, volts, hall)
+    adc.write(start_reg, adc.read(start_reg, t) | START_SAR, 4, t, volts, hall)
+    word = adc.read(start_reg, t)
+    assert word >> 16 & 1  # MEASx_DONE_SAR
+    return word & 0xFFFF
+
+
+def test_the_adc_calibration_is_esp_idfs():
+    # what MicroPython 1.29's ADC.read_uv() (ESP-IDF 5's line fitting, the eFuse's 1100 mV) gave for these readings in QEMU
+    assert [calibrated_mv(1, 3, 1872), calibrated_mv(1, 3, 2941), calibrated_mv(1, 0, 1806), calibrated_mv(2, 2, 2176)] == [1650, 2500, 500, 1031]
+    assert (calibrated_mv(1, 3, 0), calibrated_mv(1, 3, 4095), calibrated_mv(2, 0, 4095)) == (142, 3134, 1023)
+    for unit in (1, 2):
+        for atten in range(4):  # the inverse puts every voltage in range within a millivolt of itself
+            low, high = calibrated_mv(unit, atten, 0), calibrated_mv(unit, atten, 4095)
+            assert all(abs(calibrated_mv(unit, atten, raw12_for(unit, atten, mv / 1000)) - mv) <= 1 for mv in range(low, high + 1, 7))
+            assert raw12_for(unit, atten, 0.0) == 0 and raw12_for(unit, atten, 3.3) == 4095
+
+
+def test_the_adc_converts_the_board_voltage():
+    adc = AdcState()
+    volts = {34: 1.65, 35: 0.5, 27: 1.03125}
+    asked = []
+
+    def board(gpio):
+        asked.append(gpio)
+        return volts.get(gpio)
+    assert adc.read(READ_CTRL) == 3 << 16 and adc.read(ATTEN1) == 0xFFFFFFFF  # from reset: 12 bits, 12 dB, the output not inverted
+    assert convert(adc, MEAS_START1, 6, 0.1, board) == 4095 - 1872 and asked == [34]  # the converter's own output is inverted
+    adc.write(READ_CTRL, adc.read(READ_CTRL) | DATA_INV1, 4, 0.2, board)  # ESP-IDF's setting
+    assert convert(adc, MEAS_START1, 6, 0.2, board) == 1872
+    adc.write(ATTEN1, 0xFFFFFFFF & ~(3 << 14), 4, 0.3, board)  # channel 7 (GPIO35) at 0 dB
+    assert convert(adc, MEAS_START1, 7, 0.3, board) == 1806
+    adc.write(READ_CTRL, DATA_INV1, 4, 0.4, board)  # SAR1_SAMPLE_BIT 0: 9 bits
+    assert convert(adc, MEAS_START1, 6, 0.4, board) == 1872 >> 3
+    adc.write(READ_CTRL2, 3 << 16 | 1 << 29, 4, 0.5, board)
+    adc.write(S + 0x38, 0xFFFFFFFF & ~(1 << 14), 4, 0.5, board)  # ADC2 channel 7 (GPIO27) at 6 dB (0b10)
+    assert convert(adc, MEAS_START2, 7, 0.5, board) == 2176
+    assert convert(adc, MEAS_START2, 0, 0.6, board) == 0  # GPIO4 floats: the board says None
+    assert [(c.unit, c.channel, c.gpio, c.volts, c.atten, c.bits, c.reading) for c in adc.conversions] == [
+        (1, 6, 34, 1.65, 3, 12, 1872), (1, 6, 34, 1.65, 3, 12, 1872), (1, 7, 35, 0.5, 0, 12, 1806), (1, 6, 34, 1.65, 3, 9, 234),
+        (2, 7, 27, 1.03125, 2, 12, 2176), (2, 0, 4, None, 3, 12, 0)]
+    assert adc.read(MEAS_START1) & 0x1FFFF == 1 << 16 | 234  # DONE and DATA stay until START goes low
+    adc.write(MEAS_START1, adc.read(MEAS_START1) & ~START_SAR, 4, 0.7, board)
+    assert not adc.read(MEAS_START1) >> 16 & 1 and not adc.other
+    with pytest.raises(AdcUnsupported, match="hall sensor"):
+        convert(adc, MEAS_START1, 0, 0.8, board, hall=True)  # RTC_IO_HALL_SENS powered switches its plates to channels 0 and 3
+    adc.write(MEAS_START2, RTC_CONTROL, 4, 0.9, board)
+    adc.write(MEAS_START2, RTC_CONTROL | START_SAR, 4, 0.9, board)  # no pad: an internal input
+    assert adc.other == {"the ADCs' internal inputs": {"reads": 1, "writes": 0}} and len(adc.conversions) == 6
+    adc.reset()
+    assert adc.read(READ_CTRL) == 3 << 16 and adc.read(MEAS_START1) == 0 and len(adc.conversions) == 6
+
+
+def test_the_rest_of_the_sens_block_is_counted_and_polling_it_stops():
+    adc = AdcState()
+    adc.write(S + 0x4C, 1 << 22, 4, 0.0, lambda gpio: None)  # the temperature sensor's power
+    adc.read(S + 0x44, 0.0)
+    assert adc.other == {"the temperature sensor and the RTC I2C": {"reads": 1, "writes": 1}}
+    for k in range(POLL_LIMIT):  # a touch read now and then: no polling
+        adc.read(TOUCH_CTRL2, k * 0.001)
+    with pytest.raises(AdcUnsupported, match="the touch pads are not simulated") as info:
+        for _ in range(POLL_LIMIT):  # touch_pad_read waiting for MEAS_DONE
+            adc.read(TOUCH_CTRL2, 2.0)
+    assert info.value.what == "sens_polling" and adc.other["the touch pads"]["reads"] == 2 * POLL_LIMIT
+
+
+def test_not_emulated_counts_what_the_image_did_beyond_the_kept_blocks(tmp_path):
+    machine = eq.Machine("qemu-system-xtensa", "flash.bin", str(tmp_path))
+    rom = "esp32.i2s0: unimplemented device read  (size 4, offset 0x000)\n"  # before the image ran: the ROM's
+    (tmp_path / "qemu.log").write_text(rom + "esp32.rtcio: unimplemented device read  (size 4, offset 0x03c)\n"  # QEMU ran a crossed hit itself
+                                       "esp32.i2s0: unimplemented device write (size 4, offset 0x008)\n"
+                                       "esp32.gpio: unimplemented device read  (size 4, offset 0x03c)\n")
+    machine._log_spans = [[len(rom), None]]
+    machine.adc.other["the touch pads"] = {"reads": 3, "writes": 1}
+    assert machine.unimplemented() == {"esp32.i2s0": {"reads": 0, "writes": 1}, "esp32.sens (the touch pads)": {"reads": 3, "writes": 1}}
+
+
 def test_reset_scopes():
     g = eq.GpioState()
     g.write(ENABLE_W1TS, 1 << 2)
@@ -397,8 +484,8 @@ def netlist(boot_pullup=True, led=True, extra=()):
     for name, nodes in extra:
         nets.setdefault(name, []).extend(nodes)
         for ref, *_ in nodes:
-            if ref.startswith("R") and ref not in {c[0] for c in comps}:
-                comps.append((ref, "Device:R", "10k"))
+            if ref.startswith(("R", "C")) and ref not in {c[0] for c in comps}:
+                comps.append((ref, "Device:R", "10k") if ref.startswith("R") else (ref, "Device:C", "100n"))
     return {"components": [{"reference": r, "lib_id": lib, "value": v, "footprint": ""} for r, lib, v in comps],
             "nets": [{"name": name, "code": i + 1, "nodes": [{"ref": n[0], "pin": n[1], **({"pin_function": n[2]} if len(n) > 2 else {})} for n in nodes]}
                      for i, (name, nodes) in enumerate(nets.items())]}
@@ -442,6 +529,7 @@ class FakeMachine:
         self.strap, self.image = strap, image
         self.gpio = eq.GpioState()
         self.ledc = LedcState()
+        self.adc = AdcState()
         self.t = 0.0
         self.skipped = 0.0
         self.uart_seen = 0
@@ -476,6 +564,9 @@ class FakeMachine:
                 channels = self.ledc.write(rest[0], rest[1], 4, self.t)
                 if channels:
                     handler.on_ledc(self.t, channels)
+            elif kind == "write" and SENS_BASE <= rest[0] < SENS_BASE + 0x100:
+                at = self.t
+                self.adc.write(rest[0], rest[1], 4, at, lambda gpio: handler.adc_volts(at, gpio))
             elif kind == "write":
                 changed = self.gpio.write(rest[0], rest[1])
                 if changed:
@@ -484,7 +575,9 @@ class FakeMachine:
                 reply = handler.gpio_in(self.t, rest[0])
                 self.reads.append((self.t, reply))
             elif kind == "load":  # any other register of the watched blocks, as Machine answers it
-                reply = self.ledc.read(rest[0], self.t) if LEDC_BASE <= rest[0] < LEDC_BASE + 0x200 else self.gpio.read(rest[0])
+                reg = rest[0]
+                reply = (self.ledc.read(reg, self.t) if LEDC_BASE <= reg < LEDC_BASE + 0x200 else
+                         self.adc.read(reg, self.t) if SENS_BASE <= reg < SENS_BASE + 0x100 else self.gpio.read(reg))
                 self.reads.append((self.t, reply))
             elif kind == "uart":
                 self.uart_seen += len(rest[0])
@@ -631,6 +724,64 @@ def test_an_ledc_channel_dims_the_led(fake):
     assert [e["pwm"]["GPIO2"]["duty"] for e in result["timeline"] if "GPIO2" in e["pwm"]] == [0.25, 0.251, pytest.approx(1.0, abs=0.005)]
     stopped = fake(ledc_firmware(pause_at=1.92), duration="2s")
     assert stopped["aborted"]["what"] == "ledc_stopped" and "paused" in stopped["aborted"]["reason"]
+
+
+SENSE = [("/SENSE", [("U1", "6", "IO34"), ("R4", "2"), ("R5", "1")]), ("+3V3", [("R4", "1")]), ("GND", [("R5", "2")])]  # GPIO34 at 1.65 V
+SENSE_STIMULI = [{"at": "1s", "drive": "SENSE", "level": "2.5", "name": "up"}, {"at": "1.5s", "drive": "SENSE", "level": "release", "name": "down"}]
+
+
+def adc_firmware(unit=1, channel=6, period=0.01, led=True, pwm=False):
+    """ADC``unit`` channel ``channel`` (12 dB, 12 bits) converted every ``period`` from 0.3 s; the LED on GPIO2 shows whether the
+    reading is above 2048 (``led``), or is LEDC's 25 % (``pwm``)."""
+    ctrl, start = (READ_CTRL, MEAS_START1) if unit == 1 else (READ_CTRL2, MEAS_START2)
+
+    def program(end):
+        yield from led_on_gpio2()
+        if pwm:
+            yield ("write", 0.3, HS_TIMER0, 10 | 20000 << 5 | 1 << 25)
+            yield ("write", 0.3, ch(0, 8), 256 << 4)
+            yield ("write", 0.3, ch(0, 0xC), conf1())
+            yield ("write", 0.3, ch(0, 0), 1 << 2)
+            yield ("write", 0.3, G + 0x530 + 8, 71)
+        yield ("write", 0.3, ctrl, 3 << 16 | 1 << (28 if unit == 1 else 29))  # 12 bits, the output as ESP-IDF sets it
+        k = 0
+        while True:
+            t = 0.3021 + k * period
+            k += 1
+            yield ("write", t, start, RTC_CONTROL | 1 << (19 + channel))
+            yield ("write", t, start, RTC_CONTROL | 1 << (19 + channel) | START_SAR)
+            word = yield ("load", t, start)
+            if led:
+                yield ("write", t, W1TS if word & 0xFFFF > 2048 else W1TC, 1 << 2)
+    return program
+
+
+def test_the_adc_reads_what_the_board_puts_on_the_pad(fake):
+    result = fake(adc_firmware(), net=netlist(extra=SENSE), stimuli=SENSE_STIMULI, assertions=[
+        {"led": "D1", "is": "off", "at": "0.9s"}, {"led": "D1", "is": "on", "after": "up", "within": "15ms"},
+        {"led": "D1", "is": "off", "after": "down", "within": "15ms"}, {"net": "SENSE", "min": 1.6, "max": 1.7, "at": "0.5s"}])
+    assert verdicts(result) == [True] * 4, result["assertions"]
+    # listed: the first conversion and those whose reading changed; all are counted
+    assert [(round(c["t"], 4), c["gpio"], c["adc"], c["volts"], c["atten_db"], c["reading"], c["calibrated_mv"]) for c in result["adc"]] == [
+        (0.3021, "GPIO34", "ADC1 channel 6", 1.65, 12, 1872, 1650), (1.0021, "GPIO34", "ADC1 channel 6", 2.5, 12, 2941, 2500),
+        (1.5021, "GPIO34", "ADC1 channel 6", 1.65, 12, 1872, 1650)]
+    assert result["adc_count"] == 170 and not [h for h in result["hazards"] if h["severity"] != "info"], result["hazards"]
+
+
+def test_an_adc_pad_that_floats_or_carries_pwm(fake):
+    floating = fake(adc_firmware(channel=0, led=False), duration="0.5s")  # GPIO36 is not on the board
+    hazard = next(h for h in floating["hazards"] if h["rule"] == "adc_floating")
+    assert hazard["pin"] == "GPIO36" and hazard["net"] == "not connected" and hazard["t"] == pytest.approx(0.3021)
+    assert (floating["adc"][0]["volts"], floating["adc"][0]["reading"]) == (None, 0)
+    # the LED's PWM wave measured on its own pad (ADC2 channel 2): the chip samples the level of an instant, not simulated
+    raw = fake(adc_firmware(unit=2, channel=2, led=False, pwm=True), duration="0.5s")
+    assert raw["aborted"]["what"] == "adc_pwm" and raw["aborted"]["t"] == pytest.approx(0.3021) and raw["passed"] is None
+    # through an RC filter (R9, C2) on GPIO34: the wave's average
+    rc = netlist(extra=[("/FILT", [("U1", "6", "IO34"), ("R9", "2"), ("C2", "1")]), ("/LED", [("R9", "1")]), ("GND", [("C2", "2")])])
+    filtered = fake(adc_firmware(led=False, pwm=True), net=rc, duration="0.5s", assertions=[{"net": "FILT", "min": 0.7, "max": 0.85, "at": "0.4s"}])
+    assert verdicts(filtered) == [True] and filtered["aborted"] is None, filtered["assertions"]
+    assert 0.7 < filtered["adc"][0]["volts"] < 0.85 and len(filtered["adc"]) == 1
+    assert next(h for h in filtered["hazards"] if h["rule"] == "adc_pwm_average")["pin"] == "GPIO34"
 
 
 def test_a_gpio_interrupt_latches_for_the_firmware_to_find(fake):
@@ -835,6 +986,18 @@ def test_ledc_pwm_and_its_fade_on_qemu():
     assert pwm[1][0] - pwm[0][0] == pytest.approx(0.301, abs=0.005) and pwm[2][0] - pwm[1][0] == pytest.approx(0.766, abs=0.002)
     off = next(e["t"] for e in result["timeline"] if e["t"] > pwm[2][0] and e["pins"]["GPIO2"] == "out-low")
     assert off - pwm[2][0] == pytest.approx(0.001, abs=0.003)  # the end interrupt (one period after the last step) turns it off
+
+
+@needs_qemu
+def test_adc_on_qemu():
+    # the program converts GPIO34 every 5 ms with the accesses ESP-IDF's adc_oneshot driver makes, lights the LED above reading 2048
+    # and prints each new reading; the divider gives 1.65 V, the drive 2.5 V for half a second
+    result = qemu_run("adc", net=netlist(extra=SENSE), stimuli=SENSE_STIMULI, duration="2s", assertions=[
+        {"led": "D1", "is": "off", "from": "0.3s", "to": "0.99s"}, {"led": "D1", "is": "on", "after": "up", "within": "10ms"},
+        {"led": "D1", "is": "off", "after": "down", "within": "10ms"}, {"uart": "adc 1872", "by": "0.5s"}, {"uart": "adc 2941", "by": "1.1s"}])
+    assert verdicts(result) == [True] * 5, (result["assertions"], result["aborted"])
+    assert [(c["reading"], c["calibrated_mv"]) for c in result["adc"]] == [(1872, 1650), (2941, 2500), (1872, 1650)]
+    assert result["adc_count"] > 300 and not result["not_emulated"], result["not_emulated"]
 
 
 @needs_qemu

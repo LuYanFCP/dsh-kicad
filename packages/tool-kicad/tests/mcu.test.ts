@@ -136,6 +136,21 @@ describe('formatFirmware', () => {
     expect(out).toContain('GPIO interrupts: 1000 ms GPIO0 falling edge; 1500 ms GPIO0 falling edge;')
     expect(out).toContain('4500 ms GPIO0 falling edge … 4 more.')
   })
+
+  it('lists the ADC conversions an ESP32 run made: the board voltage, the reading and its calibrated value', () => {
+    const out = formatFirmware(firmwareRun({
+      device: 'esp32', firmware: '/p/flash.bin', clock_hz: undefined, cycles: undefined, instructions: undefined, vcc: 3.3, duration: 2, simulated_to: 2,
+      eeprom: undefined, usi_transfers: undefined, passed: true, assertions: [], hazards: [], timeline: [], notes: [], scenario: undefined,
+      adc: [
+        { t: 0.3021, gpio: 'GPIO34', adc: 'ADC1 channel 6', volts: 1.65, atten_db: 12, bits: 12, reading: 1872, calibrated_mv: 1650 },
+        { t: 1.0021, gpio: 'GPIO34', adc: 'ADC1 channel 6', volts: 2.5, atten_db: 12, bits: 12, reading: 2941, calibrated_mv: 2500 },
+        { t: 1.2, gpio: 'GPIO36', adc: 'ADC1 channel 0', volts: null, atten_db: 0, bits: 12, reading: 0, calibrated_mv: 75 },
+      ],
+      adc_count: 170,
+    }))
+    expect(out).toContain('ADC conversions (170; the first per channel and each change): 302.1 ms GPIO34 (ADC1 channel 6, 12 dB) 1.65 V → 1872 (1650 mV);')
+    expect(out).toContain('1002 ms GPIO34 (ADC1 channel 6, 12 dB) 2.5 V → 2941 (2500 mV); 1200 ms GPIO36 (ADC1 channel 0, 0 dB) floating → 0 (75 mV).')
+  })
 })
 
 describe('kicad_simulate_firmware', () => {

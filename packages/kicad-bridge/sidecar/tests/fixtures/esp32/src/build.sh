@@ -9,7 +9,7 @@ ESPTOOL=${ESPTOOL:-esptool.py}
 CFLAGS=${CFLAGS:-"-mabi=call0 -Os -ffreestanding -fno-builtin -nostdlib -Wall"}
 out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT
-for prog in blink button hello interrupt pwm wdt; do
+for prog in adc blink button hello interrupt pwm wdt; do
     extra=
     case $prog in interrupt|pwm) extra=vectors.S ;; esac  # their own exception vectors and interrupt handler
     $CC $CFLAGS -T link.ld -Wl,--gc-sections -o "$out/$prog.elf" start.S $extra "$prog.c"

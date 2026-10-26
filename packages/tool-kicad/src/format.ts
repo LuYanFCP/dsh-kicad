@@ -216,6 +216,10 @@ export interface FirmwareRun {
   /** ESP32: the GPIO interrupts the board's edges and levels latched (the first ones), and how many in all. */
   interrupts?: Array<{ t: number, gpio: string, type: string }>
   interrupt_count?: number
+  /** ESP32: ADC conversions (each channel's first, then those whose reading changed), and how many in all. volts: the board's
+   *  voltage on the pad (null: it floated); reading: the converter's result; calibrated_mv: what ESP-IDF's calibration makes of it. */
+  adc?: Array<{ t: number, gpio: string, adc: string, volts: number | null, atten_db: number, bits: number, reading: number, calibrated_mv: number }>
+  adc_count?: number
   /** ESP32: hardware the firmware used that QEMU does not emulate. */
   not_emulated?: Record<string, { reads: number, writes: number, accesses?: number }>
   /** The scenario file this run read and/or wrote. */
@@ -470,6 +474,10 @@ export function formatFirmware(v: FirmwareRun): string {
   if (v.interrupts?.length) {
     const more = (v.interrupt_count ?? v.interrupts.length) - Math.min(v.interrupts.length, 8)
     lines.push(`GPIO interrupts: ${v.interrupts.slice(0, 8).map(i => `${ms(i.t)} ${i.gpio} ${i.type}`).join('; ')}${more > 0 ? ` … ${more} more` : ''}.`)
+  }
+  if (v.adc?.length) {
+    const shown = v.adc.slice(0, 8).map(c => `${ms(c.t)} ${c.gpio} (${c.adc}, ${c.atten_db} dB) ${c.volts === null ? 'floating' : `${round(c.volts)} V`} → ${c.reading} (${c.calibrated_mv} mV)`)
+    lines.push(`ADC conversions (${v.adc_count ?? v.adc.length}; the first per channel and each change): ${shown.join('; ')}${v.adc.length > 8 ? ` … ${v.adc.length - 8} more changes` : ''}.`)
   }
   if (v.strap?.download_mode) lines.push(`The strapping pins (GPIO_STRAP ${v.strap.value}) started the serial bootloader: the firmware did not run.`)
   if (v.uart?.trim()) {
