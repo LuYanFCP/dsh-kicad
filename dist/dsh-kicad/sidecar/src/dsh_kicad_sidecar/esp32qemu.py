@@ -9,6 +9,7 @@ IO_MUX and RTC_IO are not modelled at all. So the sidecar watches the chip from 
   and :class:`GpioState` mirrors the registers: output levels and enables, open drain, pulls, input enables, the GPIO
   matrix, interrupt setup. A load gets the mirrored value, so the read-modify-writes ESP-IDF configures pads with start
   from what the chip would hold, not from QEMU's 0; a load of GPIO_IN/GPIO_IN1 gets the levels the board gives the pins;
+- the LED PWM controller (LEDC) is watched and kept the same way (esp32ledc.py): a pad routed to a channel is a PWM wave;
 - the GPIO peripheral's interrupt is kept here too (QEMU's stub has no interrupt output): edges and levels the board
   gives the pins latch GPIO_STATUS, and the interrupt matrix's GPIO sources are driven through QEMU's qtest socket
   (``set_irq_in``), so the CPU takes the interrupt the firmware mapped, as the chip would;
@@ -48,6 +49,12 @@ import time
 import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Callable
+
+try:
+    from .esp32ledc import LEDC_BASE, LEDC_INT_SOURCE, LEDC_SIZE, SIGNALS as LEDC_SIGNALS, LedcState, LedcUnsupported, channel_name
+except ImportError:  # run as a script (python -I esp32qemu.py download: -I leaves this directory off sys.path)
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from esp32ledc import LEDC_BASE, LEDC_INT_SOURCE, LEDC_SIZE, SIGNALS as LEDC_SIGNALS, LedcState, LedcUnsupported, channel_name  # type: ignore[no-redef]
 
 __all__ = ["QemuError", "Unsupported", "Cancelled", "TimedOut", "Qemu", "locate", "probe", "data_dir", "RELEASE", "download",
            "download_command", "flash_image", "GpioState", "Pin", "Handler", "Machine", "MemInsn", "decode_mem", "strap_value",
@@ -555,6 +562,8 @@ class Pin:
     open_drain: bool
     drive_ohms: float
     interrupt: int           # GPIO_PINn.int_type (INT_TYPES; 0 none): what latches the pin's interrupt status
+    pwm: int | None = None   # the LEDC channel (group * 8 + channel) the GPIO matrix routes to the pad: its wave is the level
+    invert: bool = False     # the GPIO matrix inverts that output (OUT_INV_SEL)
 
     def label(self) -> str:
         if self.unknown:
@@ -791,6 +800,12 @@ class GpioState:
             signal = out_sel & 0x1FF
             if signal == 0x100:
                 function, oe, level = "gpio", self.out_enabled(gpio), self.out_level(gpio) ^ (out_sel >> 9 & 1)
+            elif signal in LEDC_SIGNALS:  # the LEDC's own output enable is always on (TRM, the GPIO matrix's signal table)
+                oe = (self.out_enabled(gpio) if out_sel >> 10 & 1 else True) != bool(out_sel >> 11 & 1)
+                common["input"] = bool(io & FUN_IE)
+                driven = oe and gpio < 34
+                return Pin(function=channel_name(LEDC_SIGNALS[signal]), driven=driven, level=0, unknown=False, pwm=LEDC_SIGNALS[signal],
+                           invert=bool(out_sel >> 9 & 1), **common)
             else:
                 function = SIGNALS.get(signal, f"peripheral signal {signal}")
                 oe = self.out_enabled(gpio) if out_sel >> 10 & 1 else None
@@ -1016,6 +1031,7 @@ WATCHES = (
     ("4", GPIO_BASE, 0x5D0),      # GPIO: outputs, output enables, GPIO_IN, pin config, the GPIO matrix
     ("4", IO_MUX_BASE, 0x94),     # IO_MUX: function, pulls, input enable, drive
     ("4", RTCIO_BASE, 0x100),     # RTC_IO: the RTC pads' pulls and RTC functions, RTC_GPIO_IN (not simulated)
+    ("4", LEDC_BASE, LEDC_SIZE),  # the LED PWM controller (QEMU keeps few of its registers: no duty readback, fades, interrupts)
 )
 RESET_CAUSES = {1: "power-on", 3: "software", 4: "watchdog", 5: "deep-sleep", 7: "watchdog", 8: "watchdog", 9: "watchdog",
                 11: "watchdog", 12: "software", 13: "watchdog", 14: "external", 15: "brownout", 16: "watchdog"}
@@ -1047,6 +1063,9 @@ class Handler:
         """The time of the next stimulus, by which the machine looks at the clock again (EN must hold the chip from that moment)."""
         return None
 
+    def on_ledc(self, t: float, channels: set[int]) -> None:
+        """The firmware changed these LEDC channels (or a fade on them ended): the pads they drive change."""
+
 
 class Machine:
     """One QEMU process running a flash image, stopped at every access to the pins' registers."""
@@ -1067,6 +1086,7 @@ class Machine:
         # interrupt sources this machine raised, with the CPU interrupts the matrix mapped them to then (pro, app)
         self._raised: dict[int, tuple[int, int]] = {}
         self.gpio = GpioState()
+        self.ledc = LedcState()
         self.uart_path = os.path.join(workdir, "uart0.log")
         self.log_path = os.path.join(workdir, "qemu.log")
         self.err_path = os.path.join(workdir, "qemu.err")
@@ -1256,6 +1276,10 @@ class Machine:
         data = self.write32_device(RTC_CNTL_TIME_UPDATE, 1 << 31, then_read=(RTC_CNTL_TIME0, 8))
         return int.from_bytes(data[:4], "little") | (int.from_bytes(data[4:8], "little") & 0xFFFF) << 32
 
+    def apb_hz(self) -> float:
+        """APB_CLK: 80 MHz with the PLL, else the CPU clock (XTAL or RC_FAST, divided)."""
+        return 80e6 if self.read32(RTC_CNTL_CLK_CONF) >> 27 & 3 == 1 else self.cpu_hz()
+
     def cpu_hz(self) -> float:
         """The CPU clock as the firmware configured it (the rate of CCOUNT)."""
         source = self.read32(RTC_CNTL_CLK_CONF) >> 27 & 3
@@ -1349,8 +1373,8 @@ class Machine:
                 raise Cancelled("the firmware simulation was cancelled")
             if time.monotonic() > deadline:
                 raise TimedOut(f"reached {self.t * 1000:.1f} ms of {end * 1000:g} ms")
-            due = handler.next_due()
-            due = end if due is None else min(due, end)
+            due = min((d for d in (handler.next_due(), self.ledc.next_event()) if d is not None), default=end)
+            due = min(due, end)
             wait = min(TICK_S, max(TICK_MIN_S, due - self.t))  # idle time passes at the wall clock's pace, busy time near it
             stop = self._resume(min(wait, FROZEN_S) if frozen_since is not None else wait)
             if stop.get("exited"):
@@ -1369,16 +1393,18 @@ class Machine:
             release = handler.reset_request()
             if release is not None:
                 self._reset_chip(release)
+            self._ledc_events(handler)
             self._sync_interrupts()
             if stop["watch"] is None and stop["signal"] != 5:
-                due = handler.next_due()
+                due = min((d for d in (handler.next_due(), self.ledc.next_event()) if d is not None), default=None)
                 if self.t - before > CREEP_S:
                     frozen_since = None
                 elif frozen_since is None:
                     frozen_since = time.monotonic()
                 elif self._asleep and due is not None and due < end and time.monotonic() - frozen_since >= FROZEN_S:
-                    self._skip_idle(due)  # nothing timed inside QEMU: only the stimulus can wake the chip
+                    self._skip_idle(due)  # nothing timed inside QEMU: only the stimulus (or a fade's end) can wake the chip
                     handler.on_tick(self.t)
+                    self._ledc_events(handler)
                     self._sync_interrupts()
                     frozen_since = None
                 elif time.monotonic() - frozen_since >= STALL_S:
@@ -1395,7 +1421,9 @@ class Machine:
         if self.qtest is None:
             return
         lines = self.gpio.interrupt_lines()
-        for source, pro, app in ((GPIO_INT_SOURCE, lines["pro"], lines["app"]), (GPIO_NMI_SOURCE, lines["pro_nmi"], lines["app_nmi"])):
+        ledc = self.ledc.interrupt()
+        for source, pro, app in ((GPIO_INT_SOURCE, lines["pro"], lines["app"]), (GPIO_NMI_SOURCE, lines["pro_nmi"], lines["app_nmi"]),
+                                 (LEDC_INT_SOURCE, ledc, ledc)):
             raised = self._raised.get(source)
             if not (pro or app or raised):
                 continue
@@ -1407,6 +1435,12 @@ class Machine:
             if want and raised is None:
                 self.qtest.set_source(source, 1)
                 self._raised[source] = maps
+
+    def _ledc_events(self, handler: Handler) -> None:
+        """Fades that ended by now raise DUTY_CHNG_END, and the pads they drive take the final duty."""
+        ended = self.ledc.advance(self.t)
+        if ended:
+            handler.on_ledc(self.t, ended)
 
     def _lower(self, source: int, raised: tuple[int, int], now: tuple[int, int]) -> None:
         """Lower a source on the CPU interrupts it was raised on: if the firmware mapped it elsewhere since, the old mapping is
@@ -1490,6 +1524,7 @@ class Machine:
         value = before.a(insn.reg) & ((1 << (8 * insn.width)) - 1)
         t = self.now(thread, regs, running=True)
         handler.on_tick(t)  # the stimuli due by now happen first: an access sees the board (and the interrupt status) as it is then
+        self._ledc_events(handler)  # and so do the LEDC events (a fade that ended raised DUTY_CHNG_END before this access clears it)
         assert self.gdb is not None
         # QEMU's GPIO ignores stores and reads as 0, IO_MUX and RTC_IO are not modelled: the access is done here and the CPU goes on
         # after it without executing it (no single step, no removing and inserting the watchpoint: half the round trips)
@@ -1501,6 +1536,8 @@ class Machine:
                 word = handler.gpio_in(t, 0 if reg == GPIO_IN else 1)
             elif reg == GPIO_STRAP:
                 word = self.strap
+            elif LEDC_BASE <= reg < LEDC_BASE + LEDC_SIZE:
+                word = self.ledc.read(reg, t)
             else:
                 word = self.gpio.read(reg)
             loaded = (word >> ((addr & 3) * 8)) & ((1 << (8 * insn.width)) - 1)
@@ -1512,6 +1549,16 @@ class Machine:
         else:
             if not done:
                 self._skip(regs, insn)
+            if LEDC_BASE <= addr < LEDC_BASE + LEDC_SIZE:
+                if 0x140 <= (addr & ~3) - LEDC_BASE < 0x180 or (addr & ~3) - LEDC_BASE == 0x190:
+                    self.ledc.apb_hz = self.apb_hz()  # a timer's clock: APB_CLK follows the CPU clock setup
+                try:
+                    channels = self.ledc.write(addr, value, insn.width, t)
+                except LedcUnsupported as exc:
+                    raise Unsupported(exc.what, exc.detail, t) from None
+                if channels:
+                    handler.on_ledc(t, channels)
+                return
             changed = self.gpio.write(addr, value, insn.width)
             if changed:
                 handler.on_gpio(t, changed)
@@ -1593,6 +1640,8 @@ class Machine:
             self.app_cpu_started = False
             self._raised.clear()  # the CPUs' pending interrupts start over: what is still due is raised again
             self.gpio.reset(scope)
+            if scope != "cpu":
+                self.ledc.reset()
             self.resets.append((t, cause))
             handler.on_reset(t, cause, scope)
         self._step_over(thread, RESET_VECTOR)
@@ -1620,6 +1669,7 @@ class Machine:
         self._pending_reset = "external"
         self._raised.clear()
         self.gpio.reset("power-on")
+        self.ledc.reset()
 
     def _uart(self, handler: Handler) -> None:
         try:

@@ -9,6 +9,7 @@ import threading
 import pytest
 
 from dsh_kicad_sidecar import esp32qemu as eq
+from dsh_kicad_sidecar.esp32ledc import LEDC_BASE, LedcState, LedcUnsupported
 from dsh_kicad_sidecar import esp32sim, mcu
 from dsh_kicad_sidecar.spice import SimulationError
 from dsh_kicad_sidecar.tools import Toolbox
@@ -130,10 +131,12 @@ def test_outputs_open_drain_and_the_gpio_matrix():
     assert not g.pin(2).driven and g.pin(2).label().startswith("od-released")
     g.write(W1TC, 1 << 2)
     assert g.pin(2).driven and g.pin(2).label() == "od-low"
-    g.write(G + 0x530 + 4 * 4, 71)  # GPIO4 ← LEDC high-speed channel 0, its own output enable
-    assert g.pin(4).unknown and "LEDC" in g.pin(4).function
-    g.write(G + 0x530 + 4 * 4, 71 | (1 << 10))  # output enable from GPIO_ENABLE, which is off
-    assert not g.pin(4).unknown and not g.pin(4).driven
+    g.write(G + 0x530 + 4 * 4, 71 | (1 << 9))  # GPIO4 ← LEDC high-speed channel 0 (inverted): its output enable is always on
+    assert g.pin(4).driven and g.pin(4).pwm == 0 and g.pin(4).invert and not g.pin(4).unknown and g.pin(4).function == "LEDC high-speed channel 0"
+    g.write(G + 0x530 + 4 * 4, 79 + 3 | (1 << 10))  # low-speed channel 3, output enable from GPIO_ENABLE, which is off
+    assert g.pin(4).pwm == 11 and not g.pin(4).driven
+    g.write(G + 0x530 + 4 * 4, 29)  # I2C0 SCL: the peripheral's own output enable, not simulated
+    assert g.pin(4).unknown and "I2C0" in g.pin(4).function
     g.write(G + 0x30, 1 << 1)  # ENABLE1_W1TS: GPIO33
     g.write(G + 0x14, 1 << 1)  # OUT1_W1TS
     assert g.pin(33).driven and g.pin(33).level == 1
@@ -213,6 +216,77 @@ def test_the_gpio_interrupt_status_and_what_each_cpu_sees():
     assert g.read(G + 0x68) == 0
     g.reset("system")
     assert g.status == 0 and g.read(G + 0x60) == 0
+
+
+L = LEDC_BASE
+HS_TIMER0, LS_TIMER0, LEDC_INT_RAW, LEDC_INT_ENA, LEDC_INT_CLR, LEDC_CONF = L + 0x140, L + 0x160, L + 0x180, L + 0x188, L + 0x18C, L + 0x190
+
+
+def ch(index, field):
+    """A register of LEDC channel ``index`` (0-7 high speed, 8-15 low speed): field 0 CONF0, 4 HPOINT, 8 DUTY, 0xC CONF1, 0x10 DUTY_R."""
+    return L + (0 if index < 8 else 0xA0) + 0x14 * (index % 8) + field
+
+
+def conf1(num=1, cycle=1, scale=0, up=True):
+    """CONF1 with DUTY_START: ``num`` steps of ``scale`` every ``cycle`` periods (the defaults: a plain duty change)."""
+    return 1 << 31 | int(up) << 30 | num << 20 | cycle << 10 | scale
+
+
+def test_the_ledc_timers_channels_and_fades():
+    led = LedcState()
+    led.write(ch(0, 0), 1 << 2, 4, 0.0)  # high-speed channel 0 on timer 0, output on
+    assert led.wave(0, 0.0)[0] == "unknown" and "held in reset" in led.why_unknown(0)  # timers come out of reset held in reset
+    led.write(HS_TIMER0, 13 | 256 << 5 | 1 << 25, 4, 0.0)  # 13 bits, divider 1, APB_CLK
+    led.write(ch(0, 8), 2048 << 4, 4, 0.0)
+    assert led.wave(0, 0.1) == ("level", 0, 0.0)  # DUTY waits for DUTY_START
+    led.write(ch(0, 0xC), conf1(), 4, 0.1)
+    assert led.wave(0, 0.2) == ("pwm", 0.25, 80e6 / 8192) and not led.read(ch(0, 0xC), 0.2) >> 31  # DUTY_START clears itself
+    led.write(ch(0, 8), 2048 << 4 | 8, 4, 0.3)
+    led.write(ch(0, 0xC), conf1(), 4, 0.3)
+    assert led.wave(0, 0.4)[1] == pytest.approx(2048.5 / 8192)  # DUTY[3:0] dithers: half a count more on average
+    led.write(ch(0, 4), 7000, 4, 0.5)
+    led.write(ch(0, 0xC), conf1(), 4, 0.5)
+    assert led.wave(0, 0.6) == ("level", 1, 0.0)  # HPOINT + DUTY beyond the counter: high for good
+    led.write(ch(0, 0), 1 << 3, 4, 0.7)
+    assert led.wave(0, 0.7) == ("level", 1, 0.0)  # SIG_OUT_EN off: IDLE_LV
+    led.write(HS_TIMER0, 10 | 256 << 5, 4, 0.8)
+    assert led.period(0) == pytest.approx(1024 / 1e6)  # REF_TICK
+    # a low-speed timer and channel take their settings on PARA_UP; their SLOW_CLK is RC_FAST or APB_CLK
+    led.write(LS_TIMER0, 10 | 256 << 5 | 1 << 25, 4, 1.0)
+    assert led.period(4) is None
+    led.write(LS_TIMER0, 10 | 256 << 5 | 1 << 25 | 1 << 26, 4, 1.0)
+    assert led.period(4) == pytest.approx(1024 / 8e6) and not led.read(LS_TIMER0, 1.0) >> 26 & 1
+    led.write(LEDC_CONF, 1, 4, 1.0)
+    assert led.period(4) == pytest.approx(1024 / 80e6)
+    led.write(ch(8, 8), 512 << 4, 4, 1.0)
+    led.write(ch(8, 0xC), conf1(), 4, 1.0)
+    led.write(ch(8, 0), 1 << 2, 4, 1.0)
+    assert led.wave(8, 1.1) == ("level", 0, 0.0)
+    led.write(ch(8, 0), 1 << 2 | 1 << 4, 4, 1.1)  # PARA_UP
+    assert led.wave(8, 1.2) == ("pwm", 0.5, 80e6 / 1024) and not led.read(ch(8, 0), 1.2) >> 4 & 1
+    # a fade: +1 each period at 1 kHz, 500 times; its end raises DUTY_CHNG_END
+    led.write(HS_TIMER0, 10 | 20000 << 5 | 1 << 25, 4, 2.0)  # 80 MHz / 78.125 / 2**10 = 1 kHz
+    led.write(ch(0, 0), 1 << 2, 4, 2.0)
+    led.write(ch(0, 4), 0, 4, 2.0)
+    led.write(ch(0, 8), 100 << 4, 4, 2.0)
+    led.advance(2.0)
+    led.write(LEDC_INT_CLR, 0xFFFFFF, 4, 2.0)
+    led.write(LEDC_INT_ENA, 1 << 8, 4, 2.0)
+    led.write(ch(0, 0xC), conf1(num=500, scale=1), 4, 2.0)
+    assert led.read(ch(0, 0x10), 2.25) >> 4 == 350 and led.wave(0, 2.25)[1] == pytest.approx(350 / 1024)  # DUTY_R follows the fade
+    assert led.next_event() == pytest.approx(2.5) and not led.interrupt()
+    assert led.change_points(0, 2.0, 2.002) == [pytest.approx(2.001), pytest.approx(2.002)] and len(led.change_points(0, 2.0, 2.5)) <= 201
+    assert led.advance(2.49) == set() and led.advance(2.5) == {0}
+    assert led.read(LEDC_INT_RAW, 2.5) == 1 << 8 and led.interrupt() and led.read(L + 0x184, 2.5) == 1 << 8 and led.next_event() is None
+    assert led.read(ch(0, 0x10), 3.0) >> 4 == 600
+    led.write(LEDC_INT_CLR, 1 << 8, 4, 2.6)
+    assert not led.interrupt()
+    with pytest.raises(LedcUnsupported):
+        led.write(LEDC_INT_ENA, 1, 4, 2.7)  # a timer-overflow interrupt: every period
+    led.write(HS_TIMER0, 10 | 20000 << 5 | 1 << 25 | 1 << 23, 4, 3.0)
+    assert led.wave(0, 3.1)[0] == "unknown" and "paused" in led.why_unknown(0)
+    led.reset()
+    assert led.wave(0, 0.0) == ("level", 0, 0.0) and led.read(L + 0x1FC, 0.0) == 0x16031700
 
 
 def test_reset_scopes():
@@ -367,6 +441,7 @@ class FakeMachine:
     def __init__(self, qemu, image, workdir, strap=eq.STRAP_FLASH_BOOT, **kw):
         self.strap, self.image = strap, image
         self.gpio = eq.GpioState()
+        self.ledc = LedcState()
         self.t = 0.0
         self.skipped = 0.0
         self.uart_seen = 0
@@ -392,17 +467,24 @@ class FakeMachine:
                 self.t = max(self.t, t)
                 return
             self.t = max(self.t, t)
+            ended = self.ledc.advance(self.t)
+            if ended:
+                handler.on_ledc(self.t, ended)
             if kind in ("write", "load"):
                 handler.on_tick(self.t)  # as Machine does: the stimuli due by now come first
-            if kind == "write":
+            if kind == "write" and LEDC_BASE <= rest[0] < LEDC_BASE + 0x200:
+                channels = self.ledc.write(rest[0], rest[1], 4, self.t)
+                if channels:
+                    handler.on_ledc(self.t, channels)
+            elif kind == "write":
                 changed = self.gpio.write(rest[0], rest[1])
                 if changed:
                     handler.on_gpio(self.t, changed)
             elif kind == "read":
                 reply = handler.gpio_in(self.t, rest[0])
                 self.reads.append((self.t, reply))
-            elif kind == "load":  # any other register of the pins' blocks, as Machine answers it
-                reply = self.gpio.read(rest[0])
+            elif kind == "load":  # any other register of the watched blocks, as Machine answers it
+                reply = self.ledc.read(rest[0], self.t) if LEDC_BASE <= rest[0] < LEDC_BASE + 0x200 else self.gpio.read(rest[0])
                 self.reads.append((self.t, reply))
             elif kind == "uart":
                 self.uart_seen += len(rest[0])
@@ -510,11 +592,45 @@ def test_en_holds_the_chip_in_reset_until_released(fake):
 def test_a_peripheral_driving_a_board_pin_stops_the_run(fake):
     def program(end):
         yield from led_on_gpio2()
-        yield ("write", 0.5, G + 0x530 + 8, 71)  # GPIO2 ← LEDC
+        yield ("write", 0.5, G + 0x530 + 8, 87)  # GPIO2 ← RMT channel 0
         yield ("write", 1.9, W1TS, 1 << 2)
     result = fake(program, assertions=[{"led": "D1", "is": "off", "at": "0.4s"}, {"led": "D1", "is": "on", "at": "1s"}])
     assert result["aborted"]["what"] == "peripheral_output" and result["aborted"]["t"] == pytest.approx(0.5)
-    assert "LEDC" in result["aborted"]["reason"] and verdicts(result) == [True, None] and result["passed"] is None
+    assert "RMT" in result["aborted"]["reason"] and verdicts(result) == [True, None] and result["passed"] is None
+
+
+def ledc_firmware(pause_at=None):
+    """GPIO2 (the LED) on LEDC high-speed channel 0, timer 0 at 1 kHz, 25 %; at 1 s a hardware fade by +1 each period, 768 times
+    (to 100 %), with its end interrupt enabled."""
+    def program(end):
+        yield from led_on_gpio2()
+        yield ("write", 0.3, HS_TIMER0, 10 | 20000 << 5 | 1 << 25)
+        yield ("write", 0.3, ch(0, 8), 256 << 4)
+        yield ("write", 0.3, ch(0, 0xC), conf1())
+        yield ("write", 0.3, ch(0, 0), 1 << 2)
+        yield ("write", 0.3, G + 0x530 + 8, 71)
+        yield ("write", 1.0, LEDC_INT_CLR, 0xFFFFFF)
+        yield ("write", 1.0, LEDC_INT_ENA, 1 << 8)
+        yield ("write", 1.0, ch(0, 0xC), conf1(num=768, scale=1))
+        yield ("load", 1.9, LEDC_INT_RAW)
+        if pause_at:
+            yield ("write", pause_at, HS_TIMER0, 10 | 20000 << 5 | 1 << 25 | 1 << 23)
+        yield ("read", 1.95, 0)
+    return program
+
+
+def test_an_ledc_channel_dims_the_led(fake):
+    result = fake(ledc_firmware(), duration="2s", assertions=[
+        {"pin": "GPIO2", "duty": 0.25, "at": "0.5s"}, {"pin": "GPIO2", "freq": 1000, "tol_pct": 1, "at": "0.5s"},
+        {"led": "D1", "min": 0.2, "max": 0.3, "at": "0.5s"}, {"led": "D1", "min": 0.45, "max": 0.55, "at": "1.25s"},
+        {"pin": "GPIO2", "level": "high", "at": "1.9s"}, {"led": "D1", "is": "on", "at": "1.9s"}])
+    assert verdicts(result) == [True] * 6, result["assertions"]
+    assert FakeMachine.instances[0].reads[0][1] == 1 << 8  # DUTY_CHNG_END_HSCH0 after the fade
+    # reported: 25 %, then the fade by its first and last step, then high for good at 100 %
+    assert [e["pins"]["GPIO2"] for e in result["timeline"]][1:] == ["pwm 25% at 1000 Hz"] * 2 + ["pwm 100% at 1000 Hz", "out-high"]
+    assert [e["pwm"]["GPIO2"]["duty"] for e in result["timeline"] if "GPIO2" in e["pwm"]] == [0.25, 0.251, pytest.approx(1.0, abs=0.005)]
+    stopped = fake(ledc_firmware(pause_at=1.92), duration="2s")
+    assert stopped["aborted"]["what"] == "ledc_stopped" and "paused" in stopped["aborted"]["reason"]
 
 
 def test_a_gpio_interrupt_latches_for_the_firmware_to_find(fake):
@@ -563,8 +679,6 @@ def test_bad_arguments_name_the_fix(fake):
         fake(program, clock_hz=1_000_000)
     with pytest.raises(SimulationError, match="eeprom and usi assertions are for the ATtiny"):
         fake(program, assertions=[{"eeprom": 0, "is": 1, "at": "1s"}])
-    with pytest.raises(SimulationError, match="LEDC is not simulated"):
-        fake(program, assertions=[{"pin": "GPIO2", "duty": 0.5, "at": "1s"}])
     with pytest.raises(SimulationError, match="give exactly one of press, release, toggle, drive"):
         fake(program, stimuli=[{"at": "1s", "temperature": 85}])
     with pytest.raises(SimulationError, match="use GPIO0-GPIO39"):
@@ -704,6 +818,23 @@ def test_gpio_interrupt_on_qemu():
     assert verdicts(untimed) == [True] * 5, (untimed["assertions"], untimed["aborted"])
     assert untimed["aborted"]["what"] == "stall" and untimed["aborted"]["t"] == pytest.approx(2.5, abs=0.01)
     assert any("stood still" in n for n in untimed["notes"])
+
+
+@needs_qemu
+def test_ledc_pwm_and_its_fade_on_qemu():
+    # the program dims the LED with a low-speed LEDC channel (25 % at 1 kHz) at about 0.17 s, 300 ms later fades it to 100 % in
+    # 768 ms (+1 each period), and turns it off when the fade's end interrupt arrives
+    result = qemu_run("pwm", duration="2s", assertions=[
+        {"pin": "GPIO2", "duty": 0.25, "tol": 0.01, "at": "0.4s"}, {"pin": "GPIO2", "freq": 1000, "tol_pct": 1, "at": "0.4s"},
+        {"led": "D1", "min": 0.2, "max": 0.3, "at": "0.4s"}, {"led": "D1", "min": 0.6, "max": 0.66, "at": "0.86s"},
+        {"led": "D1", "min": 0.93, "max": 0.99, "at": "1.2s"}, {"led": "D1", "is": "off", "from": "1.3s", "to": "2s"}])
+    assert verdicts(result) == [True] * 6, (result["assertions"], result["aborted"])
+    # the reported timeline shows a fade by its first and last step
+    pwm = [(e["t"], e["pwm"]["GPIO2"]["duty"]) for e in result["timeline"] if "GPIO2" in e["pwm"]]
+    assert [d for _, d in pwm] == [0.25, 0.251, pytest.approx(1.0, abs=0.005)], pwm
+    assert pwm[1][0] - pwm[0][0] == pytest.approx(0.301, abs=0.005) and pwm[2][0] - pwm[1][0] == pytest.approx(0.766, abs=0.002)
+    off = next(e["t"] for e in result["timeline"] if e["t"] > pwm[2][0] and e["pins"]["GPIO2"] == "out-low")
+    assert off - pwm[2][0] == pytest.approx(0.001, abs=0.003)  # the end interrupt (one period after the last step) turns it off
 
 
 @needs_qemu

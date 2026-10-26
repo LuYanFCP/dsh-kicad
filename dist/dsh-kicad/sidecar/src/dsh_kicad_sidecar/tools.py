@@ -235,7 +235,8 @@ TOOL_SPECS: list[ToolSpec] = [
              "run with the reason and the assertions after that point are cannot-verify, never passed. Classic ESP32 (WROOM/WROVER modules, PICO): the flash "
              "image runs on Espressif's QEMU (kicad_doctor says how to install it) with the ROM, bootloader and FreeRTOS; the pins (outputs, open drain, pulls, "
              "inputs, the GPIO matrix), the strapping pins at reset (GPIO0 low really enters download mode), EN, resets and the UART0 output are simulated; "
-             "GPIO interrupts reach the firmware's handlers; a pad on the board driven by a peripheral (LEDC, I2C, SPI, ...), a crash or a firmware waiting for hardware "
+             "GPIO interrupts reach the firmware's handlers and LEDC channels drive pads with their PWM (duty, frequency, fades); a pad on the board driven by another "
+             "peripheral (I2C, SPI, RMT, ...), a crash or a firmware waiting for hardware "
              "QEMU lacks stops the run (cannot-verify after it), and hardware QEMU does not emulate is listed. The board is a DC resistor network with switches, the "
              "chip's pin drivers and pull-ups; LEDs report whether they would light; other parts are open circuits and are listed. Also reports hazards: a "
              "floating input read, an output fighting a switch (overcurrent). Firmware built by the user: ATtiny .hex or .elf (its .eeprom section is loaded); "
@@ -251,7 +252,7 @@ TOOL_SPECS: list[ToolSpec] = [
                        "{at, temperature: 85} (the chip's temperature sensor, °C). name lets an assertion refer to that moment. A switch on the RESET pin resets the chip.")},
                    "assertions": {"type": "array", "items": {"type": "object"}, "description": (
                        "What must hold: subject {led: 'D2', is: on|off} | {led, min?, max?} (brightness 0-1) | {pin: 'PB4' (ESP32: 'GPIO2'), level: high|low} | "
-                       "{pin: 'PB0', duty: 0.25, tol?} | {pin, freq: 490, tol_pct?} (an ATtiny PWM pin) | {net: 'NAME', level: high|low} | {net, min?, max?} (volts; the "
+                       "{pin: 'PB0', duty: 0.25, tol?} | {pin, freq: 490, tol_pct?} (a PWM pin: ATtiny timers, ESP32 LEDC) | {net: 'NAME', level: high|low} | {net, min?, max?} (volts; the "
                        "average on a PWM net); when {at: '40ms'} | {after: 'press', within: '20ms'} (holds at some moment) | {from: '50ms', to: '150ms'} (holds throughout). "
                        "Logged events: {reset: any|external|watchdog (ESP32 also power-on|software|deep-sleep|brownout), after, within} | {resets: N | {min, max}, at} | "
                        "{eeprom: 0, is: 42, at} | {usi: tx|rx, nth: 1, is: 165, by} (ATtiny) | {uart: 'text', is?: present|absent, by?} (ESP32 UART0 output). "

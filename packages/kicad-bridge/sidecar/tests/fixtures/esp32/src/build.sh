@@ -9,9 +9,9 @@ ESPTOOL=${ESPTOOL:-esptool.py}
 CFLAGS=${CFLAGS:-"-mabi=call0 -Os -ffreestanding -fno-builtin -nostdlib -Wall"}
 out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT
-for prog in blink button hello interrupt wdt; do
+for prog in blink button hello interrupt pwm wdt; do
     extra=
-    [ "$prog" = interrupt ] && extra=vectors.S  # its own exception vectors and interrupt handler
+    case $prog in interrupt|pwm) extra=vectors.S ;; esac  # their own exception vectors and interrupt handler
     $CC $CFLAGS -T link.ld -Wl,--gc-sections -o "$out/$prog.elf" start.S $extra "$prog.c"
     $ESPTOOL --chip esp32 elf2image --flash_mode dio --flash_freq 40m --flash_size 4MB -o "$out/$prog.app.bin" "$out/$prog.elf"
     $ESPTOOL --chip esp32 merge_bin -o "../$prog.bin" 0x1000 "$out/$prog.app.bin"

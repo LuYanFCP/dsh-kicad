@@ -4,8 +4,10 @@ across them, an input reads whatever the network makes of its pin. Scenarios, as
 ones; the verdict on every assertion comes from this simulation, never from the model.
 
 The chip side: outputs, output enables, open drain, internal pull-ups and pull-downs and input enables come from the
-registers the firmware writes; a pad routed to a peripheral output (LEDC, I2C, SPI, RMT, ...) has a level this simulator
-does not know, so a run where that pad is on the board stops there and what follows is cannot-verify. So does a firmware
+registers the firmware writes. A pad routed to an LEDC channel carries that channel's PWM wave (esp32ledc.py): the board is
+solved for each combination of the PWM pads' levels, weighted by their duty cycles, as for the ATtiny's timers. A pad routed
+to another peripheral output (I2C, SPI, RMT, ...) has a level this simulator does not know, so a run where that pad is on the
+board stops there and what follows is cannot-verify. So does a firmware
 crash, or a firmware waiting for something that never comes. A GPIO interrupt the firmware enabled latches when the board
 gives its pin the edge or level, and the machine raises it in QEMU's interrupt matrix, so the firmware's handler runs. The boot strapping pins are sampled from the board at power-on and given to QEMU, so a board that holds GPIO0
 low really starts the serial bootloader.
@@ -21,6 +23,7 @@ import time
 from typing import Any, Callable
 
 from . import esp32qemu as eq
+from .esp32ledc import LedcState
 from .mcu import _gpio_table, short_name
 from .mcusim import SWITCH_OHMS, Board, Timeline, _judge, _net_name, _seconds, _time_of, parse_initial, parse_stimuli, solve
 from .spice import SimulationError, parse_value
@@ -35,6 +38,7 @@ MAX_SECONDS = 30.0
 DEFAULT_DURATION = 2.0
 UART_TAIL = 8000
 INTERRUPT_LOG = 50  # GPIO interrupts listed in the result (all are counted)
+TIMELINE_OUT = 200  # changes of the board listed in the result (the assertions see them all)
 # What the firmware printing this means for the run
 PANIC = re.compile(r"Guru Meditation Error[^\n]*|abort\(\) was called[^\n]*|CORRUPT HEAP[^\n]*|Stack canary watchpoint triggered[^\n]*|"
                    r"\*\*\*ERROR\*\*\* A stack overflow[^\n]*|assert failed:[^\n]*|Brownout detector was triggered[^\n]*")
@@ -90,30 +94,75 @@ class Esp32Board(Board):
             return 0
         return None
 
-    def solve_pins(self, pins: dict[int, eq.Pin], closed: set[str], forced: dict[str, float | None]) -> dict[str, Any]:
-        """One DC solution: the pads' drivers and pulls, the resistors, the closed switches, the external drives."""
+    def solve_pins(self, pins: dict[int, eq.Pin], closed: set[str], forced: dict[str, float | None],
+                   waves: dict[int, tuple[str, float, float]] | None = None) -> dict[str, Any]:
+        """The DC network for the pads as they are: their drivers and pulls, the resistors, the closed switches, the external
+        drives. A pad an LEDC channel drives (``waves``: ("level", 0|1, 0) or ("pwm", duty, Hz)) is high a fraction ``duty`` of
+        the time: the network is solved for every combination of such pads' levels, weighted, which gives the average voltage
+        of every net, the fraction of time each LED lights, the worst current of each pad, and the nets that switch."""
+        waves = waves or {}
         edges = [(a, b, ohms) for a, b, ohms, _ in self.resistors]
         edges += [(a, b, SWITCH_OHMS) for r, (a, b) in self.switches.items() if r in closed]
         fixed = dict(self.fixed)
         for net, level in forced.items():
             if level is not None:
                 fixed[net] = level
-        sources: list[tuple[str, float, float]] = []
+        static: list[tuple[str, float, float]] = []
         drivers: dict[int, tuple[float, float]] = {}
+        pwm: dict[int, tuple[float, float]] = {}
         for gpio, net in self.pins.items():
             pin = pins[gpio]
-            if pin.driven:
-                level = self.vcc if pin.level else 0.0
-                sources.append((net, level, pin.drive_ohms))
-                drivers[gpio] = (level, pin.drive_ohms)
+            wave = waves.get(gpio)
+            if pin.driven and wave is not None and wave[0] == "pwm":
+                pwm[gpio] = (wave[1], wave[2])
+            elif pin.driven:
+                high = wave[1] if wave is not None else pin.level
+                if not (wave is not None and pin.open_drain and high):  # an open-drain LEDC pad lets go when high
+                    level = self.vcc if high else 0.0
+                    static.append((net, level, pin.drive_ohms))
+                    drivers[gpio] = (level, pin.drive_ohms)
             if pin.pull_up:
-                sources.append((net, self.vcc, PULL_OHMS))
+                static.append((net, self.vcc, PULL_OHMS))
             if pin.pull_down:
-                sources.append((net, 0.0, PULL_OHMS))
-        volts = solve(self.nets, fixed, edges, sources)
-        currents = {g: abs(level - v) / ohms for g, (level, ohms) in drivers.items() if (v := volts.get(self.pins[g])) is not None}
-        leds = {r: 1.0 if lit else 0.0 for r, lit in self.led_lit(volts).items()}
-        return {"volts": volts, "currents": currents, "leds": leds}
+                static.append((net, 0.0, PULL_OHMS))
+        gpios = sorted(pwm)
+        totals: dict[str, float] = {}
+        lows: dict[str, float] = {}
+        highs: dict[str, float] = {}
+        unknown: set[str] = set()
+        leds = {r: 0.0 for r in self.leds}
+        currents: dict[int, float] = {}
+        for combo in range(1 << len(gpios)):
+            weight = 1.0
+            sources = list(static)
+            levels = {g: level for g, (level, _) in drivers.items()}
+            for i, gpio in enumerate(gpios):
+                high = combo >> i & 1
+                duty = pwm[gpio][0]
+                weight *= duty if high else 1.0 - duty
+                if high and pins[gpio].open_drain:
+                    continue
+                levels[gpio] = self.vcc if high else 0.0
+                sources.append((self.pins[gpio], levels[gpio], pins[gpio].drive_ohms))
+            if weight <= 0:
+                continue
+            volts = solve(self.nets, fixed, edges, sources)
+            for n, v in volts.items():
+                if v is None:
+                    unknown.add(n)
+                else:
+                    totals[n] = totals.get(n, 0.0) + weight * v
+                    lows[n], highs[n] = min(lows.get(n, v), v), max(highs.get(n, v), v)
+            for r, lit in self.led_lit(volts).items():
+                leds[r] += weight * (1.0 if lit else 0.0)
+            for gpio, level in levels.items():
+                v = volts.get(self.pins[gpio])
+                if v is not None:
+                    currents[gpio] = max(currents.get(gpio, 0.0), abs(level - v) / pins[gpio].drive_ohms)
+        volts_avg = {n: (None if n in unknown else totals.get(n)) for n in self.nets}
+        switching = {n for n in highs if highs[n] - lows[n] > 0.05 * self.vcc}
+        return {"volts": volts_avg, "currents": currents, "leds": leds, "switching": switching,
+                "pwm": {g: {"duty": d, "hz": hz} for g, (d, hz) in pwm.items()}}
 
 
 # ---- the run ---------------------------------------------------------------------------------
@@ -122,8 +171,10 @@ class Esp32Run(Timeline, eq.Handler):
 
     RESET_CAUSES = ("any", "power-on", "external", "software", "watchdog", "deep-sleep", "brownout")
 
-    def __init__(self, board: Esp32Board, gpio: eq.GpioState, closed: set[str], events: list[tuple[float, int, dict[str, Any]]], end: float):
-        self.board, self.gpio, self.end = board, gpio, end
+    def __init__(self, board: Esp32Board, gpio: eq.GpioState, ledc: LedcState, closed: set[str], events: list[tuple[float, int, dict[str, Any]]],
+                 end: float):
+        self.board, self.gpio, self.ledc, self.end = board, gpio, ledc, end
+        self._followed = 0.0                # the fades on the board's pads are in the timeline up to here
         self.closed = set(closed)
         self.forced: dict[str, float | None] = {}
         self.events, self.next = events, 0
@@ -180,11 +231,27 @@ class Esp32Run(Timeline, eq.Handler):
             self.stops = [self.stops[1], t]
         while self.next < len(self.events) and self.events[self.next][0] <= t + 1e-12 and self._release is None:
             at, _, s = self.events[self.next]
+            self.follow_fades(at)
             self.next += 1
             self.apply(s)
             self.update(at)
             if self.en_low() and not self.held:
                 self.hold(at)
+        self.follow_fades(t)
+
+    def follow_fades(self, t: float) -> None:
+        """The steps of fades on the board's pads up to ``t`` go into the timeline (the duty changes without the firmware)."""
+        if t <= self._followed:
+            return
+        points: set[float] = set()
+        if not self.held:
+            for gpio in self.board.pins:
+                pin = self.gpio.pin(gpio)
+                if pin.pwm is not None and pin.driven:
+                    points.update(self.ledc.change_points(pin.pwm, self._followed, t))
+        self._followed = t
+        for at in sorted(points):
+            self.update(at)
 
     def hold(self, at: float) -> None:
         """EN went low at ``at``: the pads let go; the stimuli run on until EN rises, which restarts the chip (or the run ends held)."""
@@ -219,7 +286,8 @@ class Esp32Run(Timeline, eq.Handler):
         board = self.board
         t = max(t, self.times[-1] if self.times else 0.0)
         pins = self.pins()
-        result = board.solve_pins(pins, self.closed, self.forced)
+        waves = self.waves(pins, t)
+        result = board.solve_pins(pins, self.closed, self.forced, waves)
         volts = result["volts"]
         self.last_volts = volts
         for gpio, amps in result["currents"].items():
@@ -231,10 +299,11 @@ class Esp32Run(Timeline, eq.Handler):
                     self.hazards[key] = {"severity": severity, "rule": "overcurrent", "pin": f"GPIO{gpio}", "net": net, "t": t,
                                          "message": f"GPIO{gpio} drives {amps * 1000:.0f} mA into net {net} (an ESP32 pin gives about 20 mA at its "
                                                     "default drive strength, 40 mA at most): an output fighting a switch or a short to the other rail"}
+        pwm = {g: {"duty": round(w["duty"], 4), "hz": round(w["hz"], 3)} for g, w in result["pwm"].items()}
         snap = {
             "t": t,
-            "pins": {f"GPIO{g}": pins[g].label() for g in sorted(board.pins)},
-            "pwm": {},
+            "pins": {f"GPIO{g}": self.label(pins[g], waves.get(g), pwm.get(g)) for g in sorted(board.pins)},
+            "pwm": {f"GPIO{g}": w for g, w in pwm.items()},
             "nets": {short_name(n): (None if volts[n] is None else round(volts[n], 3)) for n in sorted(set(board.pins.values()))},
             "leds": dict(result["leds"]),
             "switches": sorted(self.closed),
@@ -242,7 +311,7 @@ class Esp32Run(Timeline, eq.Handler):
             "held": self.held,
         }
         key = (tuple(sorted(snap["pins"].items())), tuple(sorted(snap["nets"].items(), key=lambda kv: kv[0])), tuple(sorted(snap["leds"].items())),
-               tuple(snap["switches"]), self.held)
+               tuple(snap["switches"]), self.held, tuple(sorted((k, w["duty"], w["hz"]) for k, w in snap["pwm"].items())))
         if not (self.timeline and self.timeline[-1].get("_key") == key):
             snap["_key"] = key
             if self.timeline and self.timeline[-1]["t"] == t:
@@ -251,9 +320,33 @@ class Esp32Run(Timeline, eq.Handler):
                 self.timeline.append(snap)
                 self.times.append(t)
         if not self.held:
-            self.latch_interrupts(t, pins, volts)
+            self.latch_interrupts(t, pins, volts, result["switching"])
 
-    def latch_interrupts(self, t: float, pins: dict[int, eq.Pin], volts: dict[str, float | None]) -> None:
+    def waves(self, pins: dict[int, eq.Pin], t: float) -> dict[int, tuple[str, float, float]]:
+        """What the LEDC channels routed to the board's pads put out at ``t`` (with the GPIO matrix's inversion)."""
+        out: dict[int, tuple[str, float, float]] = {}
+        for gpio in self.board.pins:
+            pin = pins[gpio]
+            if pin.pwm is None or not pin.driven:
+                continue
+            kind, value, hz = self.ledc.wave(pin.pwm, t)
+            if kind == "unknown":
+                raise eq.Unsupported("ledc_stopped", f"GPIO{gpio} (net {short_name(self.board.pins[gpio])}) is driven by {pin.function}, but "
+                                                     f"{self.ledc.why_unknown(pin.pwm)}: not simulated", t)
+            out[gpio] = (kind, 1 - value if pin.invert else value, hz)
+        return out
+
+    @staticmethod
+    def label(pin: eq.Pin, wave: tuple[str, float, float] | None, pwm: dict[str, float] | None) -> str:
+        if pwm is not None:
+            return f"pwm {pwm['duty']:.0%} at {pwm['hz']:.0f} Hz"
+        if wave is not None:  # an LEDC channel at a steady level
+            if pin.open_drain:
+                return "od-low" if not wave[1] else "od-released" + ("-pullup" if pin.pull_up else "")
+            return "out-high" if wave[1] else "out-low"
+        return pin.label()
+
+    def latch_interrupts(self, t: float, pins: dict[int, eq.Pin], volts: dict[str, float | None], switching: set[str] | None = None) -> None:
         """The GPIO interrupt detector: an edge or level the pin's interrupt type reacts to latches its status bit (the
         machine raises the interrupt in QEMU's matrix when the firmware enabled it for a CPU). It sees the pad through the
         input buffer: with the input off it reads 0."""
@@ -267,6 +360,9 @@ class Esp32Run(Timeline, eq.Handler):
                 self.armed.pop(gpio, None)
                 self.gpio.level_condition(gpio, False)
                 continue
+            if switching and net in switching and pin.input:
+                raise eq.Unsupported("pwm_interrupt", f"GPIO{gpio} (net {short_name(net)}) has a GPIO interrupt armed on a net a PWM output "
+                                                      "switches: it would fire at the wave's edges, which are not simulated one by one", t)
             if level is None:
                 self.floating_reads.setdefault(gpio, t)  # the interrupt watches a pin nothing defines
             fresh = self.armed.get(gpio) != kind
@@ -344,6 +440,13 @@ class Esp32Run(Timeline, eq.Handler):
 
     def on_tick(self, t: float) -> None:
         self.catch_up(t)
+
+    def on_ledc(self, t: float, channels: set[int]) -> None:
+        self.catch_up(t)
+        if self.held or self._release is not None or self.finished:
+            return
+        if any(self.gpio.pin(g).pwm in channels for g in self.board.pins):
+            self.update(t)
 
     def on_uart(self, t: float, text: str) -> None:
         self.uart.append((t, self.stops[0] if t == self.stops[1] else self.stops[1], text))
@@ -435,10 +538,9 @@ def simulate_firmware(netlist: dict[str, Any], mcu_ref: str, provider: dict[str,
             raise SimulationError("each assertion is an object")
         if "eeprom" in a or "usi" in a:
             raise SimulationError("eeprom and usi assertions are for the ATtiny; the ESP32 simulator judges pins, nets, LEDs, resets and the UART output")
-        if "duty" in a or "freq" in a:
-            raise SimulationError("duty and freq describe a PWM output: the ESP32's LEDC is not simulated yet")
     gpio = eq.GpioState()
-    run = Esp32Run(board, gpio, closed, events, end)
+    ledc = LedcState()
+    run = Esp32Run(board, gpio, ledc, closed, events, end)
     run.catch_up(0.0)
     start_at = 0.0
     if run.en_low():  # EN held low from power-on: the chip starts when it rises
@@ -472,6 +574,7 @@ def simulate_firmware(netlist: dict[str, Any], mcu_ref: str, provider: dict[str,
         machine = eq.Machine(found.path or "", image, tmp, strap=strap, clock=probe["clock"], rtc_hz=probe.get("rtc_hz", eq.RTC_SLOW_HZ),
                              entry=image_info.get("entry"))
         machine.gpio = gpio
+        machine.ledc = ledc
         try:
             if not run.finished:
                 machine.start(deadline)
@@ -515,17 +618,35 @@ def simulate_firmware(netlist: dict[str, Any], mcu_ref: str, provider: dict[str,
     passed: bool | None = False if failed else (None if unknown else True)
     if not judged and not aborted and not failed:
         passed = True
-    events_out = []
+    # the board over time, as reported: a run of changes in PWM duty only (a fade) shows its first and its last step
+    events_out: list[dict[str, Any]] = []
     last = None
-    for snap in run.timeline[:200]:
+    steps = 0
+    held_back: dict[str, Any] | None = None
+    for snap in run.timeline:
         if snap["t"] > end + 1e-9:
             continue
         item = {"t": snap["t"], "pins": snap["pins"], "nets": snap["nets"], "leds": dict(snap["leds"]), "switches": snap["switches"], "pwm": snap["pwm"],
                 **({"held": True} if snap["held"] else {})}
         view = (tuple(item["pins"].items()), tuple(item["leds"].items()), tuple(item["switches"]), snap["held"])
-        if view != last:
-            events_out.append(item)
-            last = view
+        if view == last:
+            continue
+        if last is not None and _duty_step(last, view):
+            steps += 1
+            if steps > 1:
+                held_back = item
+                last = view
+                continue
+        else:
+            steps = 0
+        if held_back is not None:
+            events_out.append(held_back)
+            held_back = None
+        events_out.append(item)
+        last = view
+    if held_back is not None:
+        events_out.append(held_back)
+    events_out = events_out[:TIMELINE_OUT]
     notes = list(board.notes)
     if machine.skipped:
         notes.append(f"the CPUs slept with no timer pending for {machine.skipped * 1000:.1f} ms in all, so QEMU's clock stood still; that time "
@@ -547,6 +668,13 @@ def simulate_firmware(netlist: dict[str, Any], mcu_ref: str, provider: dict[str,
         "flash": {"size": image_info["size"], "parts": image_info["parts"]},
         "qemu": {"path": found.path, "version": found.version, "source": found.source, "clock": probe.get("clock")},
     }
+
+
+def _duty_step(a: tuple[Any, ...], b: tuple[Any, ...]) -> bool:
+    """Two views of the board differ only in the duty of PWM pads (and so in LED brightness)."""
+    if a[2:] != b[2:] or len(a[0]) != len(b[0]):
+        return False
+    return all(x == y or (x[0] == y[0] and x[1].startswith("pwm ") and y[1].startswith("pwm ")) for x, y in zip(a[0], b[0]))
 
 
 def _power_on_hazards(run: Esp32Run, levels: dict[int, int], undefined: list[int], t: float) -> None:
