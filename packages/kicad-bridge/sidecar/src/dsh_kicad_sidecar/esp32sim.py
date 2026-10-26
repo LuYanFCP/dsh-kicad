@@ -5,7 +5,8 @@ ones; the verdict on every assertion comes from this simulation, never from the 
 
 The chip side: outputs, output enables, open drain, internal pull-ups and pull-downs and input enables come from the
 registers the firmware writes. A pad routed to an LEDC channel carries that channel's PWM wave (esp32ledc.py): the board is
-solved for each combination of the PWM pads' levels, weighted by their duty cycles, as for the ATtiny's timers. A pad routed
+solved for each combination of the PWM pads' levels, weighted by their duty cycles, as for the ATtiny's timers. An ADC
+conversion reads the voltage of the pad's net (esp32adc.py: ESP-IDF's calibration of a typical chip, inverted). A pad routed
 to another peripheral output (I2C, SPI, RMT, ...) has a level this simulator does not know, so a run where that pad is on the
 board stops there and what follows is cannot-verify. So does a firmware
 crash, or a firmware waiting for something that never comes. A GPIO interrupt the firmware enabled latches when the board
@@ -23,6 +24,7 @@ import time
 from typing import Any, Callable
 
 from . import esp32qemu as eq
+from .esp32adc import ATTEN_DB, AdcState, calibrated_mv
 from .esp32ledc import LedcState
 from .mcu import _gpio_table, short_name
 from .mcusim import SWITCH_OHMS, Board, Timeline, _judge, _net_name, _seconds, _time_of, parse_initial, parse_stimuli, solve
@@ -38,6 +40,8 @@ MAX_SECONDS = 30.0
 DEFAULT_DURATION = 2.0
 UART_TAIL = 8000
 INTERRUPT_LOG = 50  # GPIO interrupts listed in the result (all are counted)
+ADC_LOG = 50        # ADC conversions listed in the result: each channel's first and those whose reading changed (all are counted)
+CAPACITOR = re.compile(r"Device:C(?:P)?(?:_|$)")
 TIMELINE_OUT = 200  # changes of the board listed in the result (the assertions see them all)
 # What the firmware printing this means for the run
 PANIC = re.compile(r"Guru Meditation Error[^\n]*|abort\(\) was called[^\n]*|CORRUPT HEAP[^\n]*|Stack canary watchpoint triggered[^\n]*|"
@@ -195,6 +199,10 @@ class Esp32Run(Timeline, eq.Handler):
         self.armed: dict[int, int] = {}
         self.interrupts: list[tuple[float, int, int]] = []  # (t, gpio, interrupt type): the edges and levels that latched one
         self.last_volts: dict[str, float | None] = {}
+        self.last_switching: set[str] = set()  # of the last solve: the nets a PWM output switches...
+        self.last_pwm: set[int] = set()        # ...and the pads carrying a PWM wave
+        self.adc_floating: dict[int, float] = {}   # pads the ADC converted while they floated, and when first
+        self.adc_filtered: dict[int, float] = {}   # pads the ADC converted while a PWM wave reached them through an RC filter
         self.download_mode = False
         self.boot_failure: str | None = None
         self.boot_errors: list[str] = []
@@ -290,6 +298,7 @@ class Esp32Run(Timeline, eq.Handler):
         result = board.solve_pins(pins, self.closed, self.forced, waves)
         volts = result["volts"]
         self.last_volts = volts
+        self.last_switching, self.last_pwm = result["switching"], set(result["pwm"])
         for gpio, amps in result["currents"].items():
             if amps > PIN_WARN_A:
                 severity = "error" if amps > PIN_ERROR_A else "warning"
@@ -448,6 +457,34 @@ class Esp32Run(Timeline, eq.Handler):
         if any(self.gpio.pin(g).pwm in channels for g in self.board.pins):
             self.update(t)
 
+    def adc_volts(self, t: float, gpio: int) -> float | None:
+        """The voltage an ADC conversion samples on a pad at ``t``: its net's, or off the board what the pad's own driver or pull
+        makes of it. A net a PWM output switches is its average when a capacitor on it filters the wave (an RC filter), and is not
+        simulated otherwise (the chip samples the wave's level at that instant). None: nothing defines it, the reading is arbitrary."""
+        self.catch_up(t)
+        net = self.board.pins.get(gpio)
+        if net is None:
+            pin = self.gpio.pin(gpio)
+            if pin.unknown or pin.pwm is not None:
+                raise eq.Unsupported("adc_driven", f"the firmware converts GPIO{gpio}, which {pin.function} drives: the level it puts there is not simulated", t)
+            v = self.board.vcc * pin.level if pin.driven else self.board.vcc if pin.pull_up else 0.0 if pin.pull_down else None
+        else:
+            v = self.last_volts.get(net)
+            if net in self.last_switching:
+                if not self.filtered(net):
+                    raise eq.Unsupported("adc_pwm", f"the firmware converts GPIO{gpio} (net {short_name(net)}), which a PWM output switches with "
+                                                    "no capacitor to filter it: the chip samples the wave's level at that instant, which is not simulated", t)
+                self.adc_filtered.setdefault(gpio, t)
+        if v is None:
+            self.adc_floating.setdefault(gpio, t)
+        return v
+
+    def filtered(self, net: str) -> bool:
+        """A capacitor sits on the net and no PWM pad drives it directly: an RC filter, which gives the wave's average."""
+        circuit = self.board.circuit
+        caps = any(CAPACITOR.match(circuit.components.get(node["ref"], {}).get("lib_id", "")) for node in circuit.nets[net]["nodes"])
+        return caps and all(self.board.pins.get(g) != net for g in self.last_pwm)
+
     def on_uart(self, t: float, text: str) -> None:
         self.uart.append((t, self.stops[0] if t == self.stops[1] else self.stops[1], text))
         recent = self.uart_text[-400:] + text
@@ -540,6 +577,7 @@ def simulate_firmware(netlist: dict[str, Any], mcu_ref: str, provider: dict[str,
             raise SimulationError("eeprom and usi assertions are for the ATtiny; the ESP32 simulator judges pins, nets, LEDs, resets and the UART output")
     gpio = eq.GpioState()
     ledc = LedcState()
+    adc = AdcState()
     run = Esp32Run(board, gpio, ledc, closed, events, end)
     run.catch_up(0.0)
     start_at = 0.0
@@ -575,6 +613,7 @@ def simulate_firmware(netlist: dict[str, Any], mcu_ref: str, provider: dict[str,
                              entry=image_info.get("entry"))
         machine.gpio = gpio
         machine.ledc = ledc
+        machine.adc = adc
         try:
             if not run.finished:
                 machine.start(deadline)
@@ -662,12 +701,30 @@ def simulate_firmware(netlist: dict[str, Any], mcu_ref: str, provider: dict[str,
         "resets": [{"t": t, "cause": cause} for t, cause in run.resets],
         "interrupts": [{"t": t, "gpio": f"GPIO{g}", "type": eq.INT_TYPES.get(kind, str(kind))} for t, g, kind in run.interrupts[:INTERRUPT_LOG]],
         "interrupt_count": len(run.interrupts),
+        "adc": _adc_log(adc), "adc_count": len(adc.conversions),
         "strap": {"value": f"{strap:#04x}", "levels": {f"GPIO{g}": level for g, level in levels.items()}, "download_mode": run.download_mode},
         "uart": run.uart_text[-UART_TAIL:], "uart_bytes": uart_bytes,
         "not_emulated": unimplemented,
         "flash": {"size": image_info["size"], "parts": image_info["parts"]},
         "qemu": {"path": found.path, "version": found.version, "source": found.source, "clock": probe.get("clock")},
     }
+
+
+def _adc_log(adc: AdcState) -> list[dict[str, Any]]:
+    """The conversions worth listing: each channel's first, then those whose reading changed (the board's voltage did)."""
+    out: list[dict[str, Any]] = []
+    last: dict[tuple[int, int], int] = {}
+    for c in adc.conversions:
+        key = (c.unit, c.channel)
+        if last.get(key) == c.reading:
+            continue
+        last[key] = c.reading
+        out.append({"t": c.t, "gpio": f"GPIO{c.gpio}", "adc": f"ADC{c.unit} channel {c.channel}",
+                    "volts": None if c.volts is None else round(c.volts, 4), "atten_db": ATTEN_DB[c.atten], "bits": c.bits, "reading": c.reading,
+                    "calibrated_mv": calibrated_mv(c.unit, c.atten, min(4095, c.reading << (12 - c.bits)))})
+        if len(out) >= ADC_LOG:
+            break
+    return out
 
 
 def _duty_step(a: tuple[Any, ...], b: tuple[Any, ...]) -> bool:
@@ -730,6 +787,17 @@ def _hazards(run: Esp32Run, unimplemented: dict[str, dict[str, int]]) -> list[di
                         "message": f"GPIO{gpio} (net {net}) sits between the logic levels when the firmware reads it (a divider or a weak pull against a "
                                    "switch): it reads unpredictably",
                         "fix": "Use a stronger pull-up/pull-down or remove the competing path."})
+    for gpio, t in sorted(run.adc_floating.items()):
+        net = short_name(board.pins[gpio]) if gpio in board.pins else "not connected"
+        hazards.append({"severity": "warning", "rule": "adc_floating", "pin": f"GPIO{gpio}", "net": net, "t": t,
+                        "message": f"the firmware converts GPIO{gpio} with the ADC while it floats (net {net}: nothing sets its voltage): the reading is "
+                                   "arbitrary (simulated as 0 V)",
+                        "fix": f"Connect what GPIO{gpio} should measure, or give the net a defined level (a divider, a pull resistor)."})
+    for gpio, t in sorted(run.adc_filtered.items()):
+        net = short_name(board.pins[gpio])
+        hazards.append({"severity": "info", "rule": "adc_pwm_average", "pin": f"GPIO{gpio}", "net": net, "t": t,
+                        "message": f"the ADC reads GPIO{gpio} (net {net}), which a PWM output reaches through an RC filter: the simulation reads the "
+                                   "wave's average voltage (the filter's ripple and settling time are not simulated)"})
     if run.resets:
         causes = ", ".join(f"{cause} at {t * 1000:.1f} ms" for t, cause in run.resets[:6]) + (" …" if len(run.resets) > 6 else "")
         hazards.append({"severity": "info", "rule": "resets", "pin": "", "net": "", "t": run.resets[0][0],
@@ -741,8 +809,8 @@ def _hazards(run: Esp32Run, unimplemented: dict[str, dict[str, int]]) -> list[di
         listed = ", ".join(f"{name} ({', '.join(f'{v} {k}' for k, v in counts.items() if v)})" for name, counts in sorted(unimplemented.items()))
         reads = any(c.get("reads") or c.get("accesses") for c in unimplemented.values())
         hazards.append({"severity": "warning" if reads else "info", "rule": "not_emulated", "pin": "", "net": "", "t": 0.0,
-                        "message": f"the firmware used hardware QEMU does not emulate: {listed}. Reads from it return 0 and writes do nothing, "
-                                   "so behaviour that depends on it is not verified"})
+                        "message": f"the firmware used hardware the simulation does not emulate: {listed}. It does nothing (reads return 0 or what "
+                                   "the firmware wrote), so behaviour that depends on it is not verified"})
     if board.unmodelled:
         hazards.append({"severity": "info", "rule": "unmodelled_parts", "pin": "", "net": "", "t": 0.0,
                         "message": "not simulated, treated as open circuits: " + ", ".join(board.unmodelled) + " (they touch nets the chip drives or reads)"})
