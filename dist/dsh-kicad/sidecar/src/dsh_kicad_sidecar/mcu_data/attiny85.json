@@ -15,13 +15,15 @@
   "not_covered": [
     {
       "lib_id": [
-        "*:ATtiny*",
-        "*:ATmega*"
+        "*:ATtiny*"
       ],
-      "why": "only the 8-pin ATtiny25/45/85 table is shipped; other AVR parts have different pins and alternate functions"
+      "why": "only the 8-pin ATtiny25/45/85 table is shipped; other ATtiny parts have different pins and alternate functions"
     }
   ],
   "gpio_pin_pattern": "(?:^|/)PB(\\d)$",
+  "ports": {
+    "B": 0
+  },
   "enable": {
     "pin_pattern": "RESET",
     "unconnected_severity": "warning",

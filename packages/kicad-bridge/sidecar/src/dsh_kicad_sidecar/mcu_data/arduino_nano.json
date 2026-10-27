@@ -1,0 +1,228 @@
+{
+  "id": "arduino_nano",
+  "name": "Arduino Nano (ATmega328P module)",
+  "source": "Arduino's schematics and pin mapping of the board (ATmega328P ports per Arduino pin, the USB-serial converter on D0/D1, the LED on D13) and the ATmega328P datasheet; hand-transcribed",
+  "match": {
+    "lib_id": [
+      "MCU_Module:Arduino_Nano_v2.x",
+      "MCU_Module:Arduino_Nano_v3.x"
+    ],
+    "value": [
+      "^Arduino[ _]?Nano( v?[23](\\.x)?)?$"
+    ]
+  },
+  "gpio_pin_pattern": "^D(\\d+)(?:/|$)",
+  "gpio_label": "D{}",
+  "pin_aliases": {
+    "A0": 14,
+    "A1": 15,
+    "A2": 16,
+    "A3": 17,
+    "A4": 18,
+    "A5": 19,
+    "A6": 20,
+    "A7": 21,
+    "SDA/A4": 18,
+    "SCL/A5": 19
+  },
+  "gpio_names": {
+    "14": "A0",
+    "15": "A1",
+    "16": "A2",
+    "17": "A3",
+    "18": "A4",
+    "19": "A5",
+    "20": "A6",
+    "21": "A7"
+  },
+  "aref": {
+    "pin_pattern": "^AREF$",
+    "capacitor_advice": false
+  },
+  "gpios": {
+    "0": {
+      "caps": [
+        "uart_rx",
+        "pcint"
+      ],
+      "note": "PD0 of the ATmega328P",
+      "shared": {
+        "severity": "warning",
+        "rule": "usb_serial_pin",
+        "message": "D0 is the board's serial RX, driven by its USB-serial converter: a device driving it from net {net} fights the converter during uploads and Serial",
+        "fix": "Move the signal to D2-D12 (SoftwareSerial can use them), or disconnect it while uploading and do not use Serial."
+      }
+    },
+    "1": {
+      "caps": [
+        "uart_tx",
+        "pcint"
+      ],
+      "note": "PD1 of the ATmega328P",
+      "shared": {
+        "severity": "warning",
+        "rule": "usb_serial_pin",
+        "message": "D1 is the board's serial TX, read by its USB-serial converter: uploads and every Serial print also drive net {net}",
+        "fix": "Move the signal to D2-D12, or make sure what is on {net} tolerates the serial traffic."
+      }
+    },
+    "2": {
+      "caps": [
+        "int0",
+        "pcint"
+      ],
+      "note": "PD2 of the ATmega328P"
+    },
+    "3": {
+      "caps": [
+        "int1",
+        "pwm",
+        "pcint"
+      ],
+      "note": "PD3 of the ATmega328P"
+    },
+    "4": {
+      "caps": [
+        "pcint"
+      ],
+      "note": "PD4 of the ATmega328P"
+    },
+    "5": {
+      "caps": [
+        "pwm",
+        "pcint"
+      ],
+      "note": "PD5 of the ATmega328P"
+    },
+    "6": {
+      "caps": [
+        "pwm",
+        "comparator",
+        "pcint"
+      ],
+      "note": "PD6 of the ATmega328P"
+    },
+    "7": {
+      "caps": [
+        "comparator",
+        "pcint"
+      ],
+      "note": "PD7 of the ATmega328P"
+    },
+    "8": {
+      "caps": [
+        "timer_capture",
+        "pcint"
+      ],
+      "note": "PB0 of the ATmega328P"
+    },
+    "9": {
+      "caps": [
+        "pwm",
+        "pcint"
+      ],
+      "note": "PB1 of the ATmega328P"
+    },
+    "10": {
+      "caps": [
+        "pwm",
+        "spi_ss",
+        "pcint"
+      ],
+      "note": "PB2 of the ATmega328P"
+    },
+    "11": {
+      "caps": [
+        "pwm",
+        "spi_mosi",
+        "pcint"
+      ],
+      "note": "PB3 of the ATmega328P"
+    },
+    "12": {
+      "caps": [
+        "spi_miso",
+        "pcint"
+      ],
+      "note": "PB4 of the ATmega328P"
+    },
+    "13": {
+      "caps": [
+        "spi_sck",
+        "pcint"
+      ],
+      "note": "PB5 of the ATmega328P",
+      "shared": {
+        "severity": "info",
+        "rule": "onboard_led_pin",
+        "message": "D13 also drives the board's LED (L) through 1 kΩ to ground: as an input with only the internal pull-up it sits near 1.7 V and reads low",
+        "fix": "Use D13 for an output; read buttons and sensors on another pin, or pull D13 up with 1 kΩ or less."
+      }
+    },
+    "14": {
+      "adc": "adc0",
+      "note": "ADC0 / PC0 of the ATmega328P",
+      "caps": [
+        "pcint"
+      ]
+    },
+    "15": {
+      "adc": "adc1",
+      "note": "ADC1 / PC1 of the ATmega328P",
+      "caps": [
+        "pcint"
+      ]
+    },
+    "16": {
+      "adc": "adc2",
+      "note": "ADC2 / PC2 of the ATmega328P",
+      "caps": [
+        "pcint"
+      ]
+    },
+    "17": {
+      "adc": "adc3",
+      "note": "ADC3 / PC3 of the ATmega328P",
+      "caps": [
+        "pcint"
+      ]
+    },
+    "18": {
+      "adc": "adc4",
+      "note": "ADC4 / PC4 of the ATmega328P",
+      "caps": [
+        "pcint",
+        "i2c_sda"
+      ]
+    },
+    "19": {
+      "adc": "adc5",
+      "note": "ADC5 / PC5 of the ATmega328P",
+      "caps": [
+        "pcint",
+        "i2c_scl"
+      ]
+    },
+    "20": {
+      "adc": "adc6",
+      "note": "ADC6 of the ATmega328P (TQFP): an analog input, no digital function and no pull-up",
+      "analog_only": true
+    },
+    "21": {
+      "adc": "adc7",
+      "note": "ADC7 of the ATmega328P (TQFP): an analog input, no digital function and no pull-up",
+      "analog_only": true
+    }
+  },
+  "not_covered": [
+    {
+      "lib_id": [
+        "MCU_Module:Arduino_Nano_Every*",
+        "MCU_Module:Arduino_Nano_ESP32*",
+        "MCU_Module:Arduino_Nano_RP2040*",
+        "MCU_Module:Arduino_Leonardo*"
+      ],
+      "why": "only the ATmega328P boards (Nano v2/v3, UNO R2/R3) are covered; the Nano Every (ATmega4809), Nano ESP32 (ESP32-S3), Nano RP2040 Connect and Leonardo (ATmega32U4) have other MCUs"
+    }
+  ]
+}

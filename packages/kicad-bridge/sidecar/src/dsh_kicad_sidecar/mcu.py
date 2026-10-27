@@ -17,10 +17,11 @@ from typing import Any
 
 from .spice import SimulationError, parse_value
 
-__all__ = ["McuError", "DATA_DIR", "load_providers", "check_schematic", "Circuit"]
+__all__ = ["McuError", "DATA_DIR", "load_providers", "check_schematic", "Circuit", "gpio_label"]
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcu_data")
 STRONG_PULL_OHMS = 47_000  # a resistor this small or smaller beats a chip's internal pull (about 45 kΩ)
+FILTER_OHMS = 100          # a supply pin fed through a resistor this small (or an inductor / ferrite bead) is filtered, not cut off
 
 _GROUND = re.compile(r"^(?:[ADPS]?GND\w*|VSS\w*|0V|GROUND)$", re.I)
 _RAIL = re.compile(r"^(?:[+]?\d+(?:\.\d+)?V\d*\w*|V(?:CC|DD|BUS|IN|BAT|SYS)\w*|\+\w*V\w*)$", re.I)
@@ -61,11 +62,30 @@ def load_providers(project_dir: str | None = None) -> list[dict[str, Any]]:
 
 
 def _gpio_of(provider: dict[str, Any], pin_name: str) -> int | None:
+    """The GPIO number of a symbol pin: an alias, or ``gpio_pin_pattern``'s number; with ``ports`` the pattern's two groups are the
+    port letter and the bit (PB3 → the port's offset + 3)."""
     alias = provider.get("pin_aliases", {}).get(pin_name)
     if alias is not None:
         return int(alias)
     match = re.search(provider.get("gpio_pin_pattern", r"(?:^|/)IO(\d+)$"), pin_name)
-    return int(match.group(1)) if match else None
+    if not match:
+        return None
+    ports = provider.get("ports")
+    if ports and match.lastindex == 2:
+        offset = ports.get(match.group(1).upper())
+        return None if offset is None else int(offset) + int(match.group(2))
+    return int(match.group(1))
+
+
+def gpio_label(provider: dict[str, Any], gpio: int) -> str:
+    """How the family names a GPIO: by name (A0, ADC6), by port (PB3), or ``gpio_label`` (D13, the default GPIO12)."""
+    name = provider.get("gpio_names", {}).get(str(gpio))
+    if name:
+        return name
+    for letter, offset in (provider.get("ports") or {}).items():
+        if int(offset) <= gpio < int(offset) + 8:
+            return f"P{letter}{gpio - int(offset)}"
+    return str(provider.get("gpio_label", "GPIO{}")).format(gpio)
 
 
 def _gpio_table(provider: dict[str, Any], lib_id: str, value: str) -> dict[int, dict[str, Any]]:
@@ -143,6 +163,32 @@ class Circuit:
                     continue
         return found
 
+    def filtered_from(self, net: str, sources: set[str]) -> str | None:
+        """The part that feeds ``net`` from one of ``sources`` as a filter would: an inductor, a ferrite bead or a small resistor."""
+        for node in self.nets[net]["nodes"]:
+            ref = node["ref"]
+            lib = self.components.get(ref, {}).get("lib_id", "")
+            ends = self.by_ref.get(ref, [])
+            if len(ends) != 2:
+                continue
+            other = next((n for p, n in ends if p != node["pin"]), None)
+            if other not in sources:
+                continue
+            if lib.startswith(("Device:L", "Device:Ferrite")) or ref.startswith(("L", "FB")):
+                return ref
+            if ref.startswith("R") and lib.startswith("Device:R"):
+                try:
+                    if parse_value(self.components[ref].get("value", "")) <= FILTER_OHMS:
+                        return ref
+                except SimulationError:
+                    continue
+        return None
+
+    def crystals(self, net: str) -> list[str]:
+        """Crystals and resonators with a pin on ``net``."""
+        return sorted({n["ref"] for n in self.nets[net]["nodes"]
+                       if self.components.get(n["ref"], {}).get("lib_id", "").startswith(("Device:Crystal", "Device:Resonator"))})
+
     def has_switch(self, net: str, ref: str, pin: str) -> bool:
         for node in self.others(net, ref, pin):
             lib = self.components.get(node["ref"], {}).get("lib_id", "")
@@ -169,12 +215,19 @@ def check_mcu(circuit: Circuit, ref: str, provider: dict[str, Any]) -> tuple[lis
     enable = provider.get("enable") or {}
     en_pattern = re.compile(enable["pin_pattern"]) if enable.get("pin_pattern") else None
     supply = {s.upper() for s in (provider.get("supply") or {}).get("pins", [])}
+    analog_supply = (provider.get("analog_supply") or {}).get("pin_pattern")  # reported by _check_analog_supply, with its reason
     supply_nets: dict[str, str] = {}  # net → the first supply pin on it
     recognised = 0
     for pin, net in circuit.by_ref.get(ref, []):
         node = next(n for n in circuit.nets[net]["nodes"] if n["ref"] == ref and n["pin"] == pin)
         name = (node.get("pin_function") or "").rsplit("_", 1)[0] if node.get("pin_function") else ""
         if name.upper() in supply and circuit.kind(net) != "ground":
+            if not _connected(circuit, net, ref, pin) and circuit.kind(net) is None:  # alone on a net that is no named rail
+                if analog_supply and re.search(analog_supply, name):
+                    continue
+                findings.append(_finding("error", "supply_unconnected", ref, pin, name, None, net, f"{name} (pin {pin}) is not connected: every supply pin must be",
+                                         f"Connect {name} to the supply."))
+                continue
             supply_nets.setdefault(net, pin)
         if en_pattern and en_pattern.search(name):
             findings += _check_enable(circuit, ref, pin, name, net, enable)
@@ -187,21 +240,32 @@ def check_mcu(circuit: Circuit, ref: str, provider: dict[str, Any]) -> tuple[lis
         used = _connected(circuit, net, ref, pin)
         if not used:
             continue
+        label = gpio_label(provider, gpio)
         if attrs.get("reserved"):
-            findings.append(_finding("error", "reserved_pin_used", ref, pin, name, gpio, net, f"GPIO{gpio} is {attrs['reserved']} and must stay unconnected, but it is on net {short_name(net)}",
+            findings.append(_finding("error", "reserved_pin_used", ref, pin, name, gpio, net, f"{label} is {attrs['reserved']} and must stay unconnected, but it is on net {short_name(net)}",
                                      f"Move {short_name(net)} to a free GPIO and leave pin {pin} unconnected."))
             continue
         strapping = attrs.get("strapping")
         if strapping:
-            findings += _check_strapping(circuit, ref, pin, name, gpio, net, strapping)
+            findings += _check_strapping(circuit, ref, pin, name, gpio, net, strapping, label)
         if attrs.get("input_only"):
-            findings += _check_input_only(circuit, ref, pin, name, gpio, net)
+            findings += _check_input_only(circuit, ref, pin, name, gpio, net, label)
+        if attrs.get("analog_only"):
+            findings += _check_analog_only(circuit, ref, pin, name, gpio, net, label)
+        shared = attrs.get("shared")
+        if shared:
+            fill = {"net": short_name(net)}
+            findings.append(_finding(shared.get("severity", "warning"), shared.get("rule", "shared_pin"), ref, pin, name, gpio, net,
+                                     shared["message"].format(**fill), shared.get("fix", "").format(**fill)))
     findings += _check_supply(circuit, ref, supply_nets, provider)
+    findings += _check_analog_supply(circuit, ref, provider)
+    findings += _check_aref(circuit, ref, provider)
+    findings += _check_crystal(circuit, ref, provider)
     order = {"error": 0, "warning": 1, "info": 2}
     return sorted(findings, key=lambda f: (order[f["severity"]], f["gpio"] if f["gpio"] is not None else -1)), recognised
 
 
-def _check_strapping(circuit: Circuit, ref: str, pin: str, name: str, gpio: int, net: str, strapping: dict[str, Any]) -> list[dict[str, Any]]:
+def _check_strapping(circuit: Circuit, ref: str, pin: str, name: str, gpio: int, net: str, strapping: dict[str, Any], label: str) -> list[dict[str, Any]]:
     why = strapping.get("why", "")
     avoid = strapping.get("avoid")
     severity = strapping.get("severity", "warning")
@@ -211,34 +275,49 @@ def _check_strapping(circuit: Circuit, ref: str, pin: str, name: str, gpio: int,
         bad_kind, word, pull = ("rail", "high", "pull-up") if avoid == "high" else ("ground", "low", "pull-down")
         if kind == bad_kind:
             out.append(_finding(severity, "strapping_level", ref, pin, name, gpio, net,
-                                f"GPIO{gpio} is a strapping pin and is tied {word} by net {short_name(net)}: {why}",
-                                f"Do not tie GPIO{gpio} {word}; leave it floating (internal {strapping.get('internal', 'pull')}) or use it only after boot through a switch or driver that is off at reset."))
+                                f"{label} is a strapping pin and is tied {word} by net {short_name(net)}: {why}",
+                                f"Do not tie {label} {word}; leave it floating (internal {strapping.get('internal', 'pull')}) or use it only after boot through a switch or driver that is off at reset."))
         else:
             for r in circuit.resistors(net, ref, pin):
                 if r["to"] != bad_kind:
                     continue
                 strong = r["ohms"] <= STRONG_PULL_OHMS
                 out.append(_finding(severity if strong else "warning", "strapping_level", ref, pin, name, gpio, net,
-                                    f"GPIO{gpio} is a strapping pin and {r['ref']} ({_ohms(r['ohms'])}) is a {'strong ' if strong else ''}{pull}: {why}",
+                                    f"{label} is a strapping pin and {r['ref']} ({_ohms(r['ohms'])}) is a {'strong ' if strong else ''}{pull}: {why}",
                                     f"Remove {r['ref']}" + ("" if strong else " or use at least 100 kΩ") + f" unless the {word} level at reset is what you want."))
     if not out:
-        out.append(_finding("info", "strapping_pin", ref, pin, name, gpio, net, f"GPIO{gpio} is a strapping pin (internal {strapping.get('internal', 'pull')} at reset): {why}"))
+        out.append(_finding("info", "strapping_pin", ref, pin, name, gpio, net, f"{label} is a strapping pin (internal {strapping.get('internal', 'pull')} at reset): {why}"))
     return out
 
 
-def _check_input_only(circuit: Circuit, ref: str, pin: str, name: str, gpio: int, net: str) -> list[dict[str, Any]]:
+def _check_input_only(circuit: Circuit, ref: str, pin: str, name: str, gpio: int, net: str, label: str) -> list[dict[str, Any]]:
     out = []
     others = circuit.others(net, ref, pin)
     types = {n.get("pin_type") for n in others}
     if types and types <= {"input"}:
         out.append(_finding("warning", "input_only_drive", ref, pin, name, gpio, net,
-                            f"GPIO{gpio} is input-only but net {short_name(net)} only has input pins on it: nothing here can drive it from the MCU",
+                            f"{label} is input-only but net {short_name(net)} only has input pins on it: nothing here can drive it from the MCU",
                             "Use an output-capable GPIO (not 34-39) for a signal the MCU drives."))
     if circuit.kind(net) is None and circuit.has_switch(net, ref, pin) and not circuit.resistors(net, ref, pin):
         out.append(_finding("warning", "input_only_no_pull", ref, pin, name, gpio, net,
-                            f"GPIO{gpio} has no internal pull-up or pull-down and net {short_name(net)} has a switch but no pull resistor, so it floats while the switch is open",
+                            f"{label} has no internal pull-up or pull-down and net {short_name(net)} has a switch but no pull resistor, so it floats while the switch is open",
                             "Add a 10 kΩ pull-up (or pull-down) resistor, or use a GPIO with internal pulls."))
     return out
+
+
+def _check_analog_only(circuit: Circuit, ref: str, pin: str, name: str, gpio: int, net: str, label: str) -> list[dict[str, Any]]:
+    """A pin that is only an ADC input: it cannot drive, cannot be read as a digital level, and has no internal pull."""
+    others = circuit.others(net, ref, pin)
+    if circuit.has_switch(net, ref, pin) and not circuit.resistors(net, ref, pin) and circuit.kind(net) is None:
+        return [_finding("warning", "analog_only_no_pull", ref, pin, name, gpio, net,
+                         f"{label} is an analog input only, with no internal pull-up, and net {short_name(net)} has a switch but no pull resistor: "
+                         "it floats while the switch is open, and digitalRead cannot read it at all",
+                         f"Read the switch on a digital pin, or add a 10 kΩ pull-up and read {label} with analogRead.")]
+    if {n.get("pin_type") for n in others} <= {"input"} and others:
+        return [_finding("warning", "analog_only_drive", ref, pin, name, gpio, net,
+                         f"{label} is an analog input only, but net {short_name(net)} only has inputs on it: the MCU cannot drive it",
+                         "Use a digital pin for a signal the MCU drives.")]
+    return []
 
 
 def _check_enable(circuit: Circuit, ref: str, pin: str, name: str, net: str, enable: dict[str, Any]) -> list[dict[str, Any]]:
@@ -268,6 +347,89 @@ def _check_supply(circuit: Circuit, ref: str, supply_nets: dict[str, str], provi
     return out
 
 
+def _pins_named(circuit: Circuit, ref: str, pattern: str) -> list[tuple[str, str, str]]:
+    """``(pin, name, net)`` of the symbol's pins whose name matches ``pattern``."""
+    found = []
+    for pin, net in circuit.by_ref.get(ref, []):
+        node = next(n for n in circuit.nets[net]["nodes"] if n["ref"] == ref and n["pin"] == pin)
+        name = (node.get("pin_function") or "").rsplit("_", 1)[0]
+        if re.search(pattern, name):
+            found.append((pin, name, net))
+    return found
+
+
+def _check_analog_supply(circuit: Circuit, ref: str, provider: dict[str, Any]) -> list[dict[str, Any]]:
+    """A separate analog supply pin (AVCC): connected to the main supply, directly or through a filter."""
+    rule = provider.get("analog_supply")
+    if not rule:
+        return []
+    supply_nets = {net for _, _, net in _pins_named(circuit, ref, f"^{re.escape(rule['supply_pin'])}$")}
+    out = []
+    for pin, name, net in _pins_named(circuit, ref, rule["pin_pattern"]):
+        why = rule.get("why", "")
+        fix = f"Connect {name} to {rule['supply_pin']} (through 10 µH and 100 nF to ground when the ADC needs a quiet supply)."
+        if not _connected(circuit, net, ref, pin) and circuit.kind(net) is None:
+            out.append(_finding("error", "analog_supply_unconnected", ref, pin, name, None, net, f"{name} is not connected: {why}", fix))
+            continue
+        if net in supply_nets or circuit.filtered_from(net, supply_nets):
+            continue
+        if circuit.kind(net) == "rail":
+            out.append(_finding("warning", "analog_supply_separate", ref, pin, name, None, net,
+                                f"{name} is on {short_name(net)}, not on {rule['supply_pin']}'s net: {why}", fix))
+        else:
+            out.append(_finding("error", "analog_supply_unpowered", ref, pin, name, None, net,
+                                f"{name} is on net {short_name(net)}, which no supply reaches: {why}", fix))
+    return out
+
+
+def _check_aref(circuit: Circuit, ref: str, provider: dict[str, Any]) -> list[dict[str, Any]]:
+    """The ADC reference pin: tied straight to a rail it fights the internal references; else a capacitor steadies it."""
+    rule = provider.get("aref")
+    if not rule:
+        return []
+    out = []
+    for pin, name, net in _pins_named(circuit, ref, rule["pin_pattern"]):
+        connected = _connected(circuit, net, ref, pin)
+        if circuit.kind(net) == "rail":  # a power symbol alone puts it on the rail (KiCad's netlist leaves power symbols out)
+            out.append(_finding("warning", "aref_on_rail", ref, pin, name, None, net,
+                                f"{name} is tied to {short_name(net)}: when the firmware selects AVCC or the internal 1.1 V reference (analogReference DEFAULT "
+                                "or INTERNAL), that reference is shorted to the rail; only analogReference(EXTERNAL) is safe",
+                                f"Connect {name} to ground through 100 nF instead, unless the firmware only ever uses the external reference."))
+        elif rule.get("capacitor_advice") and not (connected and circuit.capacitors_to_ground(net)):
+            out.append(_finding("info", "aref_no_capacitor", ref, pin, name, None, net,
+                                f"{name} has no capacitor to ground: the datasheet recommends one when the reference is AVCC or the internal 1.1 V",
+                                f"Add 100 nF from {name} to ground."))
+    return out
+
+
+def _check_crystal(circuit: Circuit, ref: str, provider: dict[str, Any]) -> list[dict[str, Any]]:
+    """The oscillator pins: a crystal there needs its load capacitors; anything else makes them GPIOs, which only the fuses allow."""
+    rule = provider.get("crystal")
+    if not rule:
+        return []
+    pins = [(pin, name, net) for want in rule["pins"] for pin, name, net in _pins_named(circuit, ref, f"^{re.escape(want)}$")]
+    crystals = sorted({c for _, _, net in pins for c in circuit.crystals(net)})
+    out = []
+    for pin, name, net in pins:
+        if not _connected(circuit, net, ref, pin):
+            continue
+        if crystals:
+            here = [c for c in circuit.crystals(net)]
+            plain = [c for c in here if circuit.components[c].get("lib_id", "").startswith("Device:Crystal")]  # resonators carry their own
+            if plain and not circuit.capacitors_to_ground(net):
+                out.append(_finding("warning", "crystal_load_caps", ref, pin, name, None, net,
+                                    f"The crystal {plain[0]} on {name} has no load capacitor on net {short_name(net)}: it may not start, or run off frequency",
+                                    f"Add the crystal's load capacitor (typically 12-22 pF, from its datasheet) from {short_name(net)} to ground."))
+            elif not here:
+                out.append(_finding("warning", "crystal_pin_shared", ref, pin, name, None, net,
+                                    f"{name} is on net {short_name(net)} although a crystal ({', '.join(crystals)}) sits on the other oscillator pin",
+                                    f"Put {crystals[0]} between both oscillator pins, each with its load capacitor to ground."))
+        else:
+            out.append(_finding("info", "oscillator_pin_gpio", ref, pin, name, None, net,
+                                f"{name} is used as a signal (net {short_name(net)}): {rule.get('gpio_why', 'a GPIO only with the internal oscillator')}"))
+    return out
+
+
 def _ohms(value: float) -> str:
     for scale, suffix in ((1e6, "M"), (1e3, "k")):
         if value >= scale:
@@ -283,6 +445,8 @@ def _capability(attrs: dict[str, Any], needs: str, known: set[str] = frozenset()
     reserved = attrs.get("reserved")
     if reserved:
         return False, f"it is {reserved}"
+    if attrs.get("analog_only") and needs not in ("adc", "adc1", "adc2"):
+        return False, "it is an analog input only (no digital input, output or peripheral)"
     if needs == "input":
         return True, ""
     if needs == "output":
@@ -328,7 +492,7 @@ def check_requirements(circuit: Circuit, mcus: dict[str, dict[str, Any]], requir
                 if not ok:
                     problems.append(f"{need}: {why}")
             results.append({"target": label, "needs": needs, "pin": f"{ref}:{pin}", "gpio": gpio, "passed": not problems,
-                            **({"reason": f"GPIO{gpio} — " + "; ".join(problems)} if problems else {})})
+                            **({"reason": f"{gpio_label(mcus[ref]['provider'], gpio)} — " + "; ".join(problems)} if problems else {})})
     return results
 
 
@@ -344,7 +508,8 @@ def _gpios_of_target(circuit: Circuit, mcus: dict[str, dict[str, Any]], req: dic
             gpio = _gpio_of(provider, name)
             if gpio is None:
                 continue
-            hit = (wanted_net and short_name(net).lstrip("/").lower() == wanted_net) or (wanted_pin and wanted_pin.lower() in (f"{ref}:{pin}".lower(), f"{ref}:{name}".lower(), f"{ref}:io{gpio}".lower()))
+            names = (f"{ref}:{pin}", f"{ref}:{name}", f"{ref}:io{gpio}", f"{ref}:{gpio_label(provider, gpio)}")
+            hit = (wanted_net and short_name(net).lstrip("/").lower() == wanted_net) or (wanted_pin and wanted_pin.lower() in {n.lower() for n in names})
             if hit:
                 found.append((ref, pin, gpio, table.get(gpio, {})))
     return found
