@@ -110,6 +110,7 @@ To publish a new version: `pnpm run dist`, commit, then add a version to `market
 3. Open the `.kicad_sch` from **Workspace files**: the KiCad tab shows the render, refreshed after each agent edit; **Render** re-renders on demand.
 4. `/erc`, `/drc`, `/bom` work without the model.
 5. **Plugins → KiCad → KiCad bridge / KiCad policy** hold the settings.
+6. New to electronics? [`demo/button-light`](demo/button-light/README.md) walks a beginner from one sentence (*a USB light that one press turns on and the next turns off*) to a board ready to order: the design brief, the schematic, the chip check, the firmware tried on the simulated chip with a prepared program, the routed board and its fab zip, each step judged by KiCad.
 
 ### Board placement
 

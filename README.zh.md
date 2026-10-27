@@ -110,6 +110,7 @@ dsh plugin --profile web add "git+https://github.com/LuYanFCP/dsh-kicad.git#<com
 3. 从 **Workspace files** 打开 `.kicad_sch`：KiCad 标签页显示渲染结果，agent 每次修改后自动刷新；**Render** 按需重新渲染。
 4. `/erc`、`/drc`、`/bom` 不经过模型直接运行。
 5. 设置位于 **Plugins → KiCad → KiCad bridge / KiCad policy**。
+6. 没接触过电路？[`demo/button-light`](demo/button-light/README.zh.md) 带小白从一句话（*一个 USB 小灯，按一下亮、再按一下灭*）走到可以下单的电路板：设计说明、原理图、芯片检查、用准备好的程序在模拟芯片上试玩、布好线的电路板和生产文件 zip，每一步都由 KiCad 判定。
 
 ### 电路板布局
 
