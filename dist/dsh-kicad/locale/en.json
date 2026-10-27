@@ -1,1 +1,1 @@
-{ "meta": { "title": "KiCad", "description": "Design and check KiCad schematics with the agent: kicad_* tools, approval and automatic ERC, skills, /erc /drc /bom, a schematic viewer and an EDA preset." } }
+{ "meta": { "title": "KiCad", "description": "Design and check KiCad schematics and boards with the agent: kicad_* tools, approval with automatic ERC/DRC, SPICE simulation, MCU wiring checks and firmware simulation, autorouting and fab output, skills, commands, a 2D/3D viewer and an EDA preset." } }
