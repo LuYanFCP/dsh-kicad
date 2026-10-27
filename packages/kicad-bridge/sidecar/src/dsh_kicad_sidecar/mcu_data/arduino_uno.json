@@ -1,0 +1,197 @@
+{
+  "id": "arduino_uno",
+  "name": "Arduino UNO (ATmega328P module)",
+  "source": "Arduino's schematics and pin mapping of the board (ATmega328P ports per Arduino pin, the USB-serial converter on D0/D1, the LED on D13) and the ATmega328P datasheet; hand-transcribed",
+  "match": {
+    "lib_id": [
+      "MCU_Module:Arduino_UNO_R2",
+      "MCU_Module:Arduino_UNO_R3"
+    ],
+    "value": [
+      "^Arduino[ _]?UNO( R[23])?$"
+    ]
+  },
+  "gpio_pin_pattern": "^D(\\d+)(?:/|$)",
+  "gpio_label": "D{}",
+  "pin_aliases": {
+    "A0": 14,
+    "A1": 15,
+    "A2": 16,
+    "A3": 17,
+    "A4": 18,
+    "A5": 19,
+    "SDA/A4": 18,
+    "SCL/A5": 19
+  },
+  "gpio_names": {
+    "14": "A0",
+    "15": "A1",
+    "16": "A2",
+    "17": "A3",
+    "18": "A4",
+    "19": "A5"
+  },
+  "aref": {
+    "pin_pattern": "^AREF$",
+    "capacitor_advice": false
+  },
+  "gpios": {
+    "0": {
+      "caps": [
+        "uart_rx",
+        "pcint"
+      ],
+      "note": "PD0 of the ATmega328P",
+      "shared": {
+        "severity": "warning",
+        "rule": "usb_serial_pin",
+        "message": "D0 is the board's serial RX, driven by its USB-serial converter: a device driving it from net {net} fights the converter during uploads and Serial",
+        "fix": "Move the signal to D2-D12 (SoftwareSerial can use them), or disconnect it while uploading and do not use Serial."
+      }
+    },
+    "1": {
+      "caps": [
+        "uart_tx",
+        "pcint"
+      ],
+      "note": "PD1 of the ATmega328P",
+      "shared": {
+        "severity": "warning",
+        "rule": "usb_serial_pin",
+        "message": "D1 is the board's serial TX, read by its USB-serial converter: uploads and every Serial print also drive net {net}",
+        "fix": "Move the signal to D2-D12, or make sure what is on {net} tolerates the serial traffic."
+      }
+    },
+    "2": {
+      "caps": [
+        "int0",
+        "pcint"
+      ],
+      "note": "PD2 of the ATmega328P"
+    },
+    "3": {
+      "caps": [
+        "int1",
+        "pwm",
+        "pcint"
+      ],
+      "note": "PD3 of the ATmega328P"
+    },
+    "4": {
+      "caps": [
+        "pcint"
+      ],
+      "note": "PD4 of the ATmega328P"
+    },
+    "5": {
+      "caps": [
+        "pwm",
+        "pcint"
+      ],
+      "note": "PD5 of the ATmega328P"
+    },
+    "6": {
+      "caps": [
+        "pwm",
+        "comparator",
+        "pcint"
+      ],
+      "note": "PD6 of the ATmega328P"
+    },
+    "7": {
+      "caps": [
+        "comparator",
+        "pcint"
+      ],
+      "note": "PD7 of the ATmega328P"
+    },
+    "8": {
+      "caps": [
+        "timer_capture",
+        "pcint"
+      ],
+      "note": "PB0 of the ATmega328P"
+    },
+    "9": {
+      "caps": [
+        "pwm",
+        "pcint"
+      ],
+      "note": "PB1 of the ATmega328P"
+    },
+    "10": {
+      "caps": [
+        "pwm",
+        "spi_ss",
+        "pcint"
+      ],
+      "note": "PB2 of the ATmega328P"
+    },
+    "11": {
+      "caps": [
+        "pwm",
+        "spi_mosi",
+        "pcint"
+      ],
+      "note": "PB3 of the ATmega328P"
+    },
+    "12": {
+      "caps": [
+        "spi_miso",
+        "pcint"
+      ],
+      "note": "PB4 of the ATmega328P"
+    },
+    "13": {
+      "caps": [
+        "spi_sck",
+        "pcint"
+      ],
+      "note": "PB5 of the ATmega328P"
+    },
+    "14": {
+      "adc": "adc0",
+      "note": "ADC0 / PC0 of the ATmega328P",
+      "caps": [
+        "pcint"
+      ]
+    },
+    "15": {
+      "adc": "adc1",
+      "note": "ADC1 / PC1 of the ATmega328P",
+      "caps": [
+        "pcint"
+      ]
+    },
+    "16": {
+      "adc": "adc2",
+      "note": "ADC2 / PC2 of the ATmega328P",
+      "caps": [
+        "pcint"
+      ]
+    },
+    "17": {
+      "adc": "adc3",
+      "note": "ADC3 / PC3 of the ATmega328P",
+      "caps": [
+        "pcint"
+      ]
+    },
+    "18": {
+      "adc": "adc4",
+      "note": "ADC4 / PC4 of the ATmega328P",
+      "caps": [
+        "pcint",
+        "i2c_sda"
+      ]
+    },
+    "19": {
+      "adc": "adc5",
+      "note": "ADC5 / PC5 of the ATmega328P",
+      "caps": [
+        "pcint",
+        "i2c_scl"
+      ]
+    }
+  }
+}

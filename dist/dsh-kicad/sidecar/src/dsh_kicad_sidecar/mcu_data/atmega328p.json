@@ -1,0 +1,100 @@
+{
+  "id": "atmega328p",
+  "name": "ATmega48/88/168/328 (28/32-pin AVR, the Arduino UNO/Nano chip)",
+  "source": "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P datasheet DS40002061 (pin configurations, alternate port functions, AVCC, AREF, crystal oscillator, reset); hand-transcribed, check against the datasheet of the exact part",
+  "match": {
+    "lib_id": [
+      "MCU_Microchip_ATmega:ATmega48-*", "MCU_Microchip_ATmega:ATmega48A-*", "MCU_Microchip_ATmega:ATmega48P-*", "MCU_Microchip_ATmega:ATmega48PA-*",
+      "MCU_Microchip_ATmega:ATmega48PV-*", "MCU_Microchip_ATmega:ATmega48V-*",
+      "MCU_Microchip_ATmega:ATmega88-*", "MCU_Microchip_ATmega:ATmega88A-*", "MCU_Microchip_ATmega:ATmega88P-*", "MCU_Microchip_ATmega:ATmega88PA-*",
+      "MCU_Microchip_ATmega:ATmega88PV-*", "MCU_Microchip_ATmega:ATmega88V-*",
+      "MCU_Microchip_ATmega:ATmega168-*", "MCU_Microchip_ATmega:ATmega168A-*", "MCU_Microchip_ATmega:ATmega168P-*", "MCU_Microchip_ATmega:ATmega168PA-*",
+      "MCU_Microchip_ATmega:ATmega168PV-*", "MCU_Microchip_ATmega:ATmega168V-*",
+      "MCU_Microchip_ATmega:ATmega328-*", "MCU_Microchip_ATmega:ATmega328P-*"
+    ],
+    "value": [
+      "^ATmega(48|88|168|328)(A|P|PA|PV|V)?(-|$)"
+    ]
+  },
+  "not_covered": [
+    {
+      "lib_id": [
+        "*:ATmega*"
+      ],
+      "why": "only the ATmega48/88/168/328 table (not the PB variants) is shipped; other ATmega parts have different pins and peripherals"
+    }
+  ],
+  "gpio_pin_pattern": "(?:^|/)P([BCD])(\\d)$",
+  "ports": {
+    "B": 0,
+    "C": 8,
+    "D": 16
+  },
+  "pin_aliases": {
+    "ADC6": 30,
+    "ADC7": 31
+  },
+  "gpio_names": {
+    "30": "ADC6",
+    "31": "ADC7"
+  },
+  "enable": {
+    "pin_pattern": "RESET",
+    "unconnected_severity": "warning",
+    "unconnected_why": "the pin has an internal pull-up of about 30-60 kΩ, but noise can reset the chip",
+    "no_pullup_severity": "warning",
+    "no_pullup_why": "it relies on the weak internal pull-up",
+    "advice": "Pull RESET up to VCC with 10 kΩ (the ISP header and an Arduino-style auto-reset capacitor from DTR connect here too); PC6 is a GPIO only with the RSTDISBL fuse, which disables ISP programming."
+  },
+  "supply": {
+    "pins": [
+      "VCC",
+      "AVCC"
+    ],
+    "min_uf": 0.1,
+    "advice": "100 nF capacitor"
+  },
+  "analog_supply": {
+    "pin_pattern": "^AVCC$",
+    "supply_pin": "VCC",
+    "why": "AVCC powers the ADC and port C (PC0-PC5); the datasheet requires it connected to VCC even when the ADC is not used, and at most 0.3 V away from VCC"
+  },
+  "aref": {
+    "pin_pattern": "^AREF$",
+    "capacitor_advice": true
+  },
+  "crystal": {
+    "pins": [
+      "XTAL1/PB6",
+      "XTAL2/PB7"
+    ],
+    "gpio_why": "a GPIO only while the fuses select the internal RC oscillator (the factory setting); an Arduino bootloader's fuses select a crystal here"
+  },
+  "gpios": {
+    "0": {"caps": ["timer_capture", "pcint"], "note": "ICP1 / CLKO / PCINT0"},
+    "1": {"caps": ["pwm", "pcint"], "note": "OC1A (Timer1 PWM) / PCINT1"},
+    "2": {"caps": ["pwm", "spi_ss", "pcint"], "note": "SS / OC1B (Timer1 PWM) / PCINT2"},
+    "3": {"caps": ["pwm", "spi_mosi", "pcint"], "note": "MOSI / OC2A (Timer2 PWM) / PCINT3"},
+    "4": {"caps": ["spi_miso", "pcint"], "note": "MISO / PCINT4"},
+    "5": {"caps": ["spi_sck", "pcint"], "note": "SCK / PCINT5"},
+    "6": {"caps": ["pcint"], "note": "XTAL1 / TOSC1 / PCINT6"},
+    "7": {"caps": ["pcint"], "note": "XTAL2 / TOSC2 / PCINT7"},
+    "8": {"adc": "adc0", "caps": ["pcint"], "note": "ADC0 / PCINT8"},
+    "9": {"adc": "adc1", "caps": ["pcint"], "note": "ADC1 / PCINT9"},
+    "10": {"adc": "adc2", "caps": ["pcint"], "note": "ADC2 / PCINT10"},
+    "11": {"adc": "adc3", "caps": ["pcint"], "note": "ADC3 / PCINT11"},
+    "12": {"adc": "adc4", "caps": ["i2c_sda", "pcint"], "note": "ADC4 / SDA (TWI) / PCINT12"},
+    "13": {"adc": "adc5", "caps": ["i2c_scl", "pcint"], "note": "ADC5 / SCL (TWI) / PCINT13"},
+    "14": {"caps": ["pcint"], "note": "RESET / PCINT14: a GPIO only with the RSTDISBL fuse, which disables ISP"},
+    "16": {"caps": ["uart_rx", "pcint"], "note": "RXD (USART) / PCINT16"},
+    "17": {"caps": ["uart_tx", "pcint"], "note": "TXD (USART) / PCINT17"},
+    "18": {"caps": ["int0", "pcint"], "note": "INT0 / PCINT18"},
+    "19": {"caps": ["int1", "pwm", "pcint"], "note": "INT1 / OC2B (Timer2 PWM) / PCINT19"},
+    "20": {"caps": ["timer_clock", "pcint"], "note": "XCK / T0 / PCINT20"},
+    "21": {"caps": ["pwm", "timer_clock", "pcint"], "note": "T1 / OC0B (Timer0 PWM) / PCINT21"},
+    "22": {"caps": ["pwm", "comparator", "pcint"], "note": "AIN0 / OC0A (Timer0 PWM) / PCINT22"},
+    "23": {"caps": ["comparator", "pcint"], "note": "AIN1 / PCINT23"},
+    "30": {"adc": "adc6", "analog_only": true, "note": "ADC6 (TQFP and QFN only): an analog input, no digital function and no pull-up"},
+    "31": {"adc": "adc7", "analog_only": true, "note": "ADC7 (TQFP and QFN only): an analog input, no digital function and no pull-up"}
+  }
+}
