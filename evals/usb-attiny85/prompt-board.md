@@ -1,0 +1,1 @@
+原理图已经 ERC 通过，现在把它做成可以下单的电路板：从 usb_attiny.kicad_sch 生成 usb_attiny.kicad_pcb，两层板，设计规则按 JLCPCB 的工艺能力；按功能块布局，USB-C 接口放在板边；正反两面 GND 铺铜，然后布线。最终 KiCad DRC 必须 0 错误、0 未布通、原理图一致性 0。最后用 JLCPCB 预设导出生产文件（Gerber、钻孔、坐标、BOM 打包成 zip），告诉我板子尺寸和 zip 的位置。
