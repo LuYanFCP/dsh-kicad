@@ -1,1 +1,1 @@
-{ "meta": { "title": "KiCad bridge", "description": "Runs the KiCad sidecar (kicad-cli and schematic editing) and exposes it as ctx.kicad." } }
+{ "meta": { "title": "KiCad bridge", "description": "Runs the KiCad sidecar (kicad-cli, schematic and board editing, routing, SPICE and firmware simulation) and exposes it as ctx.kicad." } }

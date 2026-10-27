@@ -1,1 +1,1 @@
-{ "meta": { "title": "KiCad Web UI", "description": "Sidebar viewer for .kicad_sch/.kicad_pcb (interactive, SVG and 3D), ERC/DRC result cards, and KiCad settings pages." } }
+{ "meta": { "title": "KiCad Web UI", "description": "Sidebar viewer for .kicad_sch/.kicad_pcb (interactive, SVG and 3D), cards for ERC/DRC, schematic and board edits, PCB sync, autorouting and fab output, and KiCad settings pages." } }

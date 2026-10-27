@@ -1,1 +1,1 @@
-{ "meta": { "title": "KiCad 技能与命令", "description": "需求补全、原理图设计规范、ERC 排查与 agent 工作流技能，以及 /kicad-design、/erc、/drc、/bom、/kicad-fab 命令。" } }
+{ "meta": { "title": "KiCad 技能与命令", "description": "需求补全、原理图设计规范、PCB 布局、ERC/DRC 排查、仿真、MCU 检查与 agent 工作流技能，以及 /kicad-design、/erc、/drc、/bom、/simulate、/mcu-check、/mcu-sim、/kicad-fab、/kicad-render、/kicad-doctor、/kicad-install 命令。" } }
