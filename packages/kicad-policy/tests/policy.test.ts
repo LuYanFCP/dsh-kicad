@@ -160,6 +160,7 @@ describe('dsh-kicad-policy', () => {
     expect(asked.isError).toBe(true)
     expect(readFileSync(pcb, 'utf8')).toBe(before)
     expect(policy.GUIDANCE).toMatch(/kicad_autoroute routes the rest[\s\S]*\/kicad-install freerouting/)
+    expect(policy.GUIDANCE).toMatch(/Boards \(load the kicad-pcb-layout skill/)
   })
 
   it('project context lists KiCad files and the last ERC', () => {
