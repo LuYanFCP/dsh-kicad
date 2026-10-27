@@ -66,6 +66,10 @@ describe('kicad_autoroute', () => {
     expect(out).toContain('KiCad: 2 unrouted connection(s), 2 DRC error(s).')
     expect(out).toMatch(/Automatic DRC by KiCad .*FAILED — 2 error\(s\), 0 warning\(s\), 2 unrouted/)
     expect(readFileSync(pcb, 'utf8')).toContain('(via\n\t\t(at 134 117.225)')
+    expect(result.meta).toMatchObject({
+      kind: 'autoroute', pcb, written: true, nets: { left_out: ['OUT'] }, added: { segments: 6, vias: 1 }, unrouted: 2,
+      freerouting: { version: '9.9.9', state: 'COMPLETED', timed_out: false }, drc: { passed: false, errors: 2 },
+    })
   })
 
   it.runIf(posix)('without Freerouting the error says how to install it', async () => {

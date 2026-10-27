@@ -902,7 +902,8 @@ function apply(ctx, config = {}) {
       },
       output: {
         schema: { type: "json" },
-        render: (_args, value) => [{ type: "text", text: formatSync(value) }]
+        render: (_args, value) => [{ type: "text", text: formatSync(value) }],
+        presentationMeta: (_args, value) => syncMeta(value)
       },
       async execute(args, exec) {
         return await ctx.kicad.run("update_pcb", {
@@ -933,7 +934,8 @@ function apply(ctx, config = {}) {
       },
       output: {
         schema: { type: "json" },
-        render: (_args, value) => [{ type: "text", text: formatAutoroute(value) }]
+        render: (_args, value) => [{ type: "text", text: formatAutoroute(value) }],
+        presentationMeta: (_args, value) => autorouteMeta(value)
       },
       async execute(args, exec) {
         const seconds = Math.min(Math.max(args.timeout ?? AUTOROUTE_TIMEOUT, 5), 3600);
@@ -955,16 +957,55 @@ function fabContent(value) {
 function fabMeta(r) {
   return {
     kind: "fab",
+    pcb: r.pcb,
     exported: r.exported,
     refused: r.refused,
     forced: r.forced,
     preset: r.preset,
+    preset_label: r.preset_label ?? null,
     output_dir: r.output_dir,
     zip: r.zip ?? null,
     gate: { passed: r.gate.passed, blocking: r.gate.blocking, drc: r.gate.drc, unrouted: r.gate.unrouted, parity: { checked: r.gate.parity.checked, issues: r.gate.parity.issues } },
     layers: r.layers ?? [],
     files: (r.files ?? []).length,
+    file_list: (r.files ?? []).slice(0, MAX_META_ITEMS).map((f) => ({ path: f.path, kind: f.kind, layer: f.layer ?? null })),
     preview: r.preview ?? []
+  };
+}
+var MAX_META_ITEMS = 80;
+function syncMeta(v) {
+  return {
+    kind: "sync",
+    schematic: v.schematic,
+    pcb: v.pcb,
+    created: v.created,
+    dry_run: v.dry_run,
+    written: v.written,
+    counts: v.counts,
+    changes: v.changes.slice(0, MAX_META_ITEMS),
+    more_changes: Math.max(0, v.changes.length - MAX_META_ITEMS),
+    staged: v.staged.slice(0, MAX_META_ITEMS).map((s) => s.reference),
+    flagged: v.flagged.slice(0, MAX_META_ITEMS),
+    footprints: v.board.footprints,
+    copper_layers: v.board.copper_layers.length,
+    parity: v.parity ? { total: v.parity.total, by_type: v.parity.by_type } : null
+  };
+}
+function autorouteMeta(v) {
+  const fr = v.freerouting;
+  return {
+    kind: "autoroute",
+    pcb: v.pcb,
+    written: v.written,
+    nets: { routed: v.nets.routed, left_out: v.nets.left_out.slice(0, MAX_META_ITEMS) },
+    added: v.added,
+    kept: v.kept,
+    zones_filled: v.zones_filled,
+    unrouted: v.unrouted,
+    unrouted_before: fr.unrouted_before,
+    freerouting: { version: fr.version, state: fr.state, passes: fr.passes, seconds: fr.seconds, timed_out: fr.timed_out },
+    drc: { passed: v.drc.passed, errors: v.drc.counts.error, warnings: v.drc.counts.warning, parity: v.drc.parity ?? null },
+    notes: v.notes.slice(0, 8)
   };
 }
 function renderContent(value) {
@@ -1018,6 +1059,7 @@ export {
   PATH_ARGUMENTS,
   TOOL_ACCESS,
   apply,
+  autorouteMeta,
   checkMeta,
   doctorMeta,
   eng,
@@ -1036,5 +1078,6 @@ export {
   formatSimulate,
   formatSync,
   inject,
-  name
+  name,
+  syncMeta
 };

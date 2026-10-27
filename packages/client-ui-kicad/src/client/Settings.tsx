@@ -14,6 +14,10 @@ type Field = { key: string, label: KiCadLocaleKey, hint?: KiCadLocaleKey, kind: 
 export const BRIDGE_FIELDS: Field[] = [
   { key: 'kicadCli', label: 'settings.kicadCli', hint: 'settings.kicadCliHint', kind: 'text' },
   { key: 'python', label: 'settings.python', hint: 'settings.pythonHint', kind: 'text' },
+  { key: 'java', label: 'settings.java', hint: 'settings.javaHint', kind: 'text' },
+  { key: 'freerouting', label: 'settings.freerouting', hint: 'settings.freeroutingHint', kind: 'text' },
+  { key: 'ngspice', label: 'settings.ngspice', hint: 'settings.ngspiceHint', kind: 'text' },
+  { key: 'qemu', label: 'settings.qemu', hint: 'settings.qemuHint', kind: 'text' },
 ]
 export const POLICY_FIELDS: Field[] = [
   { key: 'approval', label: 'settings.approval', kind: 'check', on: 'ask', off: 'follow' },

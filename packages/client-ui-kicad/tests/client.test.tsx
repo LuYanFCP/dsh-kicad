@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { orderPages, parseFileAddress, readCheckMeta, renderDir, sessionFileAddress, toOps } from '../src/client/index.tsx'
 import { CheckCard, EditCard } from '../src/client/Cards.tsx'
@@ -88,6 +88,17 @@ describe('settings cards', () => {
     expect(mutate).toHaveBeenCalledWith([{ op: 'set', path: ['approval'], value: 'follow' }], 7)
     render(<BridgeSettings view="summary" form={form} />)
     expect(screen.getByText('kicad-cli: default')).toBeTruthy()
+  })
+
+  it('edits the paths of the optional tools on the bridge page', async () => {
+    const mutate = vi.fn(async () => true)
+    const form = { state: { status: 'ready' as const, value: { kicadCli: '', java: '/usr/bin/java' }, revision: 3, writable: true }, mutate }
+    const page = within(render(<BridgeSettings view="page" form={form} />).container)
+    for (const label of [/^Java \(for Freerouting\)/, /^Freerouting/, /^ngspice/, /^QEMU for ESP32/]) expect(page.getByLabelText(label)).toBeTruthy()
+    fireEvent.change(page.getByLabelText(/^Freerouting/), { target: { value: '/opt/freerouting-2.5.0.jar' } })
+    fireEvent.change(page.getByLabelText(/^Java \(for Freerouting\)/), { target: { value: '' } })
+    await act(async () => { fireEvent.click(page.getByText('Save')) })
+    expect(mutate).toHaveBeenCalledWith([{ op: 'unset', path: ['java'] }, { op: 'set', path: ['freerouting'], value: '/opt/freerouting-2.5.0.jar' }], 3)
   })
 })
 

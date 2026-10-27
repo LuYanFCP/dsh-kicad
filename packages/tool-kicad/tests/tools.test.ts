@@ -137,6 +137,13 @@ describe('dsh-tool-kicad', () => {
     expect(out).toContain('- added U1 (Package_SO:SOIC-8_5.3x5.3mm_P1.27mm) at (')
     expect(out).toMatch(/Board: 15 footprint\(s\), 2 copper layers, format \d+, outline/)
     expect(out).toContain('Schematic parity (KiCad DRC): 0 issues.')
+    expect(created.meta).toMatchObject({
+      kind: 'sync', created: true, dry_run: false, written: true, counts: { created: 1, added: 15, outline: 1 }, more_changes: 0,
+      staged: [], flagged: [], footprints: 15, copper_layers: 2, parity: { total: 0 },
+    })
+    const meta = created.meta as { pcb: string, changes: string[] }
+    expect(meta.pcb).toBe(board)
+    expect(meta.changes.some(c => c.startsWith('added U1 (Package_SO:SOIC-8_5.3x5.3mm_P1.27mm) at ('))).toBe(true)
     const before = readFileSync(board, 'utf8')
     const again = await runTool(ctx, 'kicad_update_pcb', { schematic })
     expect(text(again)).toMatch(/is in sync with .*usb_attiny\.kicad_sch: nothing to change, nothing written\.\n/)
@@ -200,6 +207,9 @@ describe('kicad_export_fab and kicad_fab_preset', () => {
     expect(meta).toMatchObject({ kind: 'fab', exported: true, gate: { passed: true } })
     expect(existsSync(meta.zip)).toBe(true)
     expect(meta.layers).toHaveLength(9)
+    const listed = (done.meta as { file_list: Array<{ path: string, kind: string, layer: string | null }> }).file_list
+    expect(listed.find(f => f.layer === 'F.Cu')).toBeDefined()
+    expect(listed.map(f => f.path)).toContain('assembly/pic_programmer-cpl-jlc.csv')
 
     unrouteOneTrack(pcb)
     const refused = await runTool(ctx, 'kicad_export_fab', { pcb, output_dir: join(demo!, 'fab-refused') })
