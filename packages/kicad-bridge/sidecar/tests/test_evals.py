@@ -137,3 +137,14 @@ def test_the_usb_attiny85_eval_wants_the_schematic_in_titled_blocks(project):
     run = verify(os.path.join(EVALS, "usb-attiny85", "verify.py"), SRC, project("usb_attiny"))
     assert run.returncode == 1 and "22/23 requirements satisfied" in run.stdout
     assert "FAIL drawn in titled functional blocks" in run.stdout and "outside every block: C1, C2, C3" in run.stdout
+
+
+@needs_kicad_cli
+@needs_symbols
+def test_the_usb_power_blocks_eval_passes_only_a_schematic_drawn_in_blocks(project):
+    script = os.path.join(EVALS, "usb-power-blocks", "verify.py")
+    framed = verify(script, SRC, project("usb_attiny_blocks"))  # the same supply with an MCU around it, in five blocks
+    assert framed.returncode == 0 and "12/12 requirements satisfied" in framed.stdout, framed.stdout[-3000:]
+    loose = verify(script, SRC, project("usb_attiny"))
+    assert loose.returncode == 1 and "11/12 requirements satisfied" in loose.stdout
+    assert "FAIL drawn in titled functional blocks" in loose.stdout
