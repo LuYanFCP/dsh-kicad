@@ -12,8 +12,8 @@
  * - `systemPrompt.context`   the KiCad project found in the working directory
  */
 import { existsSync } from 'node:fs'
-import { basename } from 'node:path'
-import { DESIGN_WRITE_TOOLS, formatCheck, PATH_ARGUMENTS, TOOL_ACCESS, type CheckReport, type KiCadToolName } from 'dsh-tool-kicad'
+import { basename, dirname, join } from 'node:path'
+import { DESIGN_WRITE_TOOLS, formatCheck, formatDesignChecks, PATH_ARGUMENTS, TOOL_ACCESS, type CheckReport, type DesignChecksValue, type KiCadToolName } from 'dsh-tool-kicad'
 import { agentCwd, assemblyAgent, sessionPermissions, z, type Context, type PostToolDecision, type PreToolDecision, type ToolExecution, type Volatile } from './dsh.ts'
 import { inside, resolveArg } from './paths.ts'
 import { ErcMemory, projectContext } from './project.ts'
@@ -40,6 +40,8 @@ export interface Config {
   autoDrc: Volatile<boolean>
   /** Refresh the SVG render used by the sidebar viewer after every edit. */
   autoRender: Volatile<boolean>
+  /** Re-run the project's design checks (design-checks.json) after every schematic edit and append what fails. */
+  autoChecks: Volatile<boolean>
   /** Add the KiCad working rules section to the system prompt. */
   guidance: boolean
   /** Add the detected KiCad project to the dynamic prompt context. */
@@ -53,6 +55,7 @@ export const Config: z<Config> = z.object({
   autoErc: z.boolean().default(true).volatile().description('Run ERC after every schematic edit.'),
   autoDrc: z.boolean().default(true).volatile().description('Run DRC after every board edit.'),
   autoRender: z.boolean().default(true).volatile().description('Re-render the sidebar SVG after every schematic edit.'),
+  autoChecks: z.boolean().default(true).volatile().description('Re-run design-checks.json after every schematic edit.'),
   guidance: z.boolean().default(true).description('Add KiCad working rules to the system prompt.'),
   projectContext: z.boolean().default(true).description('Tell the model which KiCad project is open.'),
 }) as unknown as z<Config>
@@ -70,6 +73,7 @@ export const GUIDANCE = `# KiCad (EDA) work
   - build one block per kicad_edit_schematic call: place its parts inside its area with explicit references (U1, R1, C1…) so the same call can wire them, wire them together, end every signal that leaves the block in a net label and every supply in a power symbol, and finish the call with add_block{title, references};
   - title each block with its job and main part ("USB-C POWER IN", "3V3 LDO — AMS1117-3.3", "MCU — ATtiny85"); put short notes inside a block with add_text where a choice needs explaining ("RESET: 10k pull-up R3").
   Blocks connect only through net labels and power symbols, never through wires that cross a frame. After a batch that places or moves parts the edit result names the parts outside every block: a design you draw is finished only when there are none. In an existing schematic keep its organisation (put new parts in the block they belong to); reorganise an unframed sheet into blocks only when the user asks.
+- Part values and limits come from datasheets, not from memory (load the kicad-datasheet-checks skill). Before wiring an IC, regulator, module or LED, read its datasheet with kicad_datasheet (the symbol's link; when there is none or it is dead, find the PDF with web_search). Turn each requirement the schematic must meet into a kicad_check_design check that quotes the datasheet word for word: absolute maximum and operating voltages, the capacitors it needs, pull-ups and pull-downs, series resistors and currents, dropout. These checks are the schematic's unit tests: write them with the block, fix every FAIL, report CANNOT VERIFY as unverified, and when the user's numbers contradict a datasheet, say so instead of choosing silently. design-checks.json re-runs after every schematic edit.
 - Boards (load the kicad-pcb-layout skill: it takes a board from the synced schematic to the fab files, with KiCad's verdict at each step): create or refresh the board from the schematic with kicad_update_pcb (after ERC passes, and after every schematic change; it lists the REF:PINs to fix when it refuses), read with kicad_read_pcb (outline, footprints with courtyards and pad nets, rules, unrouted count), then change them with one kicad_edit_pcb batch: outline and mounting holes, placement, rules and net classes, tracks (route pad to pad with "REF:PAD" endpoints), vias, zones, keepouts, silkscreen.
 - Place a new board with one kicad_edit_pcb auto_place (it follows the schematic's functional blocks: draw them with add_block first), look at it with kicad_render (view "3d"), then fine-tune with move_footprint / place_block; kicad_read_pcb's placement line must show no overlaps and nothing outside the outline.
 - Routing: after placement, route critical nets by hand (power, USB/differential pairs, crystal) with add_track / add_via locked: true, then kicad_autoroute routes the rest without touching them; add a GND pour (add_zone on both copper layers), which kicad_autoroute refills. If it reports Freerouting or Java missing, give the user its install guidance (/kicad-install freerouting); do not install anything yourself.
@@ -87,9 +91,12 @@ const AUTO_CHECK: Readonly<Record<string, 'erc' | 'drc'>> = { kicad_edit_schemat
 /** Tools whose result names the board and carries KiCad's DRC already: that verdict is appended instead of a second run. */
 const CHECKED: ReadonlySet<string> = new Set(['kicad_update_pcb', 'kicad_autoroute'])
 
+/** The project's design checks, kept by kicad_check_design next to the schematic. */
+const DESIGN_CHECKS_FILE = 'design-checks.json'
+
 /** Tools whose path arguments must stay inside the workspace. */
 const GUARDED: ReadonlySet<string> = new Set(
-  (Object.keys(TOOL_ACCESS) as KiCadToolName[]).filter(n => TOOL_ACCESS[n] === 'write' || n === 'kicad_render' || n === 'kicad_simulate'),
+  (Object.keys(TOOL_ACCESS) as KiCadToolName[]).filter(n => TOOL_ACCESS[n] === 'write' || n === 'kicad_render' || n === 'kicad_simulate' || n === 'kicad_datasheet'),
 )
 
 export function apply(ctx: Context, config: Config): void {
@@ -118,6 +125,15 @@ export function apply(ctx: Context, config: Config): void {
 
   {
     ctx.on('tools/pre-execute', async (exec, next): Promise<PreToolDecision> => {
+      if (exec.name === 'kicad_check_design') {
+        // Running the saved checks reads; adding, replacing or removing them writes design-checks.json.
+        const args = (exec.arguments ?? {}) as { checks?: unknown[], rails?: Record<string, unknown>, remove?: unknown[] }
+        const saving = Boolean(args.checks?.length || Object.keys(args.rails ?? {}).length || args.remove?.length)
+        if (saving && sessionPermissions(ctx, exec.agent).sandbox === 'read-only') {
+          return { kind: 'deny', reason: 'kicad_check_design would save design-checks.json, but this session is read-only. Run it without checks to re-run the saved ones, or ask the user to switch permissions to workspace write.' }
+        }
+        return next()
+      }
       if (!(DESIGN_WRITE_TOOLS as readonly string[]).includes(exec.name)) return next()
       const denied = outsideWorkspace(exec)
       if (denied) return { kind: 'deny', reason: denied }
@@ -157,25 +173,36 @@ export function apply(ctx: Context, config: Config): void {
         // Fire and forget: the sidebar viewer watches the SVG file.
         void ctx.kicad.call('render', { path, format: 'svg' }).catch(() => undefined)
       }
-      if (!(check === 'erc' ? config.autoErc : config.autoDrc).get()) return decision
-      const label = check.toUpperCase()
-      let note: string
-      try {
-        // DRC refills zones itself when the board has any (the file is not changed).
-        const report = synced?.drc
-          ? { ok: true, value: synced.drc, text: '' }
-          : await ctx.kicad.call<CheckReport>(check, { path, ...(synced ? { schematic_parity: true } : {}) }, exec.signal)
-        if (report.ok && report.value) {
-          memory.remember(path, report.value)
-          note = `Automatic ${formatCheck(report.value)}`
-        } else {
-          note = `Automatic ${label} could not run: ${report.text}`
+      const notes: string[] = []
+      if ((check === 'erc' ? config.autoErc : config.autoDrc).get()) {
+        const label = check.toUpperCase()
+        try {
+          // DRC refills zones itself when the board has any (the file is not changed).
+          const report = synced?.drc
+            ? { ok: true, value: synced.drc, text: '' }
+            : await ctx.kicad.call<CheckReport>(check, { path, ...(synced ? { schematic_parity: true } : {}) }, exec.signal)
+          if (report.ok && report.value) {
+            memory.remember(path, report.value)
+            notes.push(`Automatic ${formatCheck(report.value)}`)
+          } else {
+            notes.push(`Automatic ${label} could not run: ${report.text}`)
+          }
+        } catch (error) {
+          notes.push(`Automatic ${label} could not run: ${(error as Error).message}`)
         }
-      } catch (error) {
-        note = `Automatic ${label} could not run: ${(error as Error).message}`
       }
+      if (check === 'erc' && config.autoChecks.get() && existsSync(join(dirname(path), DESIGN_CHECKS_FILE))) {
+        // The project's unit tests, judged again on the edited schematic (datasheets already read; no download).
+        try {
+          const report = await ctx.kicad.call<DesignChecksValue>('check_design', { path, offline: true }, exec.signal)
+          notes.push(report.ok && report.value ? formatDesignChecks(report.value, true) : `Design checks could not run: ${report.text}`)
+        } catch (error) {
+          notes.push(`Design checks could not run: ${(error as Error).message}`)
+        }
+      }
+      if (!notes.length) return decision
       const base = 'content' in decision && decision.content ? decision.content : result.content
-      return { ...decision, content: [...base, { type: 'text', text: note }] } as PostToolDecision
+      return { ...decision, content: [...base, ...notes.map(text => ({ type: 'text' as const, text }))] } as PostToolDecision
     })
   }
 

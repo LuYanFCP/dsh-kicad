@@ -97,6 +97,20 @@ function formatMcu(v) {
   }
   return lines.join("\n");
 }
+var CHECK_LABEL = { pass: "pass", fail: "FAIL", cannot_verify: "CANNOT VERIFY" };
+function formatDesignChecks(v, problemsOnly = false) {
+  const file = v.file.split(/[\\/]/).pop();
+  if (!v.results.length)
+    return `No design checks in ${file} yet: add one per datasheet requirement with checks.`;
+  const { pass, fail, cannot_verify: unknown } = v.counts;
+  const lines = [`Design checks (${file}${v.saved ? ", saved" : ""}): ${pass} passed, ${fail} FAILED, ${unknown} cannot verify`];
+  for (const r of v.results) {
+    if (problemsOnly && r.status === "pass")
+      continue;
+    lines.push(`${CHECK_LABEL[r.status]} ${r.id}: ${r.detail}${r.source ? ` [${r.source}]` : ""}`);
+  }
+  return lines.join("\n");
+}
 var ms = (t) => `${Number((t * 1e3).toPrecision(4))} ms`;
 function formatFirmware(v) {
   const verdict = v.passed === null ? "CANNOT VERIFY" : v.passed ? "PASSED" : "FAILED";
@@ -295,6 +309,15 @@ function createCommands(ctx) {
       handler: wrap(async (inv, cwd) => {
         const result = await ctx.kicad.run("check_mcu", { path: targetFile(cwd, inv.rawInput, ".kicad_sch") }, inv.signal);
         return formatMcu(result);
+      })
+    },
+    {
+      name: "design-checks",
+      description: "Run the project's design checks (design-checks.json: requirements quoted from the parts' datasheets) on the schematic: pass, FAIL or cannot verify for each",
+      input: { hint: "[path/to/file.kicad_sch]" },
+      handler: wrap(async (inv, cwd) => {
+        const result = await ctx.kicad.run("check_design", { path: targetFile(cwd, inv.rawInput, ".kicad_sch") }, inv.signal);
+        return formatDesignChecks(result);
       })
     },
     {

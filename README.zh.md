@@ -10,10 +10,10 @@
 
 | 能力 | 说明 |
 |---|---|
-| **工具**（`kicad_*`） | `doctor`（检查本机是否就绪：kicad-cli 与 KiCad 8+、库、Python，附修复方法和安装命令）、`read_schematic`、`list_components`、`get_symbol_pins`、`list_nets`（KiCad 网表）、`search_symbols`（已安装符号库）、`erc`、`drc`、`render`（SVG；模型支持图片时附带 PNG 图片；电路板可从任意方向和角度渲染 KiCad 的 3D 视图）、`export`（网表/BOM）、`simulate`（用 ngspice 做 SPICE 验证：工作点、瞬态与交流分析，需求以断言形式由工具依据数值判定，见[仿真验证](#仿真验证)）、`sim_model`（列出模型文件或目录中的 SPICE 模型及其引脚）、`check_mcu`（静态检查微控制器的接线，见[MCU 接线检查](#mcu-接线检查)）、`simulate_firmware`（让 ATtiny 或 ESP32 固件在板子上运行，见[固件与电路板联合仿真](#固件与电路板联合仿真)）、`export_fab`（Gerber/钻孔/坐标/BOM 压缩包及 3D 预览，KiCad 判定电路板就绪前拒绝导出，见[制板输出](#制板输出)）、`fab_preset`（JLCPCB/PCBWay 设计规则）、`create_schematic`，以及原子批量编辑 `edit_schematic`（增删移动元件、设置值/封装/属性、导线、标签、电源符号、结点、不连接标记、绕开元件和其他网络自动布线的引脚到引脚导线、引脚到网络的连接，以及按功能分区布局：带标题的功能块框、连同导线一起移动元件或整个功能块、图纸尺寸与标题栏）；电路板有 `read_pcb`（外框、层、设计规则与网络类、带 courtyard 和焊盘网络的封装、覆铜区、DRC 给出的未布线数）和原子批量编辑 `edit_pcb`（板框与安装孔、移动/翻面/锁定封装、写入 `.kicad_pro` 的设计规则与网络类、以焊盘为端点的走线、过孔、覆铜区、禁布区、丝印文字与位号、按 uuid 删除）；以及 `update_pcb`——无界面地完成 KiCad 的“从原理图更新 PCB”：新板使用 KiCad 的空板、默认叠层和占位板框；已有电路板上已放置的封装保持原位，新封装放在板框旁等待布局，网络、值和字段随原理图更新；无法上板时拒绝执行并列出需修正的 `REF:PIN`，结果由 KiCad 的原理图一致性检查判定；以及 `autoroute`——用 [Freerouting](https://github.com/freerouting/freerouting) 自动布线，保留手工布好（锁定）的和已有的走线，重新填充覆铜，以 KiCad 的 DRC 结论为准（见[布线](#布线)）。未修改的文件文本逐字节保持不变。 |
-| **策略** | 设计修改走 dsh 审批（`ask`）；写操作被单调 guard 限制在会话工作目录内；每次成功修改后自动运行 KiCad ERC（原理图）或 DRC（电路板修改或应用板厂预设后，先重新填充覆铜；`update_pcb` 之后另报原理图一致性问题数）并把结论附加到工具结果；系统提示中注入稳定的 KiCad 工作规范，以及动态的“当前目录中的 KiCad 工程 + 最近一次 ERC/DRC”上下文。 |
-| **技能** | `kicad-agent-workflow`、`kicad-design-brief`、`kicad-erc-triage`、`kicad-drc-triage`、`kicad-schematic-design`、`kicad-pcb-layout`（从同步后的原理图到生产文件：设计规则、布局、关键网络、GND 铺铜、自动布线、DRC、生产文件，每一步由 KiCad 判定）、`kicad-simulate`、`kicad-mcu-check`。 |
-| **命令** | `/erc`、`/drc`、`/bom`、`/simulate`、`/mcu-check`、`/mcu-sim`（不经过模型，作用于工程根设计）、`/kicad-fab`（制板压缩包）、`/kicad-render`、`/kicad-doctor`（环境检查）、`/kicad-install`（安装 KiCad、Freerouting 自动布线器或用于 ESP32 固件仿真的 Espressif QEMU，见下文）。 |
+| **工具**（`kicad_*`） | `doctor`（检查本机是否就绪：kicad-cli 与 KiCad 8+、库、Python，附修复方法和安装命令）、`read_schematic`、`list_components`、`get_symbol_pins`、`list_nets`（KiCad 网表）、`search_symbols`（已安装符号库）、`erc`、`drc`、`render`（SVG；模型支持图片时附带 PNG 图片；电路板可从任意方向和角度渲染 KiCad 的 3D 视图）、`export`（网表/BOM）、`simulate`（用 ngspice 做 SPICE 验证：工作点、瞬态与交流分析，需求以断言形式由工具依据数值判定，见[仿真验证](#仿真验证)）、`sim_model`（列出模型文件或目录中的 SPICE 模型及其引脚）、`datasheet`（读取器件 datasheet PDF：章节索引、搜索、整页）、`check_design`（以 datasheet 原文为依据的原理图单元测试，见[datasheet 检查](#datasheet-检查)）、`check_mcu`（静态检查微控制器的接线，见[MCU 接线检查](#mcu-接线检查)）、`simulate_firmware`（让 ATtiny 或 ESP32 固件在板子上运行，见[固件与电路板联合仿真](#固件与电路板联合仿真)）、`export_fab`（Gerber/钻孔/坐标/BOM 压缩包及 3D 预览，KiCad 判定电路板就绪前拒绝导出，见[制板输出](#制板输出)）、`fab_preset`（JLCPCB/PCBWay 设计规则）、`create_schematic`，以及原子批量编辑 `edit_schematic`（增删移动元件、设置值/封装/属性、导线、标签、电源符号、结点、不连接标记、绕开元件和其他网络自动布线的引脚到引脚导线、引脚到网络的连接，以及按功能分区布局：带标题的功能块框、连同导线一起移动元件或整个功能块、图纸尺寸与标题栏）；电路板有 `read_pcb`（外框、层、设计规则与网络类、带 courtyard 和焊盘网络的封装、覆铜区、DRC 给出的未布线数）和原子批量编辑 `edit_pcb`（板框与安装孔、移动/翻面/锁定封装、写入 `.kicad_pro` 的设计规则与网络类、以焊盘为端点的走线、过孔、覆铜区、禁布区、丝印文字与位号、按 uuid 删除）；以及 `update_pcb`——无界面地完成 KiCad 的“从原理图更新 PCB”：新板使用 KiCad 的空板、默认叠层和占位板框；已有电路板上已放置的封装保持原位，新封装放在板框旁等待布局，网络、值和字段随原理图更新；无法上板时拒绝执行并列出需修正的 `REF:PIN`，结果由 KiCad 的原理图一致性检查判定；以及 `autoroute`——用 [Freerouting](https://github.com/freerouting/freerouting) 自动布线，保留手工布好（锁定）的和已有的走线，重新填充覆铜，以 KiCad 的 DRC 结论为准（见[布线](#布线)）。未修改的文件文本逐字节保持不变。 |
+| **策略** | 设计修改走 dsh 审批（`ask`）；写操作被单调 guard 限制在会话工作目录内；每次成功修改后自动运行 KiCad ERC（原理图）或 DRC（电路板修改或应用板厂预设后，先重新填充覆铜；`update_pcb` 之后另报原理图一致性问题数）并把结论附加到工具结果，原理图修改后未通过的设计检查也会附加上去；系统提示中注入稳定的 KiCad 工作规范，以及动态的“当前目录中的 KiCad 工程 + 最近一次 ERC/DRC”上下文。 |
+| **技能** | `kicad-agent-workflow`、`kicad-design-brief`、`kicad-erc-triage`、`kicad-drc-triage`、`kicad-schematic-design`、`kicad-datasheet-checks`（阅读每个器件的 datasheet，把要求保存为检查）、`kicad-pcb-layout`（从同步后的原理图到生产文件：设计规则、布局、关键网络、GND 铺铜、自动布线、DRC、生产文件，每一步由 KiCad 判定）、`kicad-simulate`、`kicad-mcu-check`。 |
+| **命令** | `/erc`、`/drc`、`/bom`、`/simulate`、`/design-checks`、`/mcu-check`、`/mcu-sim`（不经过模型，作用于工程根设计）、`/kicad-fab`（制板压缩包）、`/kicad-render`、`/kicad-doctor`（环境检查）、`/kicad-install`（安装 KiCad、Freerouting 自动布线器或用于 ESP32 固件仿真的 Espressif QEMU，见下文）。 |
 | **Agent 预设** | `eda`：与 standard 类似的工具集 + 电子设计人设。KiCad 工具为全局注册，任何预设都可使用。 |
 | **Web 界面** | 右侧边栏 `*.kicad_sch` / `*.kicad_pcb` 查看器，两种模式：**交互**——内嵌 [KiCanvas](https://github.com/theacodes/kicanvas)（层次图纸、查看元件/封装/网络、图层开关、KiCad 或 Witch Hazel 主题、文件变化时自动刷新）；**SVG**——kicad-cli 渲染（平移缩放、多图纸、渲染按钮，PCB 文件变化时自动重新渲染，也是交互模式失败时的自动回退）；电路板还有仿照 KiCad 3D 查看器的 **3D** 模式（见 [3D 视图](#3d-视图)）；对话卡片：ERC/DRC、原理图与电路板修改（附自动 ERC/DRC 结果）、从原理图更新 PCB（改动、待布局的元件、KiCad 的一致性检查数）、自动布线（Freerouting 新增的走线、KiCad 统计的未布通数和 DRC 错误）、生产文件（导出闸门、文件列表、**下载 zip**、3D 预览）以及环境检查；开启 **跟随 agent** 时，agent 同步、修改或布线电路板时会在侧边栏打开它，和原理图一样；设置页：sidecar（kicad-cli、Python、Java、Freerouting、ngspice 和 QEMU 的路径，以及 KiCad 环境检查和 **安装 KiCad**）与策略（审批、自动 ERC、自动 DRC、自动渲染）。KiCad 缺失或版本过低时，查看器和失败的工具卡片会显示带 **安装 KiCad** 按钮的提示。 |
 | **独立 MCP server** | Python sidecar 通过 stdio 说 MCP 协议，Claude Code 或 RL 环境可以不经 dsh 直接复用同一套工具。 |
@@ -46,7 +46,7 @@ market/                 插件市场索引示例
 - dsh `>=0.2.1-rc.2 <0.3`（`npm i -g @deepseek-ai/dsh`），Node `>=22.19`，pnpm 11（源码构建时）
 - `PATH` 上的 Python `>=3.10`（`python3`；Windows 为 `python`），核心无需任何 Python 包
 - KiCad 8+ 与 `kicad-cli`（已在 10.0.7 测试）。查找顺序：设置项、`$KICAD_CLI`、`PATH`、macOS/Windows 安装目录、Flatpak `org.kicad.KiCad`
-- 可选：`rsvg-convert`、ImageMagick 或 `png` extra（PNG 渲染）；`ipc` extra（IPC 通道）；[ngspice](https://ngspice.sourceforge.io/)（`PATH` 上的 `ngspice`，或 `$NGSPICE`，或 KiCad bridge 的 `ngspice` 设置），供 `kicad_simulate` 使用
+- 可选：`rsvg-convert`、ImageMagick 或 `png` extra（PNG 渲染）；`ipc` extra（IPC 通道）；[ngspice](https://ngspice.sourceforge.io/)（`PATH` 上的 `ngspice`，或 `$NGSPICE`，或 KiCad bridge 的 `ngspice` 设置），供 `kicad_simulate` 使用；poppler 的 `pdftotext`（`poppler-utils`，或 `$PDFTOTEXT`），供 `kicad_datasheet` 使用
 
 ### 检查环境与安装 KiCad
 
@@ -114,6 +114,23 @@ dsh plugin --profile web add "git+https://github.com/LuYanFCP/dsh-kicad.git#<com
 ### 按功能块画原理图
 
 新设计像参考设计那样按功能块逐块绘制。agent 先规划各功能块（标题、元件、在图纸上的区域），然后每次 `kicad_edit_schematic` 调用画完一个功能块，并用 `add_block` 框起来。每个块是一个虚线框，标题写明它的功能和主要器件（如 `3V3 LDO — AMS1117-3.3`、`MCU — ATtiny85`），需要解释的设计选择在块内加简短注释。功能块之间只通过网络标签和电源符号连接。每次放置或移动元件后，编辑结果都会列出不在任何功能块里的元件；只要还有这样的元件，agent 就不算画完。`kicad_read_schematic` 的 `outside_blocks` 列出的是同一批元件。已有的原理图保持原来的组织方式，除非你要求重新整理。下面的电路板布局也按这些功能块进行。
+
+### datasheet 检查
+
+器件的极限值和它需要的外围器件来自 datasheet，而不是模型的记忆。`kicad_datasheet {path, reference | lib_id | url | pdf, query?, pages?}` 读取 datasheet，来源可以是符号自带的链接、agent 用 `web_search` 找到的 URL，或工作区里的 PDF。它把 PDF 下载一次存进 `.dsh-kicad/datasheets/`，用 `pdftotext` 按页提取文字，然后返回常见章节所在的页（绝对最大额定值、工作条件、电气特性、应用信息、布局）、与查询匹配的行，或整页内容。链接指向网页或压缩包时会拒绝，并说明该怎么做。
+
+`kicad_check_design` 把这些页面变成原理图的单元测试。每条检查写明一项要求，并引用它所依据的原文。检查保存在原理图旁的 `design-checks.json` 里，由工具根据 KiCad 网表和元件取值判定。规则：
+
+- `max_voltage`、`voltage_range`；
+- `voltage_difference`（稳压器的压差余量）；
+- `capacitance`（两个网络之间所有电容之和）；
+- `resistance`（上拉、下拉、串联电阻）；
+- `same_net`；
+- `led_current`（由电源电压、Vf 和串联电阻算出）。
+
+只有依据成立的检查才算数：引用必须真的出现在 datasheet 文字里（用户自己定的数值可以引用工作区文件，如 `design-brief.md`），而且引用里要写着检查用到的数字。否则检查结果是 CANNOT VERIFY，绝不算通过。每次修改原理图后，检查会重新运行，未通过的附加在结果里；`/design-checks` 不经过模型直接运行它们。
+
+AMS1117-3.3 的 datasheet 写着 “The addition of 22µF solid tantalum on the output will ensure stability for all operating conditions”。按惯例用 10 µF 的设计在这条检查上失败（`capacitance +3V3 → GND = 10.1 µF < 22 µF`），换成 22 µF 后通过。`kicad-datasheet-checks` 技能说明了每类器件要从 datasheet 中提取哪些要求。
 
 ### 电路板布局
 

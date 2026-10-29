@@ -317,3 +317,41 @@ describe('formatSync', () => {
     expect(out).not.toContain('R81')
   })
 })
+
+describe('kicad_datasheet and kicad_check_design', () => {
+  it('kicad_datasheet says what to do when a part links no datasheet', async () => {
+    const ctx = await bootKiCad([toolKiCad])
+    const r = await runTool(ctx, 'kicad_datasheet', { path: fixtureProject('rc_filter'), reference: 'R1' })
+    expect(r.isError).toBe(true)
+    expect(text(r)).toMatch(/R1 has no datasheet link: find the PDF \(web_search, the maker's site\) and pass url/)
+  })
+
+  it('kicad_datasheet needs no schematic to read a library part\'s datasheet', async () => {
+    const ctx = await bootKiCad([toolKiCad])
+    const r = await runTool(ctx, 'kicad_datasheet', { lib_id: 'Device:R' })  // the working directory stands in for the project
+    expect(r.isError).toBe(true)
+    expect(text(r)).toMatch(/Device:R has no datasheet link/)
+  })
+
+  it('shows a datasheet\'s sections, the places a query found, and whole pages', () => {
+    const value = { source: 'http://x/ds1117.pdf', title: 'AMS1117-3.3', pages: 8, cached: '.dsh-kicad/datasheets/ams1117-3.3-80feee9206.pdf',
+      index: [{ section: 'absolute maximum ratings', pages: [2, 3] }, { section: 'application information', pages: [4, 5] }] }
+    expect(toolKiCad.formatDatasheet({ ...value, query: 'output capacitor', hits: [{ page: 4, line: 21, text: 'The addition of 22µF solid tantalum on the output' }] }))
+      .toBe('AMS1117-3.3: 8 page(s) from http://x/ds1117.pdf (kept in .dsh-kicad/datasheets/ams1117-3.3-80feee9206.pdf)\n'
+        + 'Sections: absolute maximum ratings p.2, 3; application information p.4, 5\nPlaces with "output capacitor":\n--- p.4\nThe addition of 22µF solid tantalum on the output')
+    expect(toolKiCad.formatDatasheet({ ...value, query: 'xyz', hits: [] })).toContain('No page has "xyz"; try other words')
+    expect(toolKiCad.formatDatasheet({ ...value, text: [{ page: 2, text: 'ABSOLUTE MAXIMUM RATINGS' }] })).toMatch(/\n=== page 2\nABSOLUTE MAXIMUM RATINGS$/)
+  })
+
+  it('lists every design check, and after an edit only those that fail or cannot verify', () => {
+    const value = { path: '/p/a.kicad_sch', file: '/p/design-checks.json', saved: false, counts: { pass: 1, fail: 1, cannot_verify: 1 }, results: [
+      { id: 'U1-vin', rule: 'max_voltage', status: 'pass' as const, detail: 'U1:VI on +5V = 5 V, ≤ 15 V', source: 'AMS1117-3.3 p.2' },
+      { id: 'U1-cout', rule: 'capacitance', status: 'fail' as const, detail: 'capacitance +3V3 → GND = 10 µF < 22 µF (min) (C2 10u)', source: 'AMS1117-3.3 p.4' },
+      { id: 'U1-vmax', rule: 'max_voltage', status: 'cannot_verify' as const, detail: 'source: no quote states max 20' }] }
+    expect(toolKiCad.formatDesignChecks(value)).toBe('Design checks (design-checks.json): 1 passed, 1 FAILED, 1 cannot verify\n'
+      + 'pass U1-vin: U1:VI on +5V = 5 V, ≤ 15 V [AMS1117-3.3 p.2]\n'
+      + 'FAIL U1-cout: capacitance +3V3 → GND = 10 µF < 22 µF (min) (C2 10u) [AMS1117-3.3 p.4]\n'
+      + 'CANNOT VERIFY U1-vmax: source: no quote states max 20')
+    expect(toolKiCad.formatDesignChecks(value, true)).not.toContain('U1-vin')
+  })
+})

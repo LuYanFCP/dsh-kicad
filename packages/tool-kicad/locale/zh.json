@@ -1,1 +1,1 @@
-{ "meta": { "title": "KiCad 工具", "description": "kicad_* 工具：读取与原子编辑原理图和电路板，同步、摆放与自动布线电路板，运行 ERC/DRC，SPICE 仿真，检查 MCU 接线，让固件对着电路板运行，渲染与导出，并在 KiCad 检查通过后生成制板文件（Gerber 压缩包）。" } }
+{ "meta": { "title": "KiCad 工具", "description": "kicad_* 工具：读取与原子编辑原理图和电路板，阅读器件 datasheet 并据此检查设计，同步、摆放与自动布线电路板，运行 ERC/DRC，SPICE 仿真，检查 MCU 接线，让固件对着电路板运行，渲染与导出，并在 KiCad 检查通过后生成制板文件（Gerber 压缩包）。" } }

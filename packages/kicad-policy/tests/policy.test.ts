@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { type Context, Service } from '@deepseek-ai/cordis'
 import * as toolKiCad from 'dsh-tool-kicad'
@@ -9,7 +9,7 @@ import { bootKiCad, disposeAll, fixtureBoard, fixtureProject, hasKiCadCli, runTo
 afterEach(disposeAll)
 
 const config = (over: Record<string, unknown> = {}) => ({
-  approval: 'allow', restrictToWorkspace: true, extraRoots: [], autoErc: true, autoDrc: true, autoRender: false, guidance: true, projectContext: true, ...over,
+  approval: 'allow', restrictToWorkspace: true, extraRoots: [], autoErc: true, autoDrc: true, autoRender: false, autoChecks: true, guidance: true, projectContext: true, ...over,
 })
 
 const fix = [{ op: 'connect_pin_to_net', pin: 'R1:1', net: 'VIN', kind: 'global_label' }, { op: 'no_connect_pin', pin: 'R1:2' }]
@@ -171,6 +171,25 @@ describe('dsh-kicad-policy', () => {
     expect(policy.GUIDANCE).toMatch(/reorganise an unframed sheet into blocks only when the user asks/)
   })
 
+  it('the working rules take part values from datasheets and keep them as design checks', () => {
+    expect(policy.GUIDANCE).toMatch(/come from datasheets, not from memory[\s\S]*kicad_datasheet[\s\S]*web_search/)
+    expect(policy.GUIDANCE).toMatch(/kicad_check_design check that quotes the datasheet word for word/)
+    expect(policy.GUIDANCE).toMatch(/fix every FAIL, report CANNOT VERIFY as unverified[\s\S]*say so instead of choosing silently/)
+  })
+
+  it.runIf(hasKiCadCli())('re-runs the design checks after a schematic edit and appends the ones that fail', async () => {
+    const path = fixtureProject('rc_filter')
+    writeFileSync(join(dirname(path), 'design-brief.md'), 'The filter resistor R1 is 10k.\n')
+    const ctx = await bootKiCad([toolKiCad], [policy, config({ autoErc: false, extraRoots: [dirname(path)] })])
+    const check = { id: 'R1-value', rule: 'resistance', pin: 'R1:1', to: 'R1:2', value: '10k', source: { file: 'design-brief.md', quote: 'The filter resistor R1 is 10k.' } }
+    const saved = await runTool(ctx, 'kicad_check_design', { path, checks: [check] })
+    expect(text(saved)).toMatch(/^Design checks \(design-checks.json, saved\): 1 passed, 0 FAILED, 0 cannot verify\npass R1-value: R1 = 10 kΩ/)
+    const edit = await runTool(ctx, 'kicad_edit_schematic', { path, operations: [{ op: 'set_value', reference: 'R1', value: '22k' }] })
+    expect(text(edit)).toMatch(/Design checks \(design-checks.json\): 0 passed, 1 FAILED, 0 cannot verify\nFAIL R1-value: R1 = 22 kΩ \(not within 10 kΩ ±5%\)/)
+    const elsewhere = fixtureProject('rc_filter')  // no checks file: nothing to re-run
+    expect(text(await runTool(ctx, 'kicad_edit_schematic', { path: elsewhere, operations: [{ op: 'set_value', reference: 'R1', value: '22k' }] }))).not.toContain('Design checks')
+  })
+
   it('project context lists KiCad files and the last ERC', () => {
     const path = fixtureProject('rc_filter')
     const memory = new policy.ErcMemory()
@@ -206,6 +225,19 @@ describe('session permissions', () => {
     const r = await runTool(ctx, 'kicad_edit_schematic', { path, operations: op }, { agent })
     expect(r.isError).toBe(true)
     expect(text(r)).toMatch(/read-only/)
+  })
+
+  it('saving design checks is a write: denied in a read-only session, while running the saved ones is not', async () => {
+    const path = fixtureProject('rc_filter')
+    const ctx = await bootKiCad(...stubs('ask', 'read-only'), [toolKiCad], [policy, config({ approval: 'follow', extraRoots: [dirname(path)] })])
+    const check = { id: 'R1', rule: 'resistance', pin: 'R1:1', to: 'R1:2', value: '10k', source: { file: 'design-brief.md', quote: 'R1 is a 10k resistor' } }
+    const saving = await runTool(ctx, 'kicad_check_design', { path, checks: [check] }, { agent })
+    expect(saving.isError).toBe(true)
+    expect(text(saving)).toMatch(/read-only\. Run it without checks/)
+    expect(existsSync(join(dirname(path), 'design-checks.json'))).toBe(false)
+    const running = await runTool(ctx, 'kicad_check_design', { path }, { agent })
+    expect(running.isError).toBeFalsy()
+    expect(text(running)).toBe('No design checks in design-checks.json yet: add one per datasheet requirement with checks.')
   })
 
   it('follow (default): writes without an extra prompt in workspace-write', async () => {

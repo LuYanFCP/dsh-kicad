@@ -358,12 +358,14 @@ def parse_netlist_xml(text: str) -> dict[str, Any]:
     components = []
     for comp in root.iterfind("./components/comp"):
         libsource = comp.find("libsource")
+        datasheet = (comp.findtext("datasheet") or "").strip()
         components.append({
             "reference": comp.get("ref"),
             "value": (comp.findtext("value") or ""),
             "footprint": (comp.findtext("footprint") or ""),
             "lib_id": f"{libsource.get('lib')}:{libsource.get('part')}" if libsource is not None else "",
             "sheet": (comp.find("sheetpath").get("names") if comp.find("sheetpath") is not None else "/"),
+            **({"datasheet": datasheet} if datasheet and datasheet != "~" else {}),
         })
     nets = []
     for net in root.iterfind("./nets/net"):

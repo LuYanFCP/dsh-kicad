@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import SkillRegistry from '@deepseek-ai/dsh-skill'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -13,7 +13,7 @@ describe('kicad skills', () => {
   it('registers packaged skills with the dsh skill registry', async () => {
     const ctx = await bootKiCad([SkillRegistry], [skills, { commands: false }])
     const names = (await ctx.skills.list()).map(s => s.name).filter(n => n.startsWith('kicad-'))
-    expect(names).toEqual(['kicad-agent-workflow', 'kicad-design-brief', 'kicad-drc-triage', 'kicad-erc-triage', 'kicad-mcu-check', 'kicad-pcb-layout', 'kicad-schematic-design', 'kicad-simulate'])
+    expect(names).toEqual(['kicad-agent-workflow', 'kicad-datasheet-checks', 'kicad-design-brief', 'kicad-drc-triage', 'kicad-erc-triage', 'kicad-mcu-check', 'kicad-pcb-layout', 'kicad-schematic-design', 'kicad-simulate'])
     const body = await ctx.skills.get('kicad-erc-triage')
     expect(body?.content).toContain('power_pin_not_driven')
     expect(body?.content.startsWith('---')).toBe(false)
@@ -89,6 +89,30 @@ describe('kicad skills', () => {
     expect([...named].filter(op => !operations.has(op))).toEqual([])
   })
 
+  it('turns datasheets into design checks with the real rules and tools, and the workflow asks for them', async () => {
+    const ctx = await bootKiCad([SkillRegistry], [skills, { commands: false }])
+    const skill = (await ctx.skills.list()).find(s => s.name === 'kicad-datasheet-checks')
+    expect(skill?.description).toMatch(/kicad_datasheet[\s\S]*kicad_check_design/)
+    const body = (await ctx.skills.get('kicad-datasheet-checks'))!.content
+    // every rule it names (in the table, the notes and the examples) is one the sidecar knows
+    const src = readFileSync(new URL('../../kicad-bridge/sidecar/src/dsh_kicad_sidecar/design_checks.py', import.meta.url), 'utf8')
+    const rules = new Set([...src.slice(src.indexOf('RULES:'), src.indexOf('# A bound past')).matchAll(/^ {4}"([a-z_]+)": \{/gm)].map(m => m[1]))
+    expect([...rules].sort()).toEqual(['capacitance', 'led_current', 'max_voltage', 'resistance', 'same_net', 'voltage_difference', 'voltage_range'])
+    // where it names rules: (`rule`) in the table's rows, "rule": "…" in the examples, - `rule` under "Rule notes"
+    const table = body.split('\n').filter(line => line.startsWith('|')).join('\n')
+    const notes = body.slice(body.indexOf('Rule notes:'), body.indexOf('## 3.'))
+    const named = new Set([...table.matchAll(/\(`([a-z_]+)`/g), ...body.matchAll(/"rule": "([a-z_]+)"/g), ...notes.matchAll(/^- `([a-z_]+)`/gm)].map(m => m[1]))
+    expect(named.size).toBeGreaterThanOrEqual(6)
+    expect([...named].filter(n => !rules.has(n!))).toEqual([])
+    const tools = readFileSync(new URL('../../tool-kicad/src/index.ts', import.meta.url), 'utf8')
+    const known = new Set([...tools.matchAll(/name: '(kicad_[a-z_]+)'/g)].map(m => m[1]!))
+    expect([...new Set([...body.matchAll(/`(kicad_[a-z_]+)/g)].map(m => m[1]!))].filter(t => !known.has(t))).toEqual([])
+    expect(body).toMatch(/Never weaken a check to fit the schematic/)
+    const workflow = (await ctx.skills.get('kicad-agent-workflow'))!.content
+    expect(workflow).toMatch(/Datasheets, then the block[\s\S]*kicad_datasheet[\s\S]*kicad-datasheet-checks[\s\S]*Edit block by block/)
+    expect(workflow).toMatch(/## Handing over to the board[\s\S]*No design check fails/)
+  })
+
   it('keeps every SKILL.md under the 8192-character pruning threshold', async () => {
     const provider = skills.createSkillProvider()
     for (const c of await provider.list({}) as Array<{ name: string }>) {
@@ -116,6 +140,17 @@ describe('kicad commands', () => {
     expect((bom as { text: string }).text).toMatch(/\| R1 \| 10k \|/)
     const drc = await commands.drc!.handler(invocation(`${dirname(path)}/missing.kicad_pcb`))
     expect(drc.kind).toBe('error')
+  })
+
+  it.runIf(hasKiCadCli())('/design-checks runs the saved design checks without the model', async () => {
+    const commands = Object.fromEntries(skills.createCommands(await bootKiCad()).map(c => [c.name, c]))
+    const path = fixtureProject('rc_filter')
+    writeFileSync(join(dirname(path), 'design-brief.md'), 'The filter resistor R1 is 10k.\n')
+    writeFileSync(join(dirname(path), 'design-checks.json'), JSON.stringify({ rails: {}, checks: [{ id: 'R1-value', rule: 'resistance', pin: 'R1:1', to: 'R1:2', value: '10k',
+      source: { file: 'design-brief.md', quote: 'The filter resistor R1 is 10k.' } }] }))
+    const out = await commands['design-checks']!.handler(invocation(path))
+    expect(out).toMatchObject({ kind: 'success' })
+    expect((out as { text: string }).text).toMatch(/^Design checks \(design-checks.json\): 1 passed, 0 FAILED, 0 cannot verify\npass R1-value: R1 = 10 kΩ \(within 10 kΩ ±5%\)/)
   })
 
   it('/kicad-render takes the viewer\'s --json marker off the path', async () => {

@@ -457,6 +457,53 @@ export function formatMcu(v: McuCheckValue): string {
   return lines.join('\n')
 }
 
+/** Result of kicad_datasheet. */
+export interface DatasheetValue {
+  source: string
+  title: string
+  pages: number
+  cached: string
+  index: Array<{ section: string, pages: number[] }>
+  query?: string
+  hits?: Array<{ page: number, line: number, text: string }>
+  text?: Array<{ page: number, text: string }>
+}
+
+export function formatDatasheet(v: DatasheetValue): string {
+  const lines = [`${v.title}: ${v.pages} page(s) from ${v.source} (kept in ${v.cached})`]
+  if (v.index.length) lines.push(`Sections: ${v.index.map(e => `${e.section} p.${e.pages.join(', ')}`).join('; ')}`)
+  if (v.query !== undefined) {
+    lines.push(v.hits?.length ? `Places with "${v.query}":` : `No page has "${v.query}"; try other words or read a section's pages.`)
+    for (const h of v.hits ?? []) lines.push(`--- p.${h.page}\n${h.text}`)
+  }
+  for (const t of v.text ?? []) lines.push(`=== page ${t.page}\n${t.text}`)
+  return lines.join('\n')
+}
+
+/** Result of kicad_check_design. */
+export interface DesignChecksValue {
+  path: string
+  file: string
+  saved: boolean
+  counts: { pass: number, fail: number, cannot_verify: number }
+  results: Array<{ id: string, rule: string, part?: string, status: 'pass' | 'fail' | 'cannot_verify', detail: string, source?: string }>
+}
+
+const CHECK_LABEL = { pass: 'pass', fail: 'FAIL', cannot_verify: 'CANNOT VERIFY' } as const
+
+/** Every check with its verdict; problemsOnly keeps the summary and what failed or could not be verified (the note after an edit). */
+export function formatDesignChecks(v: DesignChecksValue, problemsOnly = false): string {
+  const file = v.file.split(/[\\/]/).pop()
+  if (!v.results.length) return `No design checks in ${file} yet: add one per datasheet requirement with checks.`
+  const { pass, fail, cannot_verify: unknown } = v.counts
+  const lines = [`Design checks (${file}${v.saved ? ', saved' : ''}): ${pass} passed, ${fail} FAILED, ${unknown} cannot verify`]
+  for (const r of v.results) {
+    if (problemsOnly && r.status === 'pass') continue
+    lines.push(`${CHECK_LABEL[r.status]} ${r.id}: ${r.detail}${r.source ? ` [${r.source}]` : ''}`)
+  }
+  return lines.join('\n')
+}
+
 const ms = (t: number): string => `${Number((t * 1000).toPrecision(4))} ms`
 
 /** The firmware run as the model reads it: the verdict, each assertion, what stopped the run, the hazards and the board's story. */
