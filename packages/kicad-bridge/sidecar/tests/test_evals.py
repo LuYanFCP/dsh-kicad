@@ -15,7 +15,7 @@ from dsh_kicad_sidecar.freerouting import locate
 from dsh_kicad_sidecar.pcb import Board
 from dsh_kicad_sidecar.tools import Toolbox
 
-from conftest import needs_kicad_cli, needs_symbols
+from conftest import REGULATOR_PAGES, make_pdf, needs_kicad_cli, needs_pdftotext, needs_symbols
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 EVALS = os.path.normpath(os.path.join(HERE, "..", "..", "..", "..", "evals"))
@@ -148,3 +148,25 @@ def test_the_usb_power_blocks_eval_passes_only_a_schematic_drawn_in_blocks(proje
     loose = verify(script, SRC, project("usb_attiny"))
     assert loose.returncode == 1 and "11/12 requirements satisfied" in loose.stdout
     assert "FAIL drawn in titled functional blocks" in loose.stdout
+
+
+@needs_kicad_cli
+@needs_symbols
+@needs_pdftotext
+def test_the_usb_power_datasheet_eval_wants_the_datasheet_values_and_its_checks(project):
+    script = os.path.join(EVALS, "usb-power-datasheet", "verify.py")
+    sch = project("usb_attiny_blocks")  # the same supply in blocks: 10 µF on the regulator's output, no design checks
+    habit = verify(script, SRC, sch)
+    assert habit.returncode == 1 and "11/14 requirements satisfied" in habit.stdout, habit.stdout[-3000:]
+    assert "FAIL output capacitance ≥ 22 µF" in habit.stdout and "FAIL design checks: none fails" in habit.stdout
+    # What reading the datasheet gives: its output capacitor, and the checks that quote it
+    with open(os.path.join(os.path.dirname(sch), "ams1117.pdf"), "wb") as fh:
+        fh.write(make_pdf(REGULATOR_PAGES))
+    tb = Toolbox()
+    tb.call("edit_schematic", {"path": sch, "operations": [{"op": "set_value", "reference": "C2", "value": "22u"}]})
+    tb.call("check_design", {"path": sch, "checks": [
+        {"id": "U2-vin", "rule": "max_voltage", "part": "U2", "pin": "U2:VI", "max": 15, "source": {"pdf": "ams1117.pdf", "quote": "Input Voltage 15V"}},
+        {"id": "U2-cout", "rule": "capacitance", "part": "U2", "pin": "U2:VO", "min": "22u",
+         "source": {"pdf": "ams1117.pdf", "quote": "The addition of 22µF solid tantalum on the output will ensure stability for all operating conditions."}}]})
+    done = verify(script, SRC, sch)
+    assert done.returncode == 0 and "14/14 requirements satisfied" in done.stdout, done.stdout[-3000:]
