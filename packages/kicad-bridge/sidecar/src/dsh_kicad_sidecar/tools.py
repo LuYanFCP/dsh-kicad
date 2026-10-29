@@ -65,6 +65,8 @@ def _obj(props: dict[str, Any], required: list[str]) -> dict[str, Any]:
 
 PATH = {"type": "string", "description": "Absolute path (or relative to the server's working directory)."}
 SCH = {"type": "string", "description": "Path to a .kicad_sch file."}
+# Schematic operations after which the edit result reports the blocks and the parts outside every block.
+LAYOUT_OPS = frozenset({"add_symbol", "move_symbol", "move_symbols", "add_block", "move_block", "add_rectangle"})
 
 OPERATION_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -280,7 +282,8 @@ TOOL_SPECS: list[ToolSpec] = [
                    "exclude_dnp": {"type": "boolean", "default": False}}, ["path"]), writes=True),
     ToolSpec("create_schematic", "Create a blank KiCad 10 schematic (and a minimal .kicad_pro next to it when missing).",
              _obj({"path": SCH, "paper": {"type": "string", "default": "A4"}}, ["path"]), writes=True),
-    ToolSpec("edit_schematic", "Apply a batch of edit operations to one .kicad_sch atomically (all or nothing). Untouched text stays byte-identical.",
+    ToolSpec("edit_schematic", "Apply a batch of edit operations to one .kicad_sch atomically (all or nothing). Untouched text stays byte-identical. "
+             "After a batch that places or moves parts, the result lists the functional blocks and the parts outside every block.",
              _obj({"path": SCH, "operations": {"type": "array", "items": OPERATION_SCHEMA, "minItems": 1},
                    "dry_run": {"type": "boolean", "default": False, "description": "Validate and report without writing."}},
                   ["path", "operations"]), writes=True),
@@ -809,8 +812,16 @@ class Toolbox:
                     raise ToolError(f"operation {i} ({op.get('op')}) failed, nothing was written: {exc}") from exc
             if not args.get("dry_run"):
                 s.save()
-        return {"path": full, "written": not args.get("dry_run"), "applied": len(ops), "changes": s.changes,
-                "results": [r for r in results if r["result"] is not None]}
+        out = {"path": full, "written": not args.get("dry_run"), "applied": len(ops), "changes": s.changes,
+               "results": [r for r in results if r["result"] is not None]}
+        if LAYOUT_OPS.intersection(op.get("op") for op in ops):
+            # After placing or moving parts, say which ones no titled block frames yet.
+            blocks = s.blocks()
+            outside = s.outside_blocks(blocks)
+            if blocks or outside:
+                out["blocks"] = [{"title": b["title"], "references": b["references"]} for b in blocks]
+                out["outside_blocks"] = outside
+        return out
 
     def tool_export_fab(self, args):
         pcb = self.resolve(args["pcb"], ".kicad_pcb")

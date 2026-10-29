@@ -121,10 +121,30 @@ def test_a_finished_board_passes_and_an_incomplete_or_stale_zip_does_not(checker
 @needs_symbols
 @needs_footprints
 def test_the_usb_attiny85_eval_judges_both_turns(project):
-    sch = project("usb_attiny")
+    sch = project("usb_attiny_blocks")
     build(Toolbox(), sch)
     run = verify(os.path.join(EVALS, "usb-attiny85", "verify.py"), SRC, sch, "--pcb")
     assert run.returncode == 0, run.stdout[-3000:]
-    assert "22/22 requirements satisfied" in run.stdout and "11/11 board requirements satisfied" in run.stdout
+    assert "23/23 requirements satisfied" in run.stdout and "11/11 board requirements satisfied" in run.stdout
     schematic_only = verify(os.path.join(EVALS, "usb-attiny85", "verify.py"), SRC, sch)
     assert schematic_only.returncode == 0 and "BOARD:" not in schematic_only.stdout
+
+
+@needs_kicad_cli
+@needs_symbols
+def test_the_usb_attiny85_eval_wants_the_schematic_in_titled_blocks(project):
+    # The same circuit drawn without frames: right parts, right nets, a clean ERC, and still not done.
+    run = verify(os.path.join(EVALS, "usb-attiny85", "verify.py"), SRC, project("usb_attiny"))
+    assert run.returncode == 1 and "22/23 requirements satisfied" in run.stdout
+    assert "FAIL drawn in titled functional blocks" in run.stdout and "outside every block: C1, C2, C3" in run.stdout
+
+
+@needs_kicad_cli
+@needs_symbols
+def test_the_usb_power_blocks_eval_passes_only_a_schematic_drawn_in_blocks(project):
+    script = os.path.join(EVALS, "usb-power-blocks", "verify.py")
+    framed = verify(script, SRC, project("usb_attiny_blocks"))  # the same supply with an MCU around it, in five blocks
+    assert framed.returncode == 0 and "12/12 requirements satisfied" in framed.stdout, framed.stdout[-3000:]
+    loose = verify(script, SRC, project("usb_attiny"))
+    assert loose.returncode == 1 and "11/12 requirements satisfied" in loose.stdout
+    assert "FAIL drawn in titled functional blocks" in loose.stdout

@@ -1,6 +1,6 @@
 ---
 name: kicad-schematic-design
-description: Schematic design conventions for KiCad work — reference designators, power and ground symbols, decoupling, net naming, connectors, layout readability.
+description: Schematic conventions for drawing or tidying a KiCad schematic — functional blocks in titled frames built block by block, reference designators, power and ground symbols, decoupling, net naming, connectors, readability.
 ---
 
 # Schematic design conventions
@@ -28,13 +28,15 @@ Apply these unless the project already follows different conventions (read it fi
 - Keep 2.54 mm multiples between pins and wires; avoid wires crossing symbols; turn parts so wired pins face each other.
 - Mark every intentionally unused IC pin with a no-connect flag.
 
-**Organise by function (any design with more than ~8 parts)**
-- Split the design into functional blocks, each in its own titled dashed frame: e.g. `USB-TO-UART`, `PWR SUPPLY`, `MCU`, `BATTERY`, `BATTERY CHARGING`, `DISPLAY`, `GAS SENSOR`. A block holds one job: the IC plus its decoupling, pull-ups, LEDs, buttons and connector for that job.
+**Organise by function (every design that does more than one job)**
+- Split the design into functional blocks, each in its own titled dashed frame. A block holds one job: the IC plus its decoupling, pull-ups, LEDs, buttons and connector for that job.
+- Title each block with its job and main part, so the sheet reads like a reference design: `USB-C POWER IN`, `3V3 LDO — AMS1117-3.3`, `MCU — ESP32-S3-WROOM-1`, `USB-TO-UART — CH340C`, `BATTERY CHARGING — TP4056`, `ISP HEADER`. Short notes inside a block (`add_text`) explain the choices a reader would ask about: `Straps: EN 10k pull-up (R1)`, `CC1/CC2: 5.1k pull-downs (sink)`, `RESET: 10k pull-up (R3)`.
 - Blocks talk to each other only through net labels (`global_label` for signals such as `TXD`, `RESET`, `SDA/IO4`) and power symbols. No wire crosses a frame.
 - Inside a block, wire the parts together (`connect_pins`); anything leaving the block ends in a label or power symbol.
 - Page: `set_page` with `A3` for 4+ blocks (A4 for small designs) and a title. Plan a grid of blocks inside the drawable area that `kicad_read_schematic` reports (`page.drawable`; the bottom-right corner is the title block): e.g. on A3 a top row of 2–3 large blocks (power entry, power supply, MCU) and a bottom row of 3–4 small ones (connectors, sensors, charging), 10 mm gaps between frames. Power flows left → right, the MCU sits in the largest block.
-- Build: place each block's parts in its area, wire and label them, then `add_block{title, references}` frames them (it encloses their wiring and labels). Or draw the frame first with `add_block{title,x,y,width,height}` and place parts inside.
-- `kicad_read_schematic` lists `blocks` (title, frame, parts inside) and `outside_blocks` (parts not in any frame). Before handing back, `outside_blocks` is empty, frames do not overlap (`add_block` reports `overlaps`), and `kicad_render` shows nothing sticking out of a frame.
+- Build block by block, one `kicad_edit_schematic` call per block: place its parts in its area with explicit references (`U1`, `R1`, `C1`…) so the same call can wire them, wire and label them, and make `add_block{title, references}` the call's last operation (the frame encloses their wiring and labels). A block too big for one call (~20 operations) takes two; frame it in the second. Or draw the frame first with `add_block{title,x,y,width,height}` and place parts inside.
+- After a batch that places or moves parts, the edit result's `Functional blocks:` line names the parts outside every block. `kicad_read_schematic` lists `blocks` (title, frame, parts inside) and `outside_blocks` (parts in no frame: all of them while the sheet has no block).
+- In an existing schematic keep its organisation: put new parts in the block they belong to (`move_block` makes room). Turn an unframed sheet into blocks only when the user asks (below).
 
 **Reorganising an existing messy schematic**
 1. `kicad_read_schematic` + `kicad_list_nets`; assign every part to a block and write the plan (block → parts → target area) before editing.
@@ -45,4 +47,5 @@ Apply these unless the project already follows different conventions (read it fi
 
 **Before handing back**
 - ERC passes (or remaining warnings are explained).
+- In a design you drew, every part sits in a titled block (no `outside_blocks`), frames do not overlap (`add_block` reports `overlaps`), and `kicad_render` shows nothing sticking out of a frame.
 - BOM (`kicad_export` kind `bom`) has values and footprints for all board parts.

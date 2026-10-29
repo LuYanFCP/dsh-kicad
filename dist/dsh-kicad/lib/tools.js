@@ -61,8 +61,15 @@ function formatEdit(value) {
   const results = value.results?.length ? `
 Results:
 ${formatJson(value.results)}` : "";
+  const blocks = value.outside_blocks ? `
+${formatBlocks(value.blocks ?? [], value.outside_blocks)}` : "";
   return `${head}
-${value.changes.map((c) => `- ${c}`).join("\n")}${results}`;
+${value.changes.map((c) => `- ${c}`).join("\n")}${results}${blocks}`;
+}
+function formatBlocks(blocks, outside) {
+  const framed = blocks.length ? blocks.map((b) => `"${b.title}" (${b.references.length} part${b.references.length === 1 ? "" : "s"})`).join(", ") : "none yet (add_block)";
+  const shown = outside.slice(0, MAX_LISTED).join(", ") + (outside.length > MAX_LISTED ? ` \u2026 ${outside.length - MAX_LISTED} more` : "");
+  return `Functional blocks: ${framed}; ${outside.length ? `outside every block: ${shown}` : "every part is inside one"}.`;
 }
 var MAX_CHANGES = 80;
 function formatSync(v) {
@@ -806,6 +813,8 @@ function apply(ctx, config = {}) {
         "Layout by function: set_page{paper?,title?,date?,rev?,company?,comments?}; add_block{title, references:[...] (frame encloses those parts with their wiring) | x,y,width,height} draws a dashed frame with a bold title;",
         "move_block{title, dx,dy | x,y} moves the frame with the parts inside and their wiring; move_symbols{references,dx,dy} moves parts with their wires, labels and power symbols (refuses if that would tear a wire to a part left behind);",
         "add_text{text,x,y,size?,bold?}; add_rectangle{x,y,width,height,style?}.",
+        `Draw a design by function, one block per call: place the block's parts inside its area with explicit references (U1, R1, C1\u2026; "R?" auto-numbers, but then only a later call can name the part), wire them, and end the call with add_block{title, references} titled with the block's job and main part (e.g. "3V3 LDO \u2014 AMS1117-3.3").`,
+        "After a batch that places or moves parts, the result names the functional blocks and the parts outside every block.",
         'SPICE models for kicad_simulate: set_sim_model{reference, library, name, pins?} binds a .subckt or .model from a model file (library relative to the project; find them with kicad_sim_model), matching symbol pins to model pins by name and refusing when it cannot, so give pins {"1":"GND","2":"OUT"} (symbol pin \u2192 model pin) when the names differ; set_sim_model{reference, device:"D", params:"is=1e-18 n=2 rs=3"} sets a built-in device (diode, LED) without a file.',
         "Rotation is counter-clockwise: Device:R/C/L at 0\xB0 are vertical with pin 1 on top; at 90\xB0 horizontal with pin 1 on the left; add_symbol results list the placed pin positions.",
         "Wire parts that work together with connect_pins (chain a net with several pins: A-B, then B-C); use power symbols for rails and labels between blocks or across the page. A connect_pins result with a note took a detour: move, rotate or mirror a part so the pins face each other, or use labels. Keep one call to at most ~20 operations; split bigger changes. Never rewrite or recreate a .kicad_sch to fix layout \u2014 remove and re-add the affected items.",

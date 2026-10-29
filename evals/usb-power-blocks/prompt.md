@@ -1,0 +1,1 @@
+从零设计一个小电源模块，原理图是工作区里空白的 usb_power.kicad_sch。要求：1) USB-C 仅供电接口（USB_C_Receptacle_PowerOnly_6P）输入 5V，CC1/CC2 各接 5.1k 下拉到 GND，VBUS 网络为 +5V。2) AMS1117-3.3 把 +5V 稳压到 +3V3，输入和输出各一个 10uF 电容。3) +3V3 上加一个电源指示 LED，串 1k 电阻到 GND。4) 所有元件给出合适的 SMD 封装（阻容用 0603），必要时加 PWR_FLAG。最后确保 KiCad ERC 0 error。

@@ -9,10 +9,11 @@ import json, os, sys
 pcb_arg = next((a for a in sys.argv[1:] if a == '--pcb' or a.startswith('--pcb=')), None)
 sys.argv = [a for a in sys.argv if a != pcb_arg]
 sys.path.insert(0, sys.argv[1])
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dsh_kicad_sidecar.kicad_cli import KiCadCli
-from dsh_kicad_sidecar.schematic import Schematic
 from dsh_kicad_sidecar import mcu
-path = sys.argv[2]
+import block_check
+path = os.path.abspath(sys.argv[2])  # kicad-cli runs in the schematic's folder
 cli = KiCadCli()
 erc = cli.erc(path); print('ERC:', 'PASSED' if erc['passed'] else 'FAILED', erc['counts'], erc['by_type'])
 net = cli.netlist(path)
@@ -61,12 +62,14 @@ mcu_report = mcu.check_schematic(net, os.path.dirname(os.path.abspath(path)))
 for m in mcu_report['mcus']:
     for f in m.get('findings', []): print(f"  MCU {f['severity']}: {f['pin']} {f['message']}")
 c('MCU wiring (kicad_check_mcu, attiny85 provider): checked, no errors', mcu_report['passed'] is True)
+framed, lines = block_check.check_blocks(path)
+print('\nBLOCKS:'); [print('  ' + line) for line in lines]
+c(block_check.REQUIREMENT, framed)
 
 print('\nREQUIREMENTS:'); [print(('  OK  ' if ok else '  FAIL'), name) for name, ok in checks]
 print(f'\n{sum(ok for _, ok in checks)}/{len(checks)} requirements satisfied')
 passed = erc['counts']['error'] == 0 and all(ok for _, ok in checks)
 if pcb_arg:
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     import board_check
     board = pcb_arg.partition('=')[2] or os.path.splitext(path)[0] + '.kicad_pcb'
     passed = board_check.report(board_check.check_board(sys.argv[1], board)) and passed

@@ -111,6 +111,10 @@ To publish a new version: `pnpm run dist`, commit, then add a version to `market
 4. `/erc`, `/drc`, `/bom` work without the model.
 5. **Plugins → KiCad → KiCad bridge / KiCad policy** hold the settings.
 
+### Schematics by functional block
+
+A new design is drawn block by block, like a reference design. The agent first plans the blocks (title, parts, area on the page). It then builds one block per `kicad_edit_schematic` call and frames it with `add_block`: a dashed frame titled with the block's job and main part (`3V3 LDO — AMS1117-3.3`, `MCU — ATtiny85`), with short notes inside where a choice needs explaining. Blocks connect only through net labels and power symbols. After every batch that places or moves parts, the edit result names the parts outside every block, and the agent is not done while there are any. `kicad_read_schematic` lists the same parts as `outside_blocks`. An existing schematic keeps its organisation unless you ask to reorganise it. The board placement below follows the same blocks.
+
 ### Board placement
 
 After `kicad_update_pcb` creates a board, one `kicad_edit_pcb` operation, `auto_place`, lays it out from the schematic's functional blocks (the `add_block` frames; without them its sheets, else net connectivity): each block stays together, connectors sit on the board edge facing out (a footprint's "PCB Edge" mark lands on the edge), decoupling capacitors go next to their IC's power pins and crystals next to their IC, power parts get extra room, and the outline is sized to fit (a drawn outline is kept and filled instead). `place_block` lays out one block in a given spot or rectangle. `kicad_read_pcb` then reports courtyard overlaps, footprints outside the outline and the total ratsnest length, and `kicad_render` with `view: "3d"` shows the result. On the usb-attiny85 board it gives no courtyard overlap, everything inside the outline, the USB-C on the edge, and a ratsnest of 214 mm against 345 mm for random placement ([details](docs/pcb-architecture.md#placement-12)).
