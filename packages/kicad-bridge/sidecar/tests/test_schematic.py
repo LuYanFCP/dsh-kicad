@@ -3,6 +3,7 @@ import pytest
 from dsh_kicad_sidecar.geometry import transform
 from dsh_kicad_sidecar.schematic import Schematic, SchematicError
 from dsh_kicad_sidecar.sexpr import dumps, parse
+from dsh_kicad_sidecar.tools import Toolbox
 
 from conftest import needs_kicad_cli, needs_symbols
 
@@ -189,8 +190,11 @@ def test_blocks_frame_parts_and_move_with_their_wiring(project):
     cli = KiCadCli()
     before = _nets(cli, path)
     s = Schematic(path)
+    unframed = s.summary()  # no block yet: every part is outside one (power symbols aside)
+    assert "blocks" not in unframed and unframed["outside_blocks"] == ["C1", "J1", "R1"]
     s.apply({"op": "set_page", "paper": "A3", "title": "RC filter", "rev": "v0.2"})
     made = s.apply({"op": "add_block", "title": "FILTER", "references": ["R1", "C1"]})
+    assert s.summary()["outside_blocks"] == s.outside_blocks() == ["J1"]
     s.apply({"op": "add_block", "title": "INPUT", "references": ["J1"]})
     blocks = {b["title"]: b for b in s.blocks()}
     assert blocks["FILTER"]["references"] == ["C1", "R1"] and blocks["INPUT"]["references"] == ["J1"]
@@ -207,6 +211,25 @@ def test_blocks_frame_parts_and_move_with_their_wiring(project):
     # Same connectivity, still a clean ERC: the wires, labels and power symbols travelled along.
     assert _nets(cli, path) == before
     assert cli.erc(path)["passed"]
+
+
+@needs_symbols
+def test_edit_results_name_the_parts_outside_every_block(project):
+    path = project("rc_filter")
+    tb = Toolbox()
+    edit = lambda *ops: tb.call("edit_schematic", {"path": path, "operations": list(ops)})
+    # A batch that places or moves nothing says nothing about blocks.
+    assert "outside_blocks" not in edit({"op": "set_value", "reference": "R1", "value": "4k7"})
+    framed = edit({"op": "add_block", "title": "FILTER", "references": ["R1", "C1"]})
+    assert framed["blocks"] == [{"title": "FILTER", "references": ["C1", "R1"]}] and framed["outside_blocks"] == ["J1"]
+    done = edit({"op": "add_block", "title": "INPUT", "references": ["J1"]})
+    assert [b["title"] for b in done["blocks"]] == ["FILTER", "INPUT"] and done["outside_blocks"] == []
+    # A new part outside every frame is named; a power symbol is not a part of any block.
+    placed = edit({"op": "add_symbol", "lib_id": "Device:R", "x": 250.19, "y": 160.02, "reference": "R2"},
+                  {"op": "add_symbol", "lib_id": "power:GND", "x": 260.35, "y": 160.02})
+    assert placed["outside_blocks"] == ["R2"]
+    assert "outside_blocks" not in tb.call("edit_schematic", {"path": project("blank"), "operations": [
+        {"op": "add_symbol", "lib_id": "power:GND", "x": 50.8, "y": 50.8}]})  # nothing but power symbols: nothing to frame
 
 
 @needs_symbols

@@ -52,6 +52,19 @@ describe('dsh-tool-kicad', () => {
     expect(readFileSync(path, 'utf8')).toBe(before)
   })
 
+  it('after a batch that places, moves or frames parts, names the blocks and the parts outside every one', async () => {
+    const ctx = await bootKiCad([toolKiCad])
+    const path = fixtureProject('rc_filter')
+    const edit = async (...operations: object[]) => text(await runTool(ctx, 'kicad_edit_schematic', { path, operations }))
+    expect(await edit({ op: 'set_value', reference: 'R1', value: '22k' })).not.toContain('Functional blocks')
+    expect(await edit({ op: 'move_symbols', references: ['R1', 'C1', 'J1'], dx: 2.54, dy: 0 }))
+      .toMatch(/\nFunctional blocks: none yet \(add_block\); outside every block: C1, J1, R1\.$/)
+    expect(await edit({ op: 'add_block', title: 'FILTER', references: ['R1', 'C1'] }))
+      .toMatch(/\nFunctional blocks: "FILTER" \(2 parts\); outside every block: J1\.$/)
+    expect(await edit({ op: 'add_block', title: 'INPUT', references: ['J1'] }))
+      .toMatch(/\nFunctional blocks: "FILTER" \(2 parts\), "INPUT" \(1 part\); every part is inside one\.$/)
+  })
+
   it.runIf(hasKiCadCli())('read → edit → ERC: KiCad judges the fix', async () => {
     const ctx = await bootKiCad([toolKiCad])
     const path = fixtureProject('erc_errors')

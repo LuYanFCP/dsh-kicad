@@ -163,6 +163,14 @@ describe('dsh-kicad-policy', () => {
     expect(policy.GUIDANCE).toMatch(/Boards \(load the kicad-pcb-layout skill/)
   })
 
+  it('the working rules make a drawn schematic block by block, finished only with every part in a titled block', () => {
+    expect(policy.GUIDANCE).toMatch(/Draw a schematic block by block[\s\S]*plan the blocks before editing/)
+    expect(policy.GUIDANCE).toMatch(/one block per kicad_edit_schematic call[\s\S]*explicit references[\s\S]*finish the call with add_block\{title, references\}/)
+    expect(policy.GUIDANCE).toMatch(/title each block with its job and main part[\s\S]*add_text/)
+    expect(policy.GUIDANCE).toMatch(/names the parts outside every block: a design you draw is finished only when there are none/)
+    expect(policy.GUIDANCE).toMatch(/reorganise an unframed sheet into blocks only when the user asks/)
+  })
+
   it('project context lists KiCad files and the last ERC', () => {
     const path = fixtureProject('rc_filter')
     const memory = new policy.ErcMemory()

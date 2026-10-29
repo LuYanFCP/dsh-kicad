@@ -111,6 +111,10 @@ dsh plugin --profile web add "git+https://github.com/LuYanFCP/dsh-kicad.git#<com
 4. `/erc`、`/drc`、`/bom` 不经过模型直接运行。
 5. 设置位于 **Plugins → KiCad → KiCad bridge / KiCad policy**。
 
+### 按功能块画原理图
+
+新设计像参考设计那样按功能块逐块绘制。agent 先规划各功能块（标题、元件、在图纸上的区域），然后每次 `kicad_edit_schematic` 调用画完一个功能块，并用 `add_block` 框起来。每个块是一个虚线框，标题写明它的功能和主要器件（如 `3V3 LDO — AMS1117-3.3`、`MCU — ATtiny85`），需要解释的设计选择在块内加简短注释。功能块之间只通过网络标签和电源符号连接。每次放置或移动元件后，编辑结果都会列出不在任何功能块里的元件；只要还有这样的元件，agent 就不算画完。`kicad_read_schematic` 的 `outside_blocks` 列出的是同一批元件。已有的原理图保持原来的组织方式，除非你要求重新整理。下面的电路板布局也按这些功能块进行。
+
 ### 电路板布局
 
 `kicad_update_pcb` 生成电路板后，一个 `kicad_edit_pcb` 操作 `auto_place` 即可按原理图的功能块（`add_block` 画的框；没有功能块时按图纸页，再不然按网络连接）完成布局：同一功能块的元件放在一起，连接器放在板边并朝外（封装上的 "PCB Edge" 标记落在板边），去耦电容紧靠其 IC 的电源引脚，晶振紧靠其 IC，功率器件周围留出空间，板框按元件大小确定（已画好的板框则保留，元件放在其中）。`place_block` 把单个功能块放到指定位置或矩形内。之后 `kicad_read_pcb` 报告 courtyard 重叠、板框外的封装和飞线总长，`kicad_render` 加 `view: "3d"` 可查看效果。在 usb-attiny85 电路板上：无 courtyard 重叠，所有封装都在板框内，USB-C 位于板边，飞线总长 214 mm，随机摆放为 345 mm（[详情](docs/pcb-architecture.md#placement-12)）。

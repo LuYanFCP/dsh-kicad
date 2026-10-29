@@ -33,6 +33,9 @@ export interface EditValue {
   /** Every file written (a board edit may also write the .kicad_pro). */
   files?: string[]
   results?: unknown[]
+  /** After a schematic batch that places or moves parts: the titled frames on the sheet and the parts inside none. */
+  blocks?: Array<{ title: string, references: string[] }>
+  outside_blocks?: string[]
 }
 
 type Box = [number, number, number, number]
@@ -315,7 +318,17 @@ export function formatEdit(value: EditValue): string {
     ? `Wrote ${value.path}${also.length ? ` and ${also.join(', ')}` : ''} (${value.applied} operations).`
     : `Dry run on ${value.path}: ${value.applied} operations valid, nothing written.`
   const results = value.results?.length ? `\nResults:\n${formatJson(value.results)}` : ''
-  return `${head}\n${value.changes.map(c => `- ${c}`).join('\n')}${results}`
+  const blocks = value.outside_blocks ? `\n${formatBlocks(value.blocks ?? [], value.outside_blocks)}` : ''
+  return `${head}\n${value.changes.map(c => `- ${c}`).join('\n')}${results}${blocks}`
+}
+
+/** One line: the sheet's functional blocks (add_block frames) and the parts outside every one. */
+function formatBlocks(blocks: Array<{ title: string, references: string[] }>, outside: string[]): string {
+  const framed = blocks.length
+    ? blocks.map(b => `"${b.title}" (${b.references.length} part${b.references.length === 1 ? '' : 's'})`).join(', ')
+    : 'none yet (add_block)'
+  const shown = outside.slice(0, MAX_LISTED).join(', ') + (outside.length > MAX_LISTED ? ` … ${outside.length - MAX_LISTED} more` : '')
+  return `Functional blocks: ${framed}; ${outside.length ? `outside every block: ${shown}` : 'every part is inside one'}.`
 }
 
 const MAX_CHANGES = 80

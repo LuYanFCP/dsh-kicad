@@ -12,7 +12,7 @@ sys.path.insert(0, sys.argv[1])
 from dsh_kicad_sidecar.kicad_cli import KiCadCli
 from dsh_kicad_sidecar.schematic import Schematic
 from dsh_kicad_sidecar import mcu
-path = sys.argv[2]
+path = os.path.abspath(sys.argv[2])  # kicad-cli runs in the schematic's folder
 cli = KiCadCli()
 erc = cli.erc(path); print('ERC:', 'PASSED' if erc['passed'] else 'FAILED', erc['counts'], erc['by_type'])
 net = cli.netlist(path)
@@ -61,6 +61,16 @@ mcu_report = mcu.check_schematic(net, os.path.dirname(os.path.abspath(path)))
 for m in mcu_report['mcus']:
     for f in m.get('findings', []): print(f"  MCU {f['severity']}: {f['pin']} {f['message']}")
 c('MCU wiring (kicad_check_mcu, attiny85 provider): checked, no errors', mcu_report['passed'] is True)
+sch = Schematic(path); blocks = sch.blocks(); outside = sch.outside_blocks(blocks)
+frames = [(b['at'][0], b['at'][1], b['at'][0] + b['size'][0], b['at'][1] + b['size'][1]) for b in blocks]
+holds = lambda p, q: p[0] <= q[0] and p[1] <= q[1] and q[2] <= p[2] and q[3] <= p[3]
+# Frames may nest (a sub-block inside a block) but must not cross.
+crossing = [(blocks[i]['title'], blocks[j]['title']) for i, a in enumerate(frames) for j, b in enumerate(frames) if i < j
+            and a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3] and not holds(a, b) and not holds(b, a)]
+print('\nBLOCKS:'); [print(f"  {b['title']}: {', '.join(b['references'])}") for b in blocks]
+if outside: print('  outside every block:', ', '.join(outside))
+if crossing: print('  crossing frames:', ', '.join(f'{a} × {b}' for a, b in crossing))
+c('drawn in titled functional blocks: 2+ frames, none crossing, every part inside one', len(blocks) >= 2 and not crossing and not outside)
 
 print('\nREQUIREMENTS:'); [print(('  OK  ' if ok else '  FAIL'), name) for name, ok in checks]
 print(f'\n{sum(ok for _, ok in checks)}/{len(checks)} requirements satisfied')

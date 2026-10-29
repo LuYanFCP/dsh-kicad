@@ -297,10 +297,10 @@ class Schematic:
         blocks = self.blocks()
         if blocks:
             out["blocks"] = blocks
-            placed = {r for b in blocks for r in b["references"]}
-            loose = sorted({c["reference"] for c in comps if not c.get("power") and c["reference"] not in placed}, key=_ref_key)
-            if loose:
-                out["outside_blocks"] = loose
+        # Also on a sheet without blocks: "nothing outside a block" must not hold just because no frame exists.
+        loose = self.outside_blocks(blocks)
+        if loose:
+            out["outside_blocks"] = loose
         texts = [{"text": t.value(0), "at": list(_xy(t)), "uuid": t.child_value("uuid")} for t in root.lists("text")]
         if texts:
             out["texts"] = texts
@@ -896,6 +896,16 @@ class Schematic:
         for f in frames:
             f["references"].sort(key=_ref_key)
         return frames
+
+    def outside_blocks(self, blocks: list[dict] | None = None) -> list[str]:
+        """The parts (power symbols aside) inside no block's frame: every part while the sheet has no block."""
+        framed = {r for b in (self.blocks() if blocks is None else blocks) for r in b["references"]}
+        loose = set()
+        for sym in self.symbols():
+            lib = self.lib_symbol(sym.lib_id)
+            if sym.reference not in framed and (lib is None or lib.find("power") is None):
+                loose.add(sym.reference)
+        return sorted(loose, key=_ref_key)
 
     def _find_block(self, title: str) -> dict:
         blocks = self.blocks()

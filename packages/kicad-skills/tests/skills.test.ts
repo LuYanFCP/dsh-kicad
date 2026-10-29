@@ -69,6 +69,26 @@ describe('kicad skills', () => {
     expect(body).toContain('/kicad-install freerouting')
   })
 
+  it('draws a schematic block by block, done only when every part is in a titled block', async () => {
+    const ctx = await bootKiCad([SkillRegistry], [skills, { commands: false }])
+    // The description is what makes the agent load the conventions: it has to say blocks.
+    const design = (await ctx.skills.list()).find(s => s.name === 'kicad-schematic-design')
+    expect(design?.description).toMatch(/functional blocks in titled frames built block by block/)
+    const conventions = (await ctx.skills.get('kicad-schematic-design'))!.content
+    expect(conventions).toMatch(/Title each block with its job and main part[\s\S]*`add_text`/)
+    expect(conventions).toMatch(/one `kicad_edit_schematic` call per block[\s\S]*explicit references[\s\S]*`add_block\{title, references\}` the call's last operation/)
+    expect(conventions).toMatch(/\*\*Before handing back\*\*[\s\S]*every part sits in a titled block \(no `outside_blocks`\)/)
+    const workflow = (await ctx.skills.get('kicad-agent-workflow'))!.content
+    expect(workflow).toMatch(/Plan the blocks, then placement[\s\S]*Edit block by block[\s\S]*end the call with `add_block\{title, references\}`/)
+    expect(workflow).toMatch(/`Functional blocks:` line names the parts outside every block/)
+    expect(workflow).toMatch(/## Handing over to the board[\s\S]*every part sits in a titled block/)
+    // Every `op{...}` they name is a kicad_edit_schematic operation.
+    const sch = readFileSync(new URL('../../kicad-bridge/sidecar/src/dsh_kicad_sidecar/schematic.py', import.meta.url), 'utf8')
+    const operations = new Set([...sch.slice(sch.indexOf('OPERATIONS')).matchAll(/^ {4}"([a-z_]+)": /gm)].map(m => m[1]))
+    const named = new Set([...`${conventions}\n${workflow}`.matchAll(/`([a-z_]+)\{/g)].map(m => m[1]))
+    expect([...named].filter(op => !operations.has(op))).toEqual([])
+  })
+
   it('keeps every SKILL.md under the 8192-character pruning threshold', async () => {
     const provider = skills.createSkillProvider()
     for (const c of await provider.list({}) as Array<{ name: string }>) {
