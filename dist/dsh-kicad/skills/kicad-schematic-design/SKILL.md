@@ -15,7 +15,7 @@ Apply these unless the project already follows different conventions (read it fi
 **Power**
 - Use power symbols (`power:GND`, `power:+3V3`, `power:+5V`, `power:VBUS`) via `connect_pin_to_net` with `kind: "power"`; do not draw global labels for supply rails.
 - Every supply net needs a source: a regulator output, a connector, or a `power:PWR_FLAG`. Otherwise ERC reports `power_pin_not_driven`.
-- One 100 nF decoupling capacitor per IC power pin, placed next to the IC, plus bulk capacitance (1–10 µF) per rail.
+- One 100 nF decoupling capacitor per IC power pin, placed next to the IC, plus bulk capacitance (1–10 µF) per rail. Where the datasheet asks for more (a regulator's output capacitor, a module's bulk capacitor), its value wins: read it with `kicad_datasheet` and keep it as a `kicad_check_design` check.
 
 **Nets**
 - Name meaningful nets with labels: `UART_TX`, `I2C_SDA`, `SPI_SCK`, `EN`, `nRESET` (active-low with an `n` prefix).
@@ -47,5 +47,6 @@ Apply these unless the project already follows different conventions (read it fi
 
 **Before handing back**
 - ERC passes (or remaining warnings are explained).
+- The design checks pass (`kicad_check_design`); any that cannot verify are named.
 - In a design you drew, every part sits in a titled block (no `outside_blocks`), frames do not overlap (`add_block` reports `overlaps`), and `kicad_render` shows nothing sticking out of a frame.
 - BOM (`kicad_export` kind `bom`) has values and footprints for all board parts.

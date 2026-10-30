@@ -10,10 +10,10 @@ import {
   type Block, type Context, type ImageRef, type ToolDefinition, type ToolExecution,
 } from './dsh.ts'
 import type { DoctorReport } from 'dsh-kicad-bridge'
-import { eng, formatAutoroute, formatBoard, formatCheck, formatEdit, formatFab, formatFabGate, formatJson, formatFirmware, formatMcu, formatPreset, formatSimModel, formatSimulate, formatSync, type AutorouteValue, type BoardSummary, type CheckReport, type EditValue, type FabResult, type FirmwareAssertion, type FirmwareHazard, type FirmwareRun, type McuCheckValue, type McuFinding, type MonteCarlo, type PresetResult, type SimAssertion, type SimModelValue, type SimulateValue, type SyncValue } from './format.ts'
+import { eng, formatAutoroute, formatBoard, formatCheck, formatDatasheet, formatDesignChecks, formatEdit, formatFab, formatFabGate, formatJson, formatFirmware, formatMcu, formatPreset, formatSimModel, formatSimulate, formatSync, type AutorouteValue, type BoardSummary, type CheckReport, type DatasheetValue, type DesignChecksValue, type EditValue, type FabResult, type FirmwareAssertion, type FirmwareHazard, type FirmwareRun, type McuCheckValue, type McuFinding, type MonteCarlo, type PresetResult, type SimAssertion, type SimModelValue, type SimulateValue, type SyncValue } from './format.ts'
 
-export { eng, formatAutoroute, formatBoard, formatCheck, formatEdit, formatFab, formatFabGate, formatJson, formatFirmware, formatMcu, formatPreset, formatSimModel, formatSimulate, formatSync }
-export type { AutorouteValue, BoardSummary, CheckReport, EditValue, FabResult, FirmwareAssertion, FirmwareHazard, FirmwareRun, McuCheckValue, McuFinding, MonteCarlo, PresetResult, SimAssertion, SimModelValue, SimulateValue, SyncValue }
+export { eng, formatAutoroute, formatBoard, formatCheck, formatDatasheet, formatDesignChecks, formatEdit, formatFab, formatFabGate, formatJson, formatFirmware, formatMcu, formatPreset, formatSimModel, formatSimulate, formatSync }
+export type { AutorouteValue, BoardSummary, CheckReport, DatasheetValue, DesignChecksValue, EditValue, FabResult, FirmwareAssertion, FirmwareHazard, FirmwareRun, McuCheckValue, McuFinding, MonteCarlo, PresetResult, SimAssertion, SimModelValue, SimulateValue, SyncValue }
 
 export const name = 'dsh-tool-kicad'
 export const inject = ['tools', 'kicad']
@@ -34,6 +34,8 @@ export const TOOL_ACCESS = {
   kicad_simulate: 'read',
   kicad_sim_model: 'read',
   kicad_check_mcu: 'read',
+  kicad_datasheet: 'read',
+  kicad_check_design: 'write',
   kicad_simulate_firmware: 'read',
   kicad_export: 'write',
   kicad_export_fab: 'write',
@@ -67,6 +69,8 @@ export const PATH_ARGUMENTS: Record<KiCadToolName, readonly string[]> = {
   kicad_simulate: ['path', 'output_dir', 'spec'],
   kicad_sim_model: ['path'],
   kicad_check_mcu: ['path'],
+  kicad_datasheet: ['path', 'pdf'],
+  kicad_check_design: ['path'],
   kicad_simulate_firmware: ['path', 'firmware', 'scenario'],
   kicad_export: ['path', 'output'],
   kicad_export_fab: ['pcb', 'output_dir'],
@@ -361,6 +365,54 @@ export function apply(ctx: Context, config: Config = {}): void {
       isConcurrencySafe: () => true,
       async execute(args, exec) {
         return await ctx.kicad.run('check_mcu', { ...args, path: at(exec, args.path) }, exec.signal) as never
+      },
+    }),
+    defineTool({
+      name: 'kicad_datasheet',
+      description: [
+        'Read a part\'s datasheet, so its limits and the parts it needs come from the datasheet rather than from memory. Give reference (a part in the schematic: its symbol\'s Datasheet link), lib_id (a library symbol\'s link), url (a PDF found with web_search or on the maker\'s site, when the symbol has no link or a dead one) or pdf (a datasheet PDF in the workspace).',
+        'The PDF is downloaded once into .dsh-kicad/datasheets/ and its text extracted per page (pdftotext; when it is missing, kicad_doctor says how to install it). The result lists the pages of the usual sections (absolute maximum ratings, recommended operating conditions, electrical characteristics, pin description, application information, layout, thermal); query finds the lines with those words and their page; pages returns whole pages (at most 4).',
+        'A link that leads to a web page or a zip instead of a PDF is refused: find the PDF itself. Quote this text word for word in kicad_check_design checks.',
+      ].join(' '),
+      parameters: {
+        path: { type: 'string', description: 'The .kicad_sch, or the project folder (default: the working directory); the datasheets are kept beside it. reference needs the schematic.' },
+        reference: { type: 'string', description: 'A part in the schematic, e.g. U1.' },
+        lib_id: { type: 'string', description: 'A library symbol, e.g. Regulator_Linear:AMS1117-3.3.' },
+        url: { type: 'string', description: 'The datasheet PDF\'s http(s) URL.' },
+        pdf: { type: 'string', description: 'A datasheet PDF in the workspace.' },
+        query: { type: 'string', description: 'Words to find, e.g. "output capacitor stability"; "quoted phrases" stay together.' },
+        pages: { type: 'array', items: { type: 'integer' }, description: 'Pages to return in full (at most 4).' },
+        max_hits: { type: 'integer', description: 'How many places query returns (default 8).' },
+      },
+      output: {
+        schema: { type: 'json' },
+        render: (_args, value) => [{ type: 'text', text: formatDatasheet(value as unknown as DatasheetValue) }],
+      },
+      isConcurrencySafe: () => true,
+      async execute(args, exec) {
+        return await ctx.kicad.run('datasheet', { ...args, path: at(exec, args.path ?? '.'), ...(args.pdf ? { pdf: at(exec, args.pdf) } : {}) }, exec.signal) as never
+      },
+    }),
+    defineTool({
+      name: 'kicad_check_design',
+      description: [
+        'Unit tests for the schematic, written from the parts\' datasheets: each check states one requirement the schematic must meet and cites the words it comes from; the tool judges every check on KiCad\'s netlist and the part values. The checks are kept in design-checks.json next to the schematic and re-run after every schematic edit.',
+        'A check: {id, rule, part?, <rule fields>, source: {url | pdf | part | file, page?, quote}} (or a list of sources). Rules: max_voltage {pin, max}; voltage_range {pin, min, max}; voltage_difference {pin, minus, min?, max?} (e.g. a regulator\'s dropout headroom); capacitance {pin, to? (default GND), min?, max?} (the sum of every capacitor between the two nets); resistance {pin, to, min?, max? | value, tolerance?} (pull-ups, pull-downs, series resistors); same_net {pins}; led_current {led, vf, min?, max?} (from the rail voltages, Vf and the series resistor). Pins are "REF:PIN" (number or name); values take SI prefixes: "22u", "4.7k", "20m", 3.3.',
+        'source.quote is copied word for word from kicad_datasheet\'s text (url: the datasheet\'s link; part: that part\'s symbol link; pdf: a workspace PDF), or from a workspace file such as design-brief.md (file) for a requirement the user set. A check counts only when its quote is really there and states the check\'s numbers; otherwise it comes back CANNOT VERIFY, never passed. Rails whose name does not give their voltage (VBUS, VBAT) are declared in rails, e.g. {"VBUS": 5}.',
+        'Each check comes back pass, FAIL (with the numbers) or CANNOT VERIFY (why). Fix every FAIL in the schematic, or tell the user where their requirement and the datasheet disagree. Without checks it runs the saved ones; checks add or replace by id; remove deletes by id.',
+      ].join(' '),
+      parameters: {
+        path: SCH,
+        checks: { type: 'array', items: { type: 'object', additionalProperties: true, properties: { id: { type: 'string', required: true }, rule: { type: 'string', required: true } } }, description: 'Checks to add or replace, as described above.' },
+        rails: { type: 'object', additionalProperties: true, description: 'Voltages of rails whose name does not give it, e.g. {"VBUS": 5}.' },
+        remove: { type: 'array', items: { type: 'string' }, description: 'Ids of checks to delete.' },
+      },
+      output: {
+        schema: { type: 'json' },
+        render: (_args, value) => [{ type: 'text', text: formatDesignChecks(value as unknown as DesignChecksValue) }],
+      },
+      async execute(args, exec) {
+        return await ctx.kicad.run('check_design', { ...args, path: at(exec, args.path) }, exec.signal) as never
       },
     }),
     defineTool({

@@ -22,7 +22,8 @@ from .placement import OPERATIONS as PLACE_OPERATIONS, apply as apply_placement,
 from .board3d import QUALITIES, SIDES, export_glb, render_args, render_name
 from .autoroute import DEFAULT_TIMEOUT, MAX_TIMEOUT, autoroute
 from .freerouting import Cancelled, locate as locate_freerouting
-from . import esp32sim, mcu, mcusim, simmodels, spice
+from . import datasheet, design_checks, esp32sim, mcu, mcusim, simmodels, spice
+from .datasheet import DatasheetError
 from .spice import SimulationError
 from .footprints import FootprintLibraries, default_footprint_dirs
 from . import geometry
@@ -218,6 +219,33 @@ TOOL_SPECS: list[ToolSpec] = [
              "below a folder, optionally filtered by a part of the model name. Read-only.",
              _obj({"path": {"type": "string", "description": "A model file, or a folder to search (e.g. the project folder)."},
                    "name": {"type": "string", "description": "Only models whose name contains this text (case-insensitive)."}}, ["path"])),
+    ToolSpec("datasheet", "Read a part's datasheet: give a reference (its symbol's Datasheet link), a lib_id, a url (e.g. found with web_search) or a pdf "
+             "in the workspace. The PDF is downloaded once into .dsh-kicad/datasheets/ and its text extracted per page (pdftotext). Returns the pages "
+             "of the usual sections (absolute maximum ratings, recommended operating conditions, electrical characteristics, pin description, "
+             "application information, layout, thermal), the lines matching a query with their page, or whole pages. Quote this text in "
+             "check_design checks. A link that is not a PDF (a vendor page, a zip) is refused with what to do instead.",
+             _obj({"path": {"type": "string", "description": "The .kicad_sch, or the project folder (default: the working directory); its folder keeps the datasheets."},
+                   "reference": {"type": "string", "description": "A part in the schematic (e.g. U1): its symbol's Datasheet link."},
+                   "lib_id": {"type": "string", "description": "A library symbol (e.g. Regulator_Linear:AMS1117-3.3): its Datasheet link."},
+                   "url": {"type": "string", "description": "The datasheet PDF's http(s) URL, when the symbol has no link or a dead one."},
+                   "pdf": {"type": "string", "description": "A datasheet PDF in the workspace."},
+                   "query": {"type": "string", "description": "Words to find, e.g. 'output capacitor stability' or '\"absolute maximum\" input'."},
+                   "pages": {"type": "array", "items": {"type": "integer"}, "description": "Pages to return in full (at most 4)."},
+                   "max_hits": {"type": "integer", "default": 8}}, [])),
+    ToolSpec("check_design", "Unit tests for a schematic, written from the parts' datasheets and kept in design-checks.json next to it. A check is "
+             "{id, rule, part?, <rule fields>, source: {url | part | file, page?, quote} or a list of them}. Rules: max_voltage{pin, max}, "
+             "voltage_range{pin, min, max}, voltage_difference{pin, minus, min?, max?}, capacitance{pin, to? (default GND), min?, max?}, "
+             "resistance{pin, to, min?, max? | value, tolerance?}, same_net{pins}, led_current{led, vf, min?, max?}; pins are REF:PIN, values take SI "
+             "prefixes ('22u', '4.7k', '20m'). rails {net: volts} gives rails whose name does not say their voltage (VBUS, VBAT). Each check is judged "
+             "on KiCad's netlist: pass, FAIL, or cannot verify. A check whose quote is not in its source (the datasheet text kept by datasheet, or a "
+             "workspace file such as design-brief.md), or whose numbers the quote does not state, never passes. Without checks it runs the saved "
+             "ones; checks add or replace by id, remove deletes.",
+             _obj({"path": SCH,
+                   "checks": {"type": "array", "items": {"type": "object"}, "description": "Checks to add or replace (by id)."},
+                   "rails": {"type": "object", "description": "Nominal voltages of rails whose name does not say it, e.g. {\"VBUS\": 5}."},
+                   "remove": {"type": "array", "items": {"type": "string"}, "description": "Ids of checks to delete."},
+                   "offline": {"type": "boolean", "default": False, "description": "Use only datasheets already downloaded."}},
+                  ["path"]), writes=True),
     ToolSpec("check_mcu", "Static check of how each microcontroller is wired, from KiCad's netlist and a per-family pin table (MCU providers; covered now: "
              "classic ESP32 modules and PICO, ATtiny25/45/85, ATmega48/88/168/328(P), the Arduino Nano and UNO modules). Finds strapping pins held at the wrong "
              "level at reset (ESP32 GPIO0/2/12), reserved flash/PSRAM pins in use, input-only pins used to drive or left floating, an EN or RESET pin without "
@@ -680,6 +708,72 @@ class Toolbox:
         except (mcu.McuError, SimulationError) as exc:
             raise ToolError(str(exc)) from exc
         return {"path": path, **result}
+
+    def tool_datasheet(self, args):
+        target = self.resolve(args.get("path") or ".")
+        path = target if target.endswith(".kicad_sch") else None
+        project = os.path.dirname(target) if path else target
+        if not os.path.isdir(project):
+            raise ToolError(f"{target}: give the .kicad_sch or the project folder")
+        url, pdf = args.get("url") or None, self.resolve(args["pdf"], ".pdf") if args.get("pdf") else None
+        reference, lib_id = args.get("reference"), args.get("lib_id")
+        link = None
+        if reference:
+            if path is None:
+                raise ToolError("reference names a part in a schematic: give its .kicad_sch as path")
+            sym = next((s for s in self.schematic(path).symbols() if s.reference == reference), None)
+            if sym is not None:
+                lib_id, link = lib_id or sym.lib_id, sym.prop("Datasheet")
+            else:  # a part on a sub-sheet
+                comp = next((c for c in self.cli.netlist(path)["components"] if c["reference"] == reference), None)
+                if comp is None:
+                    raise ToolError(f"no part {reference} in {os.path.basename(path)}")
+                lib_id, link = lib_id or comp["lib_id"], comp.get("datasheet")
+        if lib_id and link is None:
+            try:
+                node = self.libraries(project).get(lib_id)
+                link = next((p.value(1) for p in node.lists("property") if p.value(0) == "Datasheet"), None)
+            except LibraryError:
+                pass
+        if not url and not pdf and link:
+            local = link.replace("${KIPRJMOD}", project)
+            if re.match(r"https?://", link, re.I):
+                url = link
+            elif local.lower().endswith(".pdf") and os.path.isfile(os.path.join(project, local)):
+                pdf = self.resolve(os.path.join(project, local), ".pdf")
+        if not url and not pdf:
+            what = reference or lib_id or "the part"
+            raise ToolError(f"{what} has no datasheet link{f' ({link})' if link and link != '~' else ''}: find the PDF (web_search, the "
+                            "maker's site) and pass url, or put it in the workspace and pass pdf")
+        try:
+            ds = datasheet.load(project, url=url, pdf=pdf, hint=lib_id.split(":")[-1] if lib_id else None)
+            out: dict[str, Any] = {"source": ds.source, "title": ds.title, "pages": ds.pages,
+                                   "cached": os.path.relpath(ds.pdf, project), "index": datasheet.index(ds)}
+            if args.get("query"):
+                out["query"] = args["query"]
+                out["hits"] = datasheet.search(ds, args["query"], max_hits=max(1, min(int(args.get("max_hits") or 8), 20)))
+            if args.get("pages"):
+                out["text"] = datasheet.page_text(ds, [int(p) for p in args["pages"]][:4])
+        except DatasheetError as exc:
+            raise ToolError(str(exc)) from exc
+        return out
+
+    def tool_check_design(self, args):
+        path = self.resolve(args["path"], ".kicad_sch")
+        file = design_checks.checks_path(path)
+        changing = bool(args.get("checks") or args.get("rails") or args.get("remove"))
+        with self.lock(file):
+            try:
+                data = design_checks.load_checks(file)
+                if changing:
+                    data = design_checks.merge(data, args.get("checks"), args.get("rails"), args.get("remove"))
+                    design_checks.save_checks(file, data)
+            except (design_checks.CheckError, ValueError) as exc:
+                raise ToolError(f"nothing saved: {exc}") from exc
+        if not data["checks"]:
+            return {"path": path, "file": file, "saved": changing, "counts": {"pass": 0, "fail": 0, "cannot_verify": 0}, "results": []}
+        result = design_checks.run(os.path.dirname(path), self.cli.netlist(path), data, download=not args.get("offline"))
+        return {"path": path, "file": file, "saved": changing, **result}
 
     SCENARIO_KEYS = ("firmware", "reference", "duration", "clock_hz", "stimuli", "assertions", "initial", "eeprom", "usi_input", "temperature", "rstdisbl",
                      "startup_ms", "vcc", "led_vf", "timeout")

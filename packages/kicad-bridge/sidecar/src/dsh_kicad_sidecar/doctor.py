@@ -7,6 +7,7 @@ runs a plan only after the user confirmed it, and never one that needs root.
 
 from __future__ import annotations
 
+import os
 import shlex
 import shutil
 import sys
@@ -280,6 +281,25 @@ def _simulation_check(info: dict[str, Any], which: Which, ngspice: str | None) -
                   "if it is not on PATH, set the KiCad bridge 'ngspice' setting or $NGSPICE to the executable.")
 
 
+POPPLER_PACKAGES = {  # pdftotext comes with poppler
+    "fedora": "sudo dnf install poppler-utils", "ubuntu": "sudo apt-get install poppler-utils", "debian": "sudo apt-get install poppler-utils",
+    "arch": "sudo pacman -S poppler", "suse": "sudo zypper install poppler-tools",
+}
+
+
+def _datasheet_check(info: dict[str, Any], which: Which) -> dict[str, Any]:
+    """Optional: pdftotext, which kicad_datasheet uses to read datasheet PDFs (checks can still use datasheets read before)."""
+    label = "pdftotext (optional, datasheets)"
+    path = os.environ.get("PDFTOTEXT") or which("pdftotext")
+    if path:
+        return _check("pdftotext", label, "ok", f"pdftotext ({path}).", required=False, path=path)
+    command = POPPLER_PACKAGES.get(_family(info) or "") or ("brew install poppler" if info["os"] == "macos" else None)
+    return _check("pdftotext", label, "warn", "pdftotext was not found; kicad_datasheet (reading datasheet PDFs) needs it.", required=False,
+                  fix=(f"Install poppler (`{command}`)." if command else
+                       "Install Poppler for Windows (a release of poppler-windows, or `conda install -c conda-forge poppler`) and put its bin folder on PATH.")
+                  + " If pdftotext is not on PATH, set $PDFTOTEXT to it.")
+
+
 QEMU_LIB_PACKAGES = {  # the shared libraries Espressif's QEMU builds link against (Espressif's QEMU documentation)
     "fedora": ["sudo", "dnf", "install", "-y", "libgcrypt", "glib2", "pixman", "SDL2", "libslirp"],
     "ubuntu": ["sudo", "apt-get", "install", "-y", "libgcrypt20", "libglib2.0-0", "libpixman-1-0", "libsdl2-2.0-0", "libslirp0"],
@@ -479,6 +499,7 @@ def run_doctor(cli: KiCadCli, info: dict[str, Any] | None = None, which: Which =
     checks += _routing_checks(router if router is not None else freerouting.locate(), info, which)
     checks.append(_simulation_check(info, which, ngspice))
     checks.append(_qemu_check(info, which, qemu))
+    checks.append(_datasheet_check(info, which))
 
     errors = [c for c in checks if c["status"] == "error" and c["required"]]
     kicad_missing = cli.argv is None or version is None

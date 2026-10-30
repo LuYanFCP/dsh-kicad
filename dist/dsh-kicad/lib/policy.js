@@ -1,6 +1,6 @@
 // packages/kicad-policy/src/index.ts
 import { existsSync } from "node:fs";
-import { basename } from "node:path";
+import { basename, dirname as dirname2, join as join2 } from "node:path";
 
 // packages/tool-kicad/lib/dsh.js
 import { defineTool } from "@deepseek-ai/dsh-tools";
@@ -20,6 +20,20 @@ Schematic parity was NOT checked: ${report.schematic_parity_error}` : "");
     lines.push(`\u2026 ${active.length - MAX_LISTED} more`);
   return `${head}
 ${lines.join("\n")}`;
+}
+var CHECK_LABEL = { pass: "pass", fail: "FAIL", cannot_verify: "CANNOT VERIFY" };
+function formatDesignChecks(v, problemsOnly = false) {
+  const file = v.file.split(/[\\/]/).pop();
+  if (!v.results.length)
+    return `No design checks in ${file} yet: add one per datasheet requirement with checks.`;
+  const { pass, fail, cannot_verify: unknown } = v.counts;
+  const lines = [`Design checks (${file}${v.saved ? ", saved" : ""}): ${pass} passed, ${fail} FAILED, ${unknown} cannot verify`];
+  for (const r of v.results) {
+    if (problemsOnly && r.status === "pass")
+      continue;
+    lines.push(`${CHECK_LABEL[r.status]} ${r.id}: ${r.detail}${r.source ? ` [${r.source}]` : ""}`);
+  }
+  return lines.join("\n");
 }
 function violationLine(v) {
   const where = v.items.map((i) => `${i.description ?? ""}${i.pos ? ` @ (${round(i.pos.x)}, ${round(i.pos.y)})` : ""}`).filter(Boolean).join("; ");
@@ -45,6 +59,8 @@ var TOOL_ACCESS = {
   kicad_simulate: "read",
   kicad_sim_model: "read",
   kicad_check_mcu: "read",
+  kicad_datasheet: "read",
+  kicad_check_design: "write",
   kicad_simulate_firmware: "read",
   kicad_export: "write",
   kicad_export_fab: "write",
@@ -72,6 +88,8 @@ var PATH_ARGUMENTS = {
   kicad_simulate: ["path", "output_dir", "spec"],
   kicad_sim_model: ["path"],
   kicad_check_mcu: ["path"],
+  kicad_datasheet: ["path", "pdf"],
+  kicad_check_design: ["path"],
   kicad_simulate_firmware: ["path", "firmware", "scenario"],
   kicad_export: ["path", "output"],
   kicad_export_fab: ["pcb", "output_dir"],
@@ -219,6 +237,7 @@ var Config = default2.object({
   autoErc: default2.boolean().default(true).volatile().description("Run ERC after every schematic edit."),
   autoDrc: default2.boolean().default(true).volatile().description("Run DRC after every board edit."),
   autoRender: default2.boolean().default(true).volatile().description("Re-render the sidebar SVG after every schematic edit."),
+  autoChecks: default2.boolean().default(true).volatile().description("Re-run design-checks.json after every schematic edit."),
   guidance: default2.boolean().default(true).description("Add KiCad working rules to the system prompt."),
   projectContext: default2.boolean().default(true).description("Tell the model which KiCad project is open.")
 });
@@ -235,6 +254,7 @@ var GUIDANCE = `# KiCad (EDA) work
   - build one block per kicad_edit_schematic call: place its parts inside its area with explicit references (U1, R1, C1\u2026) so the same call can wire them, wire them together, end every signal that leaves the block in a net label and every supply in a power symbol, and finish the call with add_block{title, references};
   - title each block with its job and main part ("USB-C POWER IN", "3V3 LDO \u2014 AMS1117-3.3", "MCU \u2014 ATtiny85"); put short notes inside a block with add_text where a choice needs explaining ("RESET: 10k pull-up R3").
   Blocks connect only through net labels and power symbols, never through wires that cross a frame. After a batch that places or moves parts the edit result names the parts outside every block: a design you draw is finished only when there are none. In an existing schematic keep its organisation (put new parts in the block they belong to); reorganise an unframed sheet into blocks only when the user asks.
+- Part values and limits come from datasheets, not from memory (load the kicad-datasheet-checks skill). Before wiring an IC, regulator, module or LED, read its datasheet with kicad_datasheet (the symbol's link; when there is none or it is dead, find the PDF with web_search). Turn each requirement the schematic must meet into a kicad_check_design check that quotes the datasheet word for word: absolute maximum and operating voltages, the capacitors it needs, pull-ups and pull-downs, series resistors and currents, dropout. These checks are the schematic's unit tests: write them with the block, fix every FAIL, report CANNOT VERIFY as unverified, and when the user's numbers contradict a datasheet, say so instead of choosing silently. design-checks.json re-runs after every schematic edit.
 - Boards (load the kicad-pcb-layout skill: it takes a board from the synced schematic to the fab files, with KiCad's verdict at each step): create or refresh the board from the schematic with kicad_update_pcb (after ERC passes, and after every schematic change; it lists the REF:PINs to fix when it refuses), read with kicad_read_pcb (outline, footprints with courtyards and pad nets, rules, unrouted count), then change them with one kicad_edit_pcb batch: outline and mounting holes, placement, rules and net classes, tracks (route pad to pad with "REF:PAD" endpoints), vias, zones, keepouts, silkscreen.
 - Place a new board with one kicad_edit_pcb auto_place (it follows the schematic's functional blocks: draw them with add_block first), look at it with kicad_render (view "3d"), then fine-tune with move_footprint / place_block; kicad_read_pcb's placement line must show no overlaps and nothing outside the outline.
 - Routing: after placement, route critical nets by hand (power, USB/differential pairs, crystal) with add_track / add_via locked: true, then kicad_autoroute routes the rest without touching them; add a GND pour (add_zone on both copper layers), which kicad_autoroute refills. If it reports Freerouting or Java missing, give the user its install guidance (/kicad-install freerouting); do not install anything yourself.
@@ -247,8 +267,9 @@ var GUIDANCE = `# KiCad (EDA) work
 var isKiCadTool = (name2) => Object.hasOwn(TOOL_ACCESS, name2);
 var AUTO_CHECK = { kicad_edit_schematic: "erc", kicad_edit_pcb: "drc", kicad_update_pcb: "drc", kicad_fab_preset: "drc", kicad_autoroute: "drc" };
 var CHECKED = /* @__PURE__ */ new Set(["kicad_update_pcb", "kicad_autoroute"]);
+var DESIGN_CHECKS_FILE = "design-checks.json";
 var GUARDED = new Set(
-  Object.keys(TOOL_ACCESS).filter((n) => TOOL_ACCESS[n] === "write" || n === "kicad_render" || n === "kicad_simulate")
+  Object.keys(TOOL_ACCESS).filter((n) => TOOL_ACCESS[n] === "write" || n === "kicad_render" || n === "kicad_simulate" || n === "kicad_datasheet")
 );
 function apply(ctx, config) {
   const memory = new ErcMemory();
@@ -270,6 +291,14 @@ function apply(ctx, config) {
   if (config.restrictToWorkspace) ctx.effect(() => ctx.tools.guard(outsideWorkspace), "kicad workspace guard");
   {
     ctx.on("tools/pre-execute", async (exec, next) => {
+      if (exec.name === "kicad_check_design") {
+        const args2 = exec.arguments ?? {};
+        const saving = Boolean(args2.checks?.length || Object.keys(args2.rails ?? {}).length || args2.remove?.length);
+        if (saving && sessionPermissions(ctx, exec.agent).sandbox === "read-only") {
+          return { kind: "deny", reason: "kicad_check_design would save design-checks.json, but this session is read-only. Run it without checks to re-run the saved ones, or ask the user to switch permissions to workspace write." };
+        }
+        return next();
+      }
       if (!DESIGN_WRITE_TOOLS.includes(exec.name)) return next();
       const denied = outsideWorkspace(exec);
       if (denied) return { kind: "deny", reason: denied };
@@ -302,22 +331,32 @@ function apply(ctx, config) {
       if (check === "erc" && config.autoRender.get()) {
         void ctx.kicad.call("render", { path, format: "svg" }).catch(() => void 0);
       }
-      if (!(check === "erc" ? config.autoErc : config.autoDrc).get()) return decision;
-      const label = check.toUpperCase();
-      let note;
-      try {
-        const report = synced?.drc ? { ok: true, value: synced.drc, text: "" } : await ctx.kicad.call(check, { path, ...synced ? { schematic_parity: true } : {} }, exec.signal);
-        if (report.ok && report.value) {
-          memory.remember(path, report.value);
-          note = `Automatic ${formatCheck(report.value)}`;
-        } else {
-          note = `Automatic ${label} could not run: ${report.text}`;
+      const notes = [];
+      if ((check === "erc" ? config.autoErc : config.autoDrc).get()) {
+        const label = check.toUpperCase();
+        try {
+          const report = synced?.drc ? { ok: true, value: synced.drc, text: "" } : await ctx.kicad.call(check, { path, ...synced ? { schematic_parity: true } : {} }, exec.signal);
+          if (report.ok && report.value) {
+            memory.remember(path, report.value);
+            notes.push(`Automatic ${formatCheck(report.value)}`);
+          } else {
+            notes.push(`Automatic ${label} could not run: ${report.text}`);
+          }
+        } catch (error) {
+          notes.push(`Automatic ${label} could not run: ${error.message}`);
         }
-      } catch (error) {
-        note = `Automatic ${label} could not run: ${error.message}`;
       }
+      if (check === "erc" && config.autoChecks.get() && existsSync(join2(dirname2(path), DESIGN_CHECKS_FILE))) {
+        try {
+          const report = await ctx.kicad.call("check_design", { path, offline: true }, exec.signal);
+          notes.push(report.ok && report.value ? formatDesignChecks(report.value, true) : `Design checks could not run: ${report.text}`);
+        } catch (error) {
+          notes.push(`Design checks could not run: ${error.message}`);
+        }
+      }
+      if (!notes.length) return decision;
       const base = "content" in decision && decision.content ? decision.content : result.content;
-      return { ...decision, content: [...base, { type: "text", text: note }] };
+      return { ...decision, content: [...base, ...notes.map((text) => ({ type: "text", text }))] };
     });
   }
   ctx.on("tools/result", (exec, result) => {
