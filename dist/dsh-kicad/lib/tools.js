@@ -608,11 +608,15 @@ function apply(ctx, config = {}) {
           ...Object.fromEntries(["side", "rotate", "zoom", "pivot", "perspective", "quality"].filter((k) => args[k] !== void 0).map((k) => [k, args[k]]))
         }, exec.signal);
         const value = { path: rendered.path, svg: rendered.svg, ...rendered.png ? { png: rendered.png } : {} };
+        if (rendered.note) value.note = rendered.note;
         if (wantImage && rendered.png?.[0]) {
           const data = await readFile(rendered.png[0]);
           value.image = await attachments(ctx).saveImage({ data: new Uint8Array(data), mediaType: "image/png", name: basename(rendered.png[0]) });
         } else if (!wantImage) {
           value.note = args.view === "3d" ? "The current model does not accept images (or no attachment store is mounted); the PNG is on disk." : "The current model does not accept images (or no attachment store is mounted); open the SVG in the KiCad sidebar viewer.";
+        } else {
+          value.note = `${value.note ? `${value.note}
+` : ""}No PNG could be rasterized from the SVG, so the image is not attached; open the SVG in the KiCad sidebar viewer.`;
         }
         return value;
       }

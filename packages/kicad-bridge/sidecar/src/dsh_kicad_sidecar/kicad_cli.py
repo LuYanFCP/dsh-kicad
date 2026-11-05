@@ -14,9 +14,9 @@ import sys
 import tempfile
 import xml.etree.ElementTree as ET
 from collections import Counter
-from typing import Any
+from typing import Any, Callable
 
-__all__ = ["KiCadCli", "KiCadCliError", "find_kicad_cli", "has_zones", "locate_kicad_cli", "parse_version", "svg_to_png", "MIN_KICAD"]
+__all__ = ["KiCadCli", "KiCadCliError", "find_kicad_cli", "has_zones", "locate_kicad_cli", "output_of", "parse_version", "rasterizer_path", "svg_to_png", "MIN_KICAD"]
 
 
 class KiCadCliError(RuntimeError):
@@ -46,10 +46,10 @@ def install_dirs() -> list[str]:
 
 def _probe_version(argv: list[str]) -> tuple[int, ...] | None:
     try:
-        proc = subprocess.run([*argv, "version"], capture_output=True, text=True, timeout=60)
+        proc = subprocess.run([*argv, "version"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     except (OSError, subprocess.TimeoutExpired):
         return None
-    return parse_version(proc.stdout) if proc.returncode == 0 else None
+    return parse_version(proc.stdout or "") if proc.returncode == 0 else None
 
 
 def _discovered():
@@ -63,7 +63,7 @@ def _discovered():
     flatpak = shutil.which("flatpak")
     if flatpak and sys.platform.startswith("linux"):
         try:
-            probe = subprocess.run([flatpak, "info", FLATPAK_APP], capture_output=True, text=True, timeout=30)
+            probe = subprocess.run([flatpak, "info", FLATPAK_APP], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
         except (OSError, subprocess.TimeoutExpired):
             probe = None
         if probe is not None and probe.returncode == 0:
@@ -118,6 +118,16 @@ def _clean_stderr(text: str) -> str:
     return "\n".join(lines[-20:])
 
 
+def output_of(proc: subprocess.CompletedProcess) -> str:
+    """Both streams of a finished process, never None.
+
+    ``subprocess.run(..., text=True)`` decodes with the console code page; when a child writes bytes
+    that code page cannot decode (Windows: GBK against a UTF-8 or a non-ASCII message) the reader
+    thread discards the stream and ``proc.stdout``/``proc.stderr`` come back as ``None``. Concatenating
+    them then raises ``TypeError`` so the wrapper reports a crash instead of the real command failure."""
+    return (proc.stderr or "") + (proc.stdout or "")
+
+
 class KiCadCli:
     def __init__(self, executable: str | None = None, timeout: float = 180.0):
         self.executable = executable
@@ -150,7 +160,8 @@ class KiCadCli:
     def run(self, *args: str, cwd: str | None = None, check: bool = True) -> subprocess.CompletedProcess:
         argv = [*self._require(), *args]
         try:
-            proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=self.timeout)
+            proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                  timeout=self.timeout)
         except subprocess.TimeoutExpired as exc:
             raise KiCadCliError(f"kicad-cli timed out after {self.timeout}s: {' '.join(args[:3])}") from exc
         except OSError as exc:
@@ -158,7 +169,7 @@ class KiCadCli:
             self.argv = None
             raise KiCadCliError(f"kicad-cli could not be started ({exc}). Run /kicad-doctor (or the kicad_doctor tool) to check the installation.") from exc
         if check and proc.returncode != 0:
-            message = f"kicad-cli {' '.join(args[:3])} failed ({proc.returncode}): {_clean_stderr(proc.stderr + proc.stdout)}"
+            message = f"kicad-cli {' '.join(args[:3])} failed ({proc.returncode}): {_clean_stderr(output_of(proc))}"
             if args and args[0] != "version":
                 version = parse_version(self.version_or_none())
                 if version is not None and version < MIN_KICAD:
@@ -171,7 +182,7 @@ class KiCadCli:
         if self.argv is None and self.locate() is None:
             return None
         if self._version is None:
-            self._version = self.run("version").stdout.strip()
+            self._version = (self.run("version").stdout or "").strip()
         return self._version
 
     def version_or_none(self) -> str | None:
@@ -207,7 +218,7 @@ class KiCadCli:
             with open(out, encoding="utf-8") as fh:
                 report = json.load(fh)
         result = normalize_report(report, "drc")
-        failure = parity_failure(proc.stdout + proc.stderr) if schematic_parity else None
+        failure = parity_failure(output_of(proc)) if schematic_parity else None
         if failure:
             result["schematic_parity_error"] = failure
         elif schematic_parity:
@@ -378,6 +389,30 @@ def parse_netlist_xml(text: str) -> dict[str, Any]:
     return {"components": components, "nets": nets}
 
 
+_IMAGEMAGICK = re.compile(r"ImageMagick", re.I)
+
+
+def rasterizer_path(name: str, which: Callable[[str], "str | None"] = shutil.which) -> str | None:
+    """Where a rasterizer from {@link svg_to_png}'s list really lives, or ``None``.
+
+    ``convert`` is the name ImageMagick's CLI had for decades, but on Windows it is also the
+    built-in FAT→NTFS tool in ``System32``, which fails on every image. So ``convert``/``magick``
+    only count when they answer ``-version`` with "ImageMagick"; that also keeps ``kicad_doctor``
+    from promising PNG renders the machine cannot make."""
+    exe = which(name)
+    if not exe:
+        return None
+    if name not in ("convert", "magick"):
+        return exe
+    try:
+        proc = subprocess.run([exe, "-version"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0 or not _IMAGEMAGICK.search((proc.stdout or "") + (proc.stderr or "")):
+        return None
+    return exe
+
+
 def svg_to_png(svg_path: str, png_path: str, width: int = 2000) -> str:
     """Rasterize with cairosvg, rsvg-convert, ImageMagick or Inkscape — whichever exists."""
     try:
@@ -395,12 +430,12 @@ def svg_to_png(svg_path: str, png_path: str, width: int = 2000) -> str:
     ]
     errors = []
     for name, build in tools:
-        exe = shutil.which(name)
+        exe = rasterizer_path(name)
         if not exe:
             continue
-        proc = subprocess.run(build(exe), capture_output=True, text=True, timeout=120)
+        proc = subprocess.run(build(exe), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
         if proc.returncode == 0 and os.path.isfile(png_path):
             return png_path
-        errors.append(f"{name}: {proc.stderr.strip()[-200:]}")
+        errors.append(f"{name}: {((proc.stderr or '') + (proc.stdout or '')).strip()[-200:]}")
     raise KiCadCliError("no SVG rasterizer available (install the 'png' extra, rsvg-convert, or ImageMagick)"
                         + (f"; failures: {'; '.join(errors)}" if errors else ""))

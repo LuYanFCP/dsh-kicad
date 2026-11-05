@@ -44,10 +44,11 @@ def locate_ngspice(explicit: str | None = None) -> str | None:
 
 def ngspice_version(executable: str) -> str | None:
     try:
-        out = subprocess.run([executable, "--version"], capture_output=True, text=True, timeout=20, stdin=subprocess.DEVNULL)
+        out = subprocess.run([executable, "--version"], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                             timeout=20, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):
         return None
-    match = re.search(r"ngspice[- ](?:version )?(\d+(?:\.\d+)*)", out.stdout + out.stderr, re.I)
+    match = re.search(r"ngspice[- ](?:version )?(\d+(?:\.\d+)*)", (out.stdout or "") + (out.stderr or ""), re.I)
     return match.group(1) if match else None
 
 
@@ -526,13 +527,14 @@ def _run_deck(ngspice: str, lines: list[str], stem: str, out_dir: str, commands:
         fh.write("\n".join(body + control))
     try:
         proc = subprocess.run([ngspice, "-b", "-o", log, deck], cwd=cwd, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace",
                               timeout=min(max(timeout, 1.0), MAX_TIMEOUT), stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired as exc:
         raise SimulationError(f"ngspice did not finish within {timeout:g} s (a transient with a very small step, or a circuit that does not converge); "
                               "raise timeout or simulate a shorter time") from exc
     except OSError as exc:
         raise SimulationError(f"cannot run {ngspice}: {exc}") from exc
-    log_text = _read(log) or (proc.stdout + proc.stderr)
+    log_text = _read(log) or ((proc.stdout or "") + (proc.stderr or ""))
     missing = [k for k, p in raws.items() if not os.path.isfile(p)]
     if missing:
         raise SimulationError(_failure(log_text, missing, deck))

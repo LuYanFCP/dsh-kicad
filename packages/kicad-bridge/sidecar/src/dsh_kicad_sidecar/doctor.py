@@ -18,7 +18,7 @@ from . import esp32qemu
 from . import freerouting
 from . import spice
 from .footprints import default_footprint_dirs
-from .kicad_cli import FLATPAK_APP, MIN_KICAD, KiCadCli, parse_version
+from .kicad_cli import FLATPAK_APP, MIN_KICAD, KiCadCli, parse_version, rasterizer_path
 from .models3d import FLATPAK_EXTENSION, model_library
 from .symbols import default_symbol_dirs
 
@@ -474,7 +474,7 @@ def run_doctor(cli: KiCadCli, info: dict[str, Any] | None = None, which: Which =
                          fix=None if py_ok else "Install Python 3.10+ and set the KiCad bridge 'python' setting to it."))
 
     # optional extras
-    rasterizers = [n for n in ("rsvg-convert", "magick", "convert", "inkscape") if which(n)]
+    rasterizers = [n for n in ("rsvg-convert", "magick", "convert", "inkscape") if rasterizer_path(n, which)]
     try:
         import cairosvg  # type: ignore  # noqa: F401
         rasterizers.insert(0, "cairosvg")

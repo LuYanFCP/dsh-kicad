@@ -71,11 +71,15 @@ def test_render_png(project):
     path = project("rc_filter")
     out = rpc([{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "render", "arguments": {"path": path, "format": "png", "width": 800}}}])
     res = out[1]["result"]
-    if res["isError"] and "rasterizer" in res["content"][0]["text"]:
-        pytest.skip("no rasterizer installed")
+    # A missing rasterizer no longer fails the call: the SVG is returned with the reason in "note".
     value = res["structuredContent"]
-    assert value["svg"][0].endswith(".svg") and os.path.isfile(value["png"][0])
+    assert res["isError"] is False
+    assert value["svg"][0].endswith(".svg") and os.path.isfile(value["svg"][0])
     assert ".dsh-kicad" in value["output_dir"]
+    if not value.get("png"):
+        assert "rasteriz" in value["note"]
+    else:
+        assert os.path.isfile(value["png"][0])
 
 
 @needs_symbols

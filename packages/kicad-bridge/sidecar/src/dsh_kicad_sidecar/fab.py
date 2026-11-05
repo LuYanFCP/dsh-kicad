@@ -22,7 +22,7 @@ import zipfile
 from collections import Counter
 from typing import Any
 
-from .kicad_cli import KiCadCli, KiCadCliError, has_zones
+from .kicad_cli import KiCadCli, KiCadCliError, has_zones, output_of
 from .pcb import Board, PcbError
 
 __all__ = ["FabError", "apply_preset", "export_fab", "fab_gate", "inspect_excellon", "inspect_gerber",
@@ -157,7 +157,7 @@ def _supports(cli: KiCadCli, command: tuple[str, ...], flag: str) -> bool:
     if key not in _HELP:
         try:
             proc = cli.run(*command, "--help", check=False)
-            _HELP[key] = proc.stdout + proc.stderr
+            _HELP[key] = output_of(proc)
         except KiCadCliError:
             _HELP[key] = ""
     return flag in _HELP[key]
@@ -360,7 +360,7 @@ def _export_files(cli: KiCadCli, pcb: str, out: str, spec: dict[str, Any] | None
             # kicad-cli exits non-zero when component 3D models are missing, yet still writes the board.
             step = os.path.join(out, f"{stem}.step")
             proc = cli.run("pcb", "export", "step", "--force", "-o", step, pcb, cwd=cwd, check=False)
-            log = proc.stdout + proc.stderr
+            log = output_of(proc)
             if not os.path.isfile(step):
                 raise KiCadCliError(f"kicad-cli pcb export step failed ({proc.returncode}): {log.strip()[-500:]}")
             missing = log.count("Could not add 3D model")

@@ -638,7 +638,20 @@ class Toolbox:
             svgs = [self.cli.export_pcb_svg(path, os.path.join(out_dir, stem + ".svg"))]
         result: dict[str, Any] = {"path": path, "output_dir": out_dir, "svg": svgs}
         if args.get("format", "svg") == "png":
-            result["png"] = [svg_to_png(svg, os.path.splitext(svg)[0] + ".png", int(args.get("width", 2000))) for svg in svgs]
+            # The SVG export already succeeded: a missing rasterizer must not throw away that work, or the
+            # agent sees a failure where a usable render exists. The SVGs come back with the reason attached.
+            pngs, reasons = [], []
+            for svg in svgs:
+                try:
+                    pngs.append(svg_to_png(svg, os.path.splitext(svg)[0] + ".png", int(args.get("width", 2000))))
+                except KiCadCliError as exc:
+                    reasons.append(str(exc))
+            if pngs:
+                result["png"] = pngs
+            if reasons:
+                result["note"] = f"PNG rasterizing is unavailable, so the SVG is what you get: {reasons[0]} " \
+                                 "Install rsvg-convert (librsvg) or ImageMagick, or use the bridge's uv launcher " \
+                                 "with the 'png' extra."
         return result
 
     def tool_export_glb(self, args):

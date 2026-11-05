@@ -10,11 +10,20 @@
  * /skills); the Web UI is the package root, whose row carries the browser half.
  * Only @deepseek-ai/* stay external (dsh supplies them at runtime).
  */
-import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { join, relative, resolve } from 'node:path'
 import { build } from 'esbuild'
 import { buildClientWithChunks } from './build-client.mjs'
+
+/** Every regular file in a directory tree, recursively (no shell `find`). */
+function* walk(dir) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name)
+    if (entry.isDirectory()) yield* walk(full)
+    else yield { dir, name: entry.name, full }
+  }
+}
 
 const root = resolve(import.meta.dirname, '..')
 const out = join(root, 'dist/dsh-kicad')
@@ -161,7 +170,8 @@ One self-contained package with every plugin of the KiCad bundle, installable wi
 See the [project README](../../README.md). Third-party notices: \`third_party/kicanvas/\`.
 `)
 // Git installs only see committed files: refuse a distribution that .gitignore would drop.
-const files = execFileSync('find', [out, '-type', 'f'], { encoding: 'utf8' }).trim().split('\n')
+// Walked here rather than shelling out to `find`: on Windows that name is the text-search tool, not POSIX find.
+const files = [...walk(out)].map(f => f.full)
 let ignored = ''
 try {
   ignored = execFileSync('git', ['-C', root, 'check-ignore', '--stdin'], { input: files.map(f => relative(root, f)).join('\n'), encoding: 'utf8' }).trim()
