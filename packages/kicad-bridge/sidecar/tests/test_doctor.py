@@ -8,7 +8,7 @@ import pytest
 
 from dsh_kicad_sidecar import freerouting, kicad_cli
 from dsh_kicad_sidecar.doctor import format_report, install_hint, install_options, model_options, platform_info, run_doctor
-from dsh_kicad_sidecar.kicad_cli import KiCadCli, KiCadCliError, flatpak_argv, locate_kicad_cli, parse_version
+from dsh_kicad_sidecar.kicad_cli import KiCadCli, KiCadCliError, flatpak_argv, locate_kicad_cli, parse_version, rasterizer_path
 from dsh_kicad_sidecar.tools import ToolError, Toolbox
 
 posix = pytest.mark.skipif(sys.platform == "win32", reason="fake executables are shell scripts")
@@ -223,6 +223,51 @@ def test_doctor_tool_in_catalog():
     out = Toolbox().call("doctor", {})
     assert out["status"] in ("ok", "missing", "outdated", "error") and out["text"].startswith(out["summary"])
     assert {c["id"] for c in out["checks"]} >= {"kicad_cli", "kicad_version", "symbol_libraries", "footprint_libraries", "python", "png", "kipy"}
+
+
+# ---- PNG rasterizers: `convert` is only ImageMagick when it says so ----------------------
+
+class _Done:
+    def __init__(self, returncode, stdout="", stderr=""):
+        self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
+
+
+def test_a_foreign_convert_is_not_taken_for_imagemagick(monkeypatch):
+    """Windows' System32\\convert.exe (the FAT→NTFS tool) answers every image with an error, so a `which()` hit
+    on the name is not a rasterizer; the doctor must not promise PNG renders for it either."""
+    fake = "C:/Windows/System32/convert.exe"
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return _Done(4, stderr="Invalid drive specification.")
+
+    monkeypatch.setattr(kicad_cli.subprocess, "run", run)
+    assert rasterizer_path("convert", lambda name: fake if name == "convert" else None) is None
+    assert calls == [[fake, "-version"]]
+    # A rasterizer that is unambiguous by name is used as found, without probing it.
+    assert rasterizer_path("rsvg-convert", lambda name: "/usr/bin/rsvg-convert") == "/usr/bin/rsvg-convert"
+
+
+def test_real_imagemagick_is_accepted(monkeypatch):
+    fake = "C:/ImageMagick/convert.exe"
+    monkeypatch.setattr(kicad_cli.subprocess, "run",
+                        lambda argv, **kwargs: _Done(0, stdout="Version: ImageMagick 7.1.1-40 Q16-HDRI x86_64"))
+    assert rasterizer_path("convert", lambda name: fake) == fake
+
+
+def test_a_convert_that_cannot_start_is_not_a_rasterizer(monkeypatch):
+    def boom(argv, **kwargs):
+        raise OSError("file not found")
+
+    monkeypatch.setattr(kicad_cli.subprocess, "run", boom)
+    assert rasterizer_path("convert", lambda name: "C:/nope/convert") is None
+
+
+def test_the_png_check_ignores_a_fake_convert(monkeypatch):
+    monkeypatch.setattr(kicad_cli.subprocess, "run", lambda argv, **kwargs: _Done(4, stderr="Invalid drive specification."))
+    presented = lambda name: "C:/Windows/System32/convert.exe" if name == "convert" else None
+    assert checks(run_doctor(KiCadCli(), FEDORA, presented, router=freerouting.Router()))["png"]["rasterizers"] == []
 
 
 # ---- autorouting (optional): Java and Freerouting ----------------------------------------

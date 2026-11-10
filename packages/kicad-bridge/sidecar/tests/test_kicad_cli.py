@@ -1,8 +1,50 @@
+"""kicad_cli plumbing that does not need KiCad: report normalization and the stream handling
+that turned a failing rasterizer into an AttributeError instead of a message."""
 import os
+import subprocess
+import sys
 
-from dsh_kicad_sidecar.kicad_cli import KiCadCli, normalize_report, parse_netlist_xml
+import pytest
+
+from dsh_kicad_sidecar import kicad_cli
+from dsh_kicad_sidecar.kicad_cli import KiCadCli, KiCadCliError, normalize_report, output_of, parse_netlist_xml
 
 from conftest import needs_kicad_cli
+
+
+def _proc(stdout=None, stderr=None, returncode=4):
+    return subprocess.CompletedProcess(args=["x"], returncode=returncode, stdout=stdout, stderr=stderr)
+
+
+def test_output_of_survives_a_discarded_stream():
+    """subprocess text=True leaves a stream as None when the child's bytes do not decode; formatting
+    an error message on it must still work (this is what crashed `convert` on Windows)."""
+    assert output_of(_proc(stdout="", stderr=None)) == ""
+    assert output_of(_proc(stdout=None, stderr="Invalid Parameter - 150")) == "Invalid Parameter - 150"
+    assert output_of(_proc(stdout="out", stderr="err")) == "errout"
+    assert output_of(_proc(stdout=None, stderr=None)) == ""
+
+
+def test_a_failing_command_reports_its_output_even_without_stderr():
+    """A decode failure must not hide the real failure behind a TypeError."""
+    with pytest.raises(KiCadCliError) as info:
+        # A real command that fails: an output directory on a drive that does not exist.
+        KiCadCli(sys.executable).run("sch", "export", "svg", "-o", os.path.join(os.sep, "no-such-drive", "x"), "nope.kicad_sch")
+    assert "failed" in str(info.value)
+
+
+def test_version_probe_tolerates_undecodable_output(monkeypatch):
+    """_probe_version reads stdout; a None there must read as "no version", not crash locating."""
+    monkeypatch.setattr(kicad_cli.subprocess, "run", lambda *a, **k: _proc(stdout=None, stderr=None, returncode=0))
+    assert kicad_cli._probe_version(["/usr/bin/kicad-cli"]) is None
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="System32/convert.exe exists on Windows only")
+def test_windows_convert_is_not_a_rasterizer():
+    """The FAT→NTFS `convert` sits in System32 and is found by name; it must be rejected."""
+    found = kicad_cli.rasterizer_path("convert")
+    assert found is None or "ImageMagick" in (subprocess.run([found, "-version"], capture_output=True, text=True,
+                                                             encoding="utf-8", errors="replace").stdout or "")
 
 
 def test_normalize_erc_report():

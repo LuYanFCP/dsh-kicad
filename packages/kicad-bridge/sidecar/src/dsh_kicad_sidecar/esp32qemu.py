@@ -163,8 +163,9 @@ def _check_binary(path: str) -> tuple[str | None, str | None, list[str]]:
     if key in _CHECKS:
         return _CHECKS[key]
     try:
-        proc = subprocess.run([path, "-machine", "help"], capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
-        text = proc.stdout + proc.stderr
+        proc = subprocess.run([path, "-machine", "help"], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              timeout=30, stdin=subprocess.DEVNULL)
+        text = (proc.stdout or "") + (proc.stderr or "")
     except (OSError, subprocess.TimeoutExpired) as exc:
         result: tuple[str | None, str | None, list[str]] = (None, f"{path} does not start ({exc})", [])
         _CHECKS[key] = result
@@ -179,7 +180,8 @@ def _check_binary(path: str) -> tuple[str | None, str | None, list[str]]:
     else:
         version = None
         try:
-            ver = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL).stdout
+            ver = subprocess.run([path, "--version"], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                 timeout=30, stdin=subprocess.DEVNULL).stdout or ""
             m = re.search(r"version\s+(\S+(?:\s+\([^)]*\))?)", ver)
             version = m.group(1) if m else ver.strip().splitlines()[0] if ver.strip() else None
         except (OSError, subprocess.TimeoutExpired):

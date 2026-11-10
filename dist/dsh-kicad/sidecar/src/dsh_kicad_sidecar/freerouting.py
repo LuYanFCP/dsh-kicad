@@ -95,8 +95,8 @@ def java_version(java: str) -> tuple[int, ...] | None:
         key = (java, 0.0)
     if key not in _JAVA_CACHE:
         try:
-            proc = subprocess.run([java, "-version"], capture_output=True, text=True, timeout=30)
-            text = proc.stderr + proc.stdout
+            proc = subprocess.run([java, "-version"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+            text = (proc.stderr or "") + (proc.stdout or "")
         except (OSError, subprocess.TimeoutExpired):
             text = ""
         m = re.search(r'version "(\d+)(?:\.(\d+))?(?:\.(\d+))?', text)

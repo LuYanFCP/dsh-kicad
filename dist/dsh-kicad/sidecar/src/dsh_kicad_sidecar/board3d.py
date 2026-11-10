@@ -22,7 +22,7 @@ import threading
 import time
 from typing import Any
 
-from .kicad_cli import KiCadCli, KiCadCliError
+from .kicad_cli import KiCadCli, KiCadCliError, output_of
 from .models3d import model_library
 from .pcb import Board, PcbError
 
@@ -205,7 +205,7 @@ def export_glb(cli: KiCadCli, board_path: str, out_dir: str, *, force: bool = Fa
     try:
         proc = cli.run("pcb", "export", "glb", *GLB_OPTIONS, "-f", "-o", tmp, board_path, cwd=os.path.dirname(board_path))
         if not os.path.isfile(tmp) or os.path.getsize(tmp) == 0:
-            raise KiCadCliError(f"kicad-cli pcb export glb wrote no file: {(proc.stdout + proc.stderr).strip()[-400:]}")
+            raise KiCadCliError(f"kicad-cli pcb export glb wrote no file: {output_of(proc).strip()[-400:]}")
         os.replace(tmp, glb)  # atomic: a viewer watching the file never reads half of it
     finally:
         if os.path.exists(tmp):
